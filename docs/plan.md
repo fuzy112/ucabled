@@ -66,18 +66,34 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 ## 4. 总体架构
 
 ```
-Firefox ──CTAP-HID (64B reports, usage page 0xF1D0)──▶ /dev/uhid ──▶ phone-passkey-d
-                                                                      (Rust daemon)
-                                                                        ├ uhid device
-                                                                        ├ U2FHID transport
-                                                                        ├ CTAP2 relay
-                                                                        ├ caBLE v2 initiator
-                                                                        └ QR UI (egui)
-                                                                              │
-                       BLE advert (EID, proximity proof) + WSS tunnel (CTAP 数据通道)
-                                                                              │
-                                                                   iPhone / Android
-                                                                   (iCloud KC / GPM)
+ ┌────────────────────────────────────┐
+ │              Firefox               │  浏览器 / WebAuthn relying party
+ └──────────────────┬─────────────────┘
+                    │  CTAP-HID（/dev/uhid，usage page 0xF1D0）
+                    V
+ ┌────────────────────────────────────┐
+ │              ucabled               │  Rust 系统守护进程
+ ├────────────────────────────────────┤
+ │ uhid device         虚拟 FIDO2 HID │
+ │ U2FHID transport   64B 分片 / 重组 │
+ │ CTAP2 relay       透传；rp.id 只读 │
+ │ caBLE v2 initiator  BLE + WSS 隧道 │
+ └──────────────────┬─────────────────┘
+                    │  caBLE v2（BLE advert + WSS 隧道）
+                    V
+ ┌────────────────────────────────────┐
+ │          iPhone / Android          │  iCloud Keychain / Google
+ └────────────────────────────────────┘
+
+UI 提示（独立会话进程，详见 docs/system-service.md）：
+ ┌──────────────┐
+ │ ucable-agent │  会话 agent
+ └───────┬──────┘
+         │  spawn（QR URL 经 stdin）
+         V
+ ┌─────────────────────┐
+ │ ucable-agent-helper │  QR 窗口
+ └─────────────────────┘
 ```
 
 **核心决策：中继（dumb pipe）模型。** daemon 不做任何 FIDO 加密学、不存储

@@ -11,15 +11,29 @@ the same protocol as Chromium's "use a passkey on your phone"), then sends the
 phone's response back to Firefox.
 
 ```
-Firefox ──CTAP-HID (64B reports)──▶ /dev/uhid ──▶ ucabled        (system service)
-                                                    │ caBLE: BLE scan + WSS tunnel
-                                                    │ D-Bus: org.ucabled
-                                                    ▼
-                                          ucable-agent       (session agent)
-                                                    │  QR window
-                                                    ▼
-                                          iPhone (iCloud Keychain)
-                                          Android (Google Password Manager)
+      ┌─────────────┐
+      │   Firefox   │
+      │  WebAuthn   │
+      └──────┬──────┘
+             │  CTAP-HID over /dev/uhid
+             V
+  ┌────────────────────┐      caBLE v2: BLE + WSS      ┌──────────────────┐
+  │      ucabled       │<─────────────────────────────>│ iPhone / Android │
+  │  (system service)  │                               │  passkey store   │
+  └──────────┬─────────┘                               └────────┬─────────┘
+             │  D-Bus org.ucabled.Ui1                           ^
+             │  Prompt / Found / Close                          .
+             V                                                  .
+  ┌────────────────────┐                                        .
+  │    ucable-agent    │                   phone scans          .
+  │  (session agent)   │                   the QR code          .
+  └──────────┬─────────┘                                        .
+             │  spawn (QR URL via stdin)                        .
+             V                                                  .
+  ┌─────────────────────┐                                       .
+  │ ucable-agent-helper │ . . . . . . . . . . . . . . . . . . . .
+  │     QR window       │
+  └─────────────────────┘
 ```
 
 The machine is only a relay: no FIDO cryptography, no keys at rest, and no

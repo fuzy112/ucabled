@@ -32,14 +32,22 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 ## 2. 目标架构
 
 ```
-Firefox ──hidraw──▶ [virtual FIDO2] ──/dev/uhid──▶ ucabled.service   (system, User=ucabled)
-                                                    HID + U2FHID + caBLE (BLE + WSS)
-                                                    D-Bus: 拥有 org.ucabled，实现 Ui1
-                                                          ▲ RegisterAgent()   │ Prompt/Found/Close
-                                                          │ TransactionCancelled()│ (回调)
-                                                    ucable-agent.service (user, session)
-                                                    实现 org.ucabled.Agent1
-                                                          └─ spawn ucable-agent-helper（Wayland/wgpu 窗口）
+数据通路
+ ┌─────────┐  hidraw ┌─────────────────┐  caBLE v2 ┌──────────────────┐
+ │ Firefox │────────>│ ucabled.service │──────────>│ iPhone / Android │
+ └─────────┘         └─────────────────┘           └──────────────────┘
+（hidraw = CTAP-HID / /dev/uhid；caBLE v2 = BLE advert + WSS 隧道）
+
+控制通路（system D-Bus，org.ucabled；ucabled 实现 Ui1，对象 /org/ucabled/Ui）
+ ┌───────────────┐             ┌─────────────────┐
+ │ ucable-agent  │────────────>│ ucabled.service │ RegisterAgent / TransactionCancelled
+ │ （user unit） │<────────────│ （system unit） │ Prompt / Found / Close
+ └───────┬───────┘             └─────────────────┘
+         │  spawn（QR URL 经 stdin）
+         V
+ ┌─────────────────────┐
+ │ ucable-agent-helper │  QR 窗口
+ └─────────────────────┘
 ```
 
 `ucable-agent-helper`、`DesktopFlow`、Noise/隧道、BLE 扫描等既有实现不变；
