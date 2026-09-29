@@ -224,6 +224,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 - [x] 取消/超时/断连路径；日志
 - [ ] 与真实 YubiKey 共存实测；daemon 开关
 - [x] NixOS flake 打包 + systemd user service（module 见 §8）
+- [x] systemd 常驻实测通过（2026-09-29：登录自启、GUI 弹窗正常）
 
 ### M5 — 增强（可选）
 
