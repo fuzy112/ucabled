@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use crate::agent::UiClient;
+use crate::agent::AgentClient;
 
 /// How the daemon asks the user to scan the QR code.
 ///
@@ -12,7 +12,7 @@ use crate::agent::UiClient;
 #[derive(Clone)]
 pub enum Notifier {
     Terminal,
-    Agent(UiClient),
+    Agent(AgentClient),
 }
 
 impl Notifier {
@@ -20,14 +20,14 @@ impl Notifier {
     pub fn available(&self) -> bool {
         match self {
             Notifier::Terminal => true,
-            Notifier::Agent(ui) => ui.available(),
+            Notifier::Agent(client) => client.available(),
         }
     }
 
     pub fn show(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
         match self {
             Notifier::Terminal => print_qr_terminal(url),
-            Notifier::Agent(ui) => ui.show(tid, url, rp, timeout_secs),
+            Notifier::Agent(client) => client.prompt(tid, url, rp, timeout_secs),
         }
     }
 
@@ -38,9 +38,9 @@ impl Notifier {
     pub fn select(&self, tid: u64) -> bool {
         match self {
             Notifier::Terminal => false,
-            Notifier::Agent(ui) => {
-                if ui.available() {
-                    ui.select(tid);
+            Notifier::Agent(client) => {
+                if client.available() {
+                    client.select(tid);
                     true
                 } else {
                     false
@@ -53,14 +53,14 @@ impl Notifier {
     pub fn phone_found(&self) {
         match self {
             Notifier::Terminal => println!("=== phone detected, confirm on your phone ===\n"),
-            Notifier::Agent(ui) => ui.found(),
+            Notifier::Agent(client) => client.found(),
         }
     }
 
     pub fn hide(&self) {
         match self {
             Notifier::Terminal => println!("=== transaction finished ===\n"),
-            Notifier::Agent(ui) => ui.close(),
+            Notifier::Agent(client) => client.close(),
         }
     }
 }

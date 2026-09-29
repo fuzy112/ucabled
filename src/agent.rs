@@ -68,8 +68,8 @@ impl AgentSlot {
 }
 
 #[derive(Debug, Clone)]
-pub enum UiCommand {
-    Show {
+pub enum AgentCommand {
+    Prompt {
         tid: u64,
         url: String,
         rp: Option<String>,
@@ -90,21 +90,21 @@ pub enum UiCommand {
 /// Daemon-side handle to the UI bridge. Cheap to clone and safe to use from
 /// any task; commands are handed to a dedicated D-Bus dispatch task.
 #[derive(Clone)]
-pub struct UiClient {
-    tx: UnboundedSender<UiCommand>,
+pub struct AgentClient {
+    tx: UnboundedSender<AgentCommand>,
     slot: Arc<Mutex<AgentSlot>>,
     active_tid: Arc<AtomicU64>,
 }
 
-impl UiClient {
+impl AgentClient {
     /// Whether an authorized agent is currently registered.
     pub fn available(&self) -> bool {
         self.slot.lock().unwrap().current.is_some()
     }
 
-    pub fn show(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
+    pub fn prompt(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
         self.active_tid.store(tid, Ordering::SeqCst);
-        let _ = self.tx.send(UiCommand::Show {
+        let _ = self.tx.send(AgentCommand::Prompt {
             tid,
             url: url.to_string(),
             rp,
@@ -115,26 +115,26 @@ impl UiClient {
     /// Ask the agent to show the "use the phone instead?" prompt. The answer
     /// comes back through the `select` channel passed to [`start`].
     pub fn select(&self, tid: u64) {
-        let _ = self.tx.send(UiCommand::Select { tid });
+        let _ = self.tx.send(AgentCommand::Select { tid });
     }
 
     /// The phone's BLE advert was seen; the user now confirms on it.
     pub fn found(&self) {
         let tid = self.active_tid.load(Ordering::SeqCst);
-        let _ = self.tx.send(UiCommand::Found { tid });
+        let _ = self.tx.send(AgentCommand::Found { tid });
     }
 
     /// The transaction ended (or was cancelled); tear the window down.
     pub fn close(&self) {
         let tid = self.active_tid.load(Ordering::SeqCst);
-        let _ = self.tx.send(UiCommand::Close { tid });
+        let _ = self.tx.send(AgentCommand::Close { tid });
     }
 }
 
 /// Start the D-Bus service and dispatch tasks on `handle`. `cancel_tx`
 /// receives a `()` when the agent reports that the user cancelled the dialog;
 /// `select_tx` receives the user's answer (`true` = use the phone) to a
-/// [`UiClient::select`] request.
+/// [`AgentClient::select`] request.
 ///
 /// The setup (connect, request the bus name, install matches) runs inline so
 /// a failure still falls back at startup; message routing and outbound calls
@@ -143,7 +143,7 @@ pub fn start(
     handle: &Handle,
     cancel_tx: UnboundedSender<()>,
     select_tx: UnboundedSender<(u64, bool)>,
-) -> Result<UiClient> {
+) -> Result<AgentClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let (tx, rx) = mpsc::unbounded_channel();
 
@@ -169,7 +169,7 @@ pub fn start(
     ));
     handle.spawn(dispatch_commands(conn, rx, slot.clone()));
 
-    Ok(UiClient {
+    Ok(AgentClient {
         tx,
         slot,
         active_tid: Arc::new(AtomicU64::new(0)),
@@ -368,7 +368,7 @@ async fn route_messages(
 
 async fn dispatch_commands(
     conn: Arc<SyncConnection>,
-    mut rx: UnboundedReceiver<UiCommand>,
+    mut rx: UnboundedReceiver<AgentCommand>,
     slot: Arc<Mutex<AgentSlot>>,
 ) {
     while let Some(command) = rx.recv().await {
@@ -385,7 +385,7 @@ async fn dispatch_commands(
             conn.clone(),
         );
         let result: std::result::Result<(), dbus::Error> = match command {
-            UiCommand::Show {
+            AgentCommand::Prompt {
                 tid,
                 url,
                 rp,
@@ -397,13 +397,13 @@ async fn dispatch_commands(
                     (tid, url, rp.unwrap_or_default(), timeout_secs),
                 )
                 .await,
-            UiCommand::Select { tid } => {
+            AgentCommand::Select { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Select", (tid,)).await
             }
-            UiCommand::Found { tid } => {
+            AgentCommand::Found { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Found", (tid,)).await
             }
-            UiCommand::Close { tid } => {
+            AgentCommand::Close { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Close", (tid,)).await
             }
         };
@@ -451,7 +451,7 @@ mod tests {
     fn availability_tracks_the_slot() {
         let slot = Arc::new(Mutex::new(AgentSlot::default()));
         let (tx, _rx) = mpsc::unbounded_channel();
-        let client = UiClient {
+        let client = AgentClient {
             tx,
             slot: slot.clone(),
             active_tid: Arc::new(AtomicU64::new(0)),

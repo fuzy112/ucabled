@@ -73,7 +73,7 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - user unit，对所有用户启用；谁真正能弹窗完全由 polkit 决定，不按用户配置。
 - 连接到 **system bus**，导出一个对象实现 `org.ucabled.Agent1`，调用
   `org.ucabled.Manager1.RegisterAgent(path)` 注册自己。
-- 收到 `Prompt(tid, url, rp, timeout)` 时，按现有 `GuiHandle` 逻辑 spawn
+- 收到 `Prompt(tid, url, rp, timeout)` 时，按既有窗口逻辑 spawn
   `ucable-agent-helper`，把 URL 写进它的 stdin；把 helper 的退出转成
   `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
 - 收到 `Select(tid)` 时 spawn `ucable-agent-helper --select`，按退出码
@@ -272,7 +272,7 @@ NixOS module（`nix/module.nix`）：
 
 ## 12. 实现与提交计划
 
-1. ~~引入 D-Bus UI 层~~：`src/agent.rs`（`Manager1` 服务 + `Agent1` 回调 +
+1. ~~引入 D-Bus agent 层~~：`src/agent.rs`（`Manager1` 服务 + `Agent1` 回调 +
    注册表 + polkit 授权）。
 2. ~~新增 `ucable-agent` agent~~：实现 `Agent1`，复用 `ucable-agent-helper`。
 3. ~~守护进程改用 D-Bus UI 驱动~~；无 agent 快速失败；移除进程内 GUI。
