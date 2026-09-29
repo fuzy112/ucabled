@@ -237,7 +237,8 @@ NixOS module（`nix/module.nix`）：
 
 - `dist/`：系统 unit + 用户 agent unit + 更新后的 udev 规则。
 - `nix/package.nix`：发布 `ucabled`、`ucable-agent`、`ucable-agent-helper`。
-- 依赖：直接依赖 `dbus` + `dbus-crossroads`（与 `bluer` 同一套，不引入 zbus）。
+- 依赖：直接依赖 `dbus` + `dbus-crossroads` + `dbus-tokio`（与 `bluer`
+  同一套，不引入 zbus）。
 
 ## 9. 与旧模型对比与迁移
 
@@ -259,8 +260,9 @@ NixOS module（`nix/module.nix`）：
 已定：
 
 - 命名：`org.ucabled` + `org.ucabled.Manager1` / `org.ucabled.Agent1`。
-- D-Bus 库：**dbus / dbus-crossroads**（与 `bluer` 同一套依赖，避免新增
-  依赖；服务与分发各用一个阻塞连接线程）。
+- D-Bus 库：**dbus / dbus-crossroads / dbus-tokio**（与 `bluer` 同一套依赖，
+  避免新增 D-Bus 实现；daemon 与 agent 各用一条异步连接，由一个路由 task
+  服务 crossroads，出站调用走 nonblock proxy）。
 - 守护进程启动时机：system unit，boot 常驻（`multi-user.target`）。
 - polkit action `org.ucabled.register-agent`，`allow_active=yes`。
 

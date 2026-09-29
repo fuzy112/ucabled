@@ -200,7 +200,8 @@ Helper tools in the repo (not shipped in the package):
 - `examples/qrgen.rs`: generate a QR code only
 
 Requirements and design: `docs/plan.md`; system service / UI agent design:
-`docs/system-service.md`; linking design: `docs/linking.md`.
+`docs/system-service.md`; D-Bus async design: `docs/async-dbus.md`; linking
+design: `docs/linking.md`.
 
 ## License
 

@@ -1,7 +1,7 @@
 # D-Bus 层异步化方案（dbus-tokio）
 
-> 状态：方案待评审。动机是代码结构与健壮性，不是修复现存 bug——当前
-> 同步 D-Bus 已被线程 + channel 完整隔离，功能上是正确的。
+> 状态：已实现（2026-09-30）。动机是代码结构与健壮性，不是修复现存
+> bug——改动前同步 D-Bus 已被线程 + channel 完整隔离，功能上是正确的。
 
 ## 1. 现状
 
@@ -66,7 +66,7 @@ new_system_sync() -> (IConnection 驱动, Arc<SyncConnection>, MessageStream)
       }
   }
 
-UiClient 分发（原 dispatch 线程）：
+AgentClient 分发（原 dispatch 线程）：
   直接在 tokio 侧用 nonblock::Proxy.method_call(...).await
   + tokio::time::timeout(15s)，错误分类 agent_gone 逻辑照搬。
 ```
@@ -78,7 +78,7 @@ UiClient 分发（原 dispatch 线程）：
   具体 glue（spawn 驱动 `IConnection`、流的 filter 顺序）实现时核对，
   以编译为准。
 - crossroads 是 `!Sync` 但只在路由 task 内使用，天然满足。
-- `AgentSlot` 仍是 `Arc<Mutex<_>>`（`UiClient.available()` 是同步查询）；
+- `AgentSlot` 仍是 `Arc<Mutex<_>>`（`AgentClient.available()` 是同步查询）；
   规则：**锁不得跨过 `.await`**——只在 await 前克隆出 `Agent` 即放锁，
   与今天 dispatch 线程的用法相同。
 - `NameOwnerChanged` 不再用 `add_match` 回调，改为在路由 task 里对信号
@@ -104,11 +104,11 @@ crossroads 0.5 的方法是同步闭包，无法原生 async。两个选项：
   spawn 独立 task 做异步 polkit 调用再手动回包。更干净但丢掉
   crossroads 的参数解析，复杂度不值。
 
-### 3.3 `UiClient` 与 channel
+### 3.3 `AgentClient` 与 channel
 
 `start()` 不再 spawn 线程，改为在已有 runtime 上 spawn task，因此签名
 从自由函数变为需要 `&tokio::runtime::Handle`（或在 `daemon_loop` 内直接
-构造）。`cancel_tx`/`select_tx` 通道不变；`UiCommand` 的 mpsc 可保留
+构造）。`cancel_tx`/`select_tx` 通道不变；`AgentCommand` 的 mpsc 可保留
 （`available()` 等同步查询路径不变），也可顺手换成直接持
 `SyncConnection` 句柄——以最小 diff 为先，保留 mpsc。
 
@@ -122,9 +122,12 @@ crossroads 0.5 的方法是同步闭包，无法原生 async。两个选项：
 - 重注册：`NameOwnerChanged(name=org.ucabled, new_owner≠"")` 进路由
   task 置标志，主循环 `tokio::time::interval(2s)` 重试——删除
   `AtomicBool` + 200ms 轮询。
-- helper 子进程：`tokio::process::Command`，`Child::wait()` 直接
-  await 退出，删除两个 150ms watcher 线程；写 stdin 与 kill 语义不变
-  （`Close` 时 `kill().await`）。
+- helper 子进程：`tokio::process::Command`，由专属 window task 持有并
+  `Child::wait()`；slot 只存 `{pid, 行队列 sender}`，stdin 由该 task
+  从行队列喂入（保证 URL/found 行的顺序），删除两个 150ms watcher
+  线程。`Close`/新窗口用 `libc::kill(pid, SIGKILL)`（子进程未回收前
+  pid 不会复用，安全），task 发现 slot 易主则不上报退出，保持
+  "关窗=取消" 与 select 退出码语义。
 - 无图形会话直接退出、被拒（`NotAuthorized`）退出等行为不变。
 
 ## 5. 验证
@@ -148,10 +151,10 @@ crossroads 0.5 的方法是同步闭包，无法原生 async。两个选项：
 - **保持现状**：功能正确；本重构的价值是删掉 §1.3 的并发模型分裂与
   轮询。若评审认为收益不足，本方案可整体搁置，无沉没成本。
 
-## 7. 提交拆分
+## 7. 提交拆分（已完成）
 
 1. daemon：路由 task 取代 service 线程（含 §3.2 的同步 authorize 保留）。
-2. daemon：`UiClient` 出站调用异步化，删除 dispatch 线程。
+2. daemon：`AgentClient` 出站调用异步化，删除 dispatch 线程。
 3. agent：整体 tokio 化（§4），删除 watcher 线程与轮询。
-4. 文档：`docs/system-service.md` §3/§7 的运行模型描述、README 架构
-   图注释同步；本文件标记"已实现"。
+4. 文档：`docs/system-service.md` 的运行模型描述与依赖清单同步；本
+   文件标记"已实现"。
