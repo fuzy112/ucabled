@@ -137,6 +137,9 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);
+                                // Firefox tags USB credentials with a
+                                // transports hint that some phones reject.
+                                let payload = ucabled::ctap::strip_transport_hints(&payload);
                                 let request_type = if payload.first() == Some(&0x01) {
                                     RequestType::MakeCredential
                                 } else {

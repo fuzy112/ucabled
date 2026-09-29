@@ -108,6 +108,20 @@ fn encode_map_header(out: &mut Vec<u8>, n: u64) {
     }
 }
 
+fn encode_array_header(out: &mut Vec<u8>, n: u64) {
+    if n < 24 {
+        out.push(0x80 | n as u8);
+    } else if n <= 0xff {
+        out.extend_from_slice(&[0x98, n as u8]);
+    } else if n <= 0xffff {
+        out.push(0x99);
+        out.extend_from_slice(&(n as u16).to_be_bytes());
+    } else {
+        out.push(0x9a);
+        out.extend_from_slice(&(n as u32).to_be_bytes());
+    }
+}
+
 /// Rebuild a CBOR map of text keys adding `add_key`/`add_value` if absent,
 /// keeping canonical key order (length first, then lexicographic).
 /// `data` must start exactly at the map header. Returns the rebuilt map and
@@ -381,6 +395,135 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     result.unwrap_or_else(|| command.to_vec())
 }
 
+/// Remove the advisory `transports` hint from every credential descriptor in a
+/// getAssertion `allowList` (key 3) or makeCredential `excludeList` (key 5).
+///
+/// Firefox tags credentials it learned over USB-HID with
+/// `transports: ["usb"]`. Forwarded untouched over caBLE, some phone
+/// authenticators reject the credential as incompatible with the hybrid
+/// transport ("no passkeys found"). The hint is advisory and covered by no
+/// signature, so dropping it is safe. Descriptor order and every other field
+/// are preserved byte-for-byte. Returns the input unchanged if nothing needed
+/// stripping or the payload doesn't parse.
+pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
+    let Some((&cmd, params)) = command.split_first() else {
+        return command.to_vec();
+    };
+    // CTAP2 parameter numbering: getAssertion.allowList = 3,
+    // makeCredential.excludeList = 5 (4 is pubKeyCredParams).
+    let list_key = match cmd {
+        0x01 => 5, // makeCredential: excludeList
+        0x02 => 3, // getAssertion: allowList
+        _ => return command.to_vec(),
+    };
+
+    let result = (|| -> Option<Vec<u8>> {
+        let mut c = CborCursor {
+            data: params,
+            pos: 0,
+        };
+        let pairs = c.map_header()?;
+
+        let mut out = vec![cmd];
+        let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
+        for _ in 0..pairs {
+            let key = c.uint()?;
+            let start = c.pos;
+            c.skip_value()?;
+            entries.push((key, start..c.pos));
+        }
+
+        let mut changed = false;
+        encode_map_header(&mut out, pairs);
+        for (key, span) in entries {
+            encode_uint(&mut out, key);
+            let value = &params[span.clone()];
+            if key == list_key {
+                if let Some((stripped, true)) = strip_transports_from_array(value) {
+                    changed = true;
+                    out.extend_from_slice(&stripped);
+                    continue;
+                }
+            }
+            out.extend_from_slice(value);
+        }
+        changed.then_some(out)
+    })();
+
+    match result {
+        Some(out) => {
+            tracing::debug!("stripped transports hint(s) from CTAP request");
+            out
+        }
+        None => command.to_vec(),
+    }
+}
+
+/// Drop a descriptor's `transports` entry while keeping the remaining pairs in
+/// order. Returns `(rebuilt, removed)`; `None` when `data` is not a text-keyed
+/// map or lacks an `id`, so callers can fail safe and keep the original.
+fn strip_transports_from_descriptor(data: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let mut c = CborCursor { data, pos: 0 };
+    let pairs = c.map_header()?;
+
+    let mut kept: Vec<(std::ops::Range<usize>, std::ops::Range<usize>)> = Vec::new();
+    let mut removed = false;
+    let mut has_id = false;
+    for _ in 0..pairs {
+        let key_start = c.pos;
+        let key = c.text()?;
+        let key_end = c.pos;
+        let val_start = c.pos;
+        c.skip_value()?;
+        let val_end = c.pos;
+        if key == "transports" {
+            removed = true;
+        } else {
+            has_id |= key == "id";
+            kept.push((key_start..key_end, val_start..val_end));
+        }
+    }
+    if !has_id {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    encode_map_header(&mut out, kept.len() as u64);
+    for (k, v) in kept {
+        out.extend_from_slice(&data[k]);
+        out.extend_from_slice(&data[v]);
+    }
+    Some((out, removed))
+}
+
+/// Strip transport hints from every descriptor in an array. Returns
+/// `(rebuilt, removed)`; `None` when `data` is not an array.
+fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let mut c = CborCursor { data, pos: 0 };
+    let b = c.byte()?;
+    if b >> 5 != 4 {
+        return None;
+    }
+    let n = c.argument(b & 0x1f)?;
+
+    let mut out = Vec::new();
+    encode_array_header(&mut out, n);
+    let mut removed = false;
+    for _ in 0..n {
+        let start = c.pos;
+        c.skip_value()?;
+        let elem = &data[start..c.pos];
+        match strip_transports_from_descriptor(elem) {
+            Some((stripped, true)) => {
+                removed = true;
+                out.extend_from_slice(&stripped);
+            }
+            _ => out.extend_from_slice(elem),
+        }
+    }
+    Some((out, removed))
+}
+
 fn encode_uint(out: &mut Vec<u8>, v: u64) {
     if v < 24 {
         out.push(v as u8);
@@ -575,6 +718,61 @@ mod tests {
     fn patch_is_idempotent_and_untouched_when_complete() {
         let cmd = hex::decode("01a5015820cc1f4afda7a13ed02de520a7b2c8d5cce2b1e6d8dbe392f022a0cf88ee456fcb02a26269646b776562617574686e2e696f646e616d656b776562617574686e2e696f03a36269644d776562617574686e696f2d7172646e616d656271726b646973706c61794e616d656271720483a263616c672764747970656a7075626c69632d6b6579a263616c672664747970656a7075626c69632d6b6579a263616c6739010064747970656a7075626c69632d6b657907a162726bf5").unwrap();
         assert_eq!(patch_makecredential(&cmd), cmd);
+    }
+
+    /// `{"id": h'0102', "type": "public-key", "transports": ["usb"]}`
+    const DESC_WITH_TRANSPORTS: &str =
+        "a362696442010264747970656a7075626c69632d6b65796a7472616e73706f7274738163757362";
+
+    fn get_assertion_with_transport_hint() -> Vec<u8> {
+        let mut cmd = hex::decode("02a3016b6578616d706c652e636f6d025820").unwrap();
+        cmd.extend_from_slice(&[0xaa; 32]);
+        cmd.push(0x03);
+        cmd.push(0x81);
+        cmd.extend_from_slice(&hex::decode(DESC_WITH_TRANSPORTS).unwrap());
+        cmd
+    }
+
+    #[test]
+    fn strip_transport_hints_get_assertion() {
+        let cmd = get_assertion_with_transport_hint();
+        let out = strip_transport_hints(&cmd);
+
+        assert_ne!(out, cmd);
+        assert!(!String::from_utf8_lossy(&out).contains("transports"));
+        // the credential id (bstr 42 01 02) survives
+        assert!(hex::encode(&out).contains("420102"));
+        // the rest of the request is untouched
+        assert_eq!(extract_rp_id(&out).as_deref(), Some("example.com"));
+        // idempotent
+        assert_eq!(strip_transport_hints(&out), out);
+    }
+
+    #[test]
+    fn strip_transport_hints_make_credential_exclude_list() {
+        // {1: h'aa'x32, 2: {"id": "example.com"}, 5: [descriptor-with-transports]}
+        let mut cmd = hex::decode("01a3015820").unwrap();
+        cmd.extend_from_slice(&[0xaa; 32]);
+        cmd.extend_from_slice(&hex::decode("02a16269646b6578616d706c652e636f6d0581").unwrap());
+        cmd.extend_from_slice(&hex::decode(DESC_WITH_TRANSPORTS).unwrap());
+
+        let out = strip_transport_hints(&cmd);
+        assert_ne!(out, cmd);
+        assert!(!String::from_utf8_lossy(&out).contains("transports"));
+        assert!(hex::encode(&out).contains("420102"));
+        assert_eq!(strip_transport_hints(&out), out);
+    }
+
+    #[test]
+    fn strip_transport_hints_noop_without_hint() {
+        // Interactive getAssertion with allowList but no transports.
+        let cmd = hex::decode(
+            "02a2016b6578616d706c652e636f6d035820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        assert_eq!(strip_transport_hints(&cmd), cmd);
+        // Unrelated command byte is left alone.
+        assert_eq!(strip_transport_hints(&[0x06, 0x00]), vec![0x06, 0x00]);
     }
 
     #[test]
