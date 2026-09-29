@@ -393,6 +393,10 @@ struct CborCursor<'a> {
     pos: usize,
 }
 
+/// Maximum nesting depth accepted while skipping CBOR values. The payload is
+/// browser/page-influenced, so skipping it must not recurse unbounded.
+const MAX_CBOR_DEPTH: usize = 16;
+
 impl<'a> CborCursor<'a> {
     fn byte(&mut self) -> Option<u8> {
         let b = *self.data.get(self.pos)?;
@@ -454,6 +458,13 @@ impl<'a> CborCursor<'a> {
     }
 
     fn skip_value(&mut self) -> Option<()> {
+        self.skip_value_at(0)
+    }
+
+    fn skip_value_at(&mut self, depth: usize) -> Option<()> {
+        if depth > MAX_CBOR_DEPTH {
+            return None;
+        }
         let b = self.byte()?;
         let major = b >> 5;
         let info = b & 0x1f;
@@ -468,14 +479,14 @@ impl<'a> CborCursor<'a> {
             4 => {
                 let n = self.argument(info)?;
                 for _ in 0..n {
-                    self.skip_value()?;
+                    self.skip_value_at(depth + 1)?;
                 }
             }
             5 => {
                 let n = self.argument(info)?;
                 for _ in 0..n {
-                    self.skip_value()?;
-                    self.skip_value()?;
+                    self.skip_value_at(depth + 1)?;
+                    self.skip_value_at(depth + 1)?;
                 }
             }
             _ => return None,
@@ -592,5 +603,19 @@ mod tests {
         // getAssertion without allowList cannot be faked
         let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         assert!(fake_silent_assertion(&plain).is_none());
+    }
+
+    #[test]
+    fn cbor_skip_rejects_deep_nesting() {
+        let mut shallow = CborCursor {
+            data: &[0x81, 0x81, 0x81, 0x81, 0x00],
+            pos: 0,
+        };
+        assert!(shallow.skip_value().is_some());
+
+        let mut deep = vec![0x81u8; MAX_CBOR_DEPTH + 4];
+        deep.push(0x00);
+        let mut c = CborCursor { data: &deep, pos: 0 };
+        assert!(c.skip_value().is_none());
     }
 }
