@@ -152,6 +152,14 @@ daemon 开关（需要时才注册虚拟设备），可用快捷键
 `systemctl --user start/stop phone-passkey-d`。
 - 沙箱 Firefox（Flatpak/Snap）需额外 udev 规则让沙箱看到 hidraw；NixOS 原生
 包无此问题。
+- **credential transports 恒为 `usb`**：RP 看到的 `transports` 由 Firefox 决定，
+不是设备能控制的。Linux 的 CTAP 后端（`dom/webauthn/authrs_bridge/src/lib.rs`
+的 `get_transports`）对所有走 USB-HID 的凭证硬编码返回 `["usb"]`，只在
+softtoken + platform attachment 时返回 `"internal"`。因此即使我们在
+`getInfo` 里广告 `transports: ["hybrid"]`，webauthn.io 等 RP 仍显示 `usb`
+（凭证本身仍被识别为 synced passkey / iCloud Keychain，因为那来自 attestation
+的 AAGUID 与 backup 标志）。纯属标签问题，不影响注册与登录；仅影响 RP 对
+transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hint。
 
 ### 5.4 模块与选型
 
