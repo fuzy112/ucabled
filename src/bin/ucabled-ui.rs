@@ -7,11 +7,14 @@
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use dbus::blocking::Connection;
+use dbus::channel::MatchingReceiver;
+use dbus::message::MatchRule;
 use dbus_crossroads::Crossroads;
 
 use ucabled::prompter::{BUS_NAME, ERR_NOT_AUTHORIZED, PROMPTER_INTERFACE, UI_INTERFACE, UI_PATH};
@@ -36,18 +39,24 @@ fn main() -> Result<()> {
     let child: ChildSlot = Arc::new(Mutex::new(None));
     let conn = Connection::new_system().context("connect system bus")?;
 
+    // Helper exits are reported to the serving loop, which owns `conn` and is
+    // therefore the only thread allowed to send over it.
+    let (cancel_tx, cancel_rx) = mpsc::channel::<u64>();
+
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(PROMPTER_INTERFACE, {
         let child = child.clone();
+        let cancel_tx = cancel_tx.clone();
         move |builder| {
             let prompt_child = child.clone();
+            let prompt_cancel = cancel_tx.clone();
             builder.method(
                 "Prompt",
                 ("tid", "url", "rp", "timeout"),
                 (),
                 move |_ctx, _: &mut (), (tid, url, rp, timeout): (u64, String, String, u64)| {
                     let rp = (!rp.is_empty()).then_some(rp);
-                    show_window(&prompt_child, tid, &url, rp, timeout);
+                    show_window(&prompt_child, &prompt_cancel, tid, &url, rp, timeout);
                     Ok(())
                 },
             );
@@ -82,24 +91,39 @@ fn main() -> Result<()> {
     });
     crossroads.insert(PROMPTER_PATH, &[iface], ());
 
-    // Register with the daemon, retrying while it is not up yet.
-    if !register_blocking() {
+    // Register with the daemon, retrying while it is not up yet. The
+    // registration must go over `conn` itself: the daemon calls the prompter
+    // back at the sender's unique name, which dies with the connection.
+    if !register_blocking(&conn) {
         tracing::info!("registration refused; this session is not the active one");
         return Ok(());
     }
 
-    // The daemon can be restarted; re-register periodically (idempotent).
-    let keepalive_child = child.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(REREGISTER_INTERVAL);
-        if !register_once().unwrap_or(false) {
-            keepalive_child.lock().unwrap().take();
-        }
-    });
-
     tracing::info!("prompter registered at {PROMPTER_PATH}");
-    crossroads.serve(&conn)?;
-    Ok(())
+
+    // Serve the prompter and, on the very same connection, periodically
+    // re-register (the daemon may have restarted) and report cancellations.
+    conn.start_receive(
+        MatchRule::new_method_call(),
+        Box::new(move |msg, conn| {
+            crossroads.handle_message(msg, conn).unwrap();
+            true
+        }),
+    );
+
+    let mut last_register = Instant::now();
+    loop {
+        conn.process(Duration::from_millis(200))?;
+        while let Ok(tid) = cancel_rx.try_recv() {
+            notify_cancelled(&conn, tid);
+        }
+        if last_register.elapsed() >= REREGISTER_INTERVAL {
+            last_register = Instant::now();
+            if !register_once(&conn).unwrap_or(false) {
+                child.lock().unwrap().take();
+            }
+        }
+    }
 }
 
 fn helper_path() -> Option<std::path::PathBuf> {
@@ -109,7 +133,14 @@ fn helper_path() -> Option<std::path::PathBuf> {
     sibling.exists().then_some(sibling)
 }
 
-fn show_window(state: &ChildSlot, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
+fn show_window(
+    state: &ChildSlot,
+    cancel_tx: &mpsc::Sender<u64>,
+    tid: u64,
+    url: &str,
+    rp: Option<String>,
+    timeout_secs: u64,
+) {
     kill_child(state);
 
     let Some(helper) = helper_path() else {
@@ -142,6 +173,7 @@ fn show_window(state: &ChildSlot, tid: u64, url: &str, rp: Option<String>, timeo
     *state.lock().unwrap() = Some(child);
 
     let state = state.clone();
+    let cancel_tx = cancel_tx.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(150));
         let exited = {
@@ -162,7 +194,7 @@ fn show_window(state: &ChildSlot, tid: u64, url: &str, rp: Option<String>, timeo
             }
         };
         if exited {
-            notify_cancelled(tid);
+            let _ = cancel_tx.send(tid);
             return;
         }
     });
@@ -175,10 +207,10 @@ fn kill_child(state: &ChildSlot) {
     }
 }
 
-/// One registration attempt. `Ok(true)` = registered, `Ok(false)` = refused
+/// One registration attempt over `conn` (which must be the connection serving
+/// the prompter object). `Ok(true)` = registered, `Ok(false)` = refused
 /// (not the active session), `Err` = transient.
-fn register_once() -> Result<bool> {
-    let conn = Connection::new_system().context("connect system bus")?;
+fn register_once(conn: &Connection) -> Result<bool> {
     let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
     let result: std::result::Result<(), dbus::Error> = proxy.method_call(
         UI_INTERFACE,
@@ -195,9 +227,9 @@ fn register_once() -> Result<bool> {
 }
 
 /// Retry registration until it succeeds or is definitively refused.
-fn register_blocking() -> bool {
+fn register_blocking(conn: &Connection) -> bool {
     loop {
-        match register_once() {
+        match register_once(conn) {
             Ok(true) => return true,
             Ok(false) => return false,
             Err(e) => {
@@ -208,9 +240,10 @@ fn register_blocking() -> bool {
     }
 }
 
-fn notify_cancelled(tid: u64) {
+/// Report the cancellation over `conn`: the daemon only accepts it from the
+/// currently registered prompter's unique name.
+fn notify_cancelled(conn: &Connection, tid: u64) {
     let result = (|| -> Result<()> {
-        let conn = Connection::new_system()?;
         let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
         let _: () = proxy.method_call(UI_INTERFACE, "TransactionCancelled", (tid,))?;
         Ok(())
