@@ -50,6 +50,9 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 
 - 本机 passkey 存储（softoken）——明确不做，密钥只在手机。
 - 系统级 D-Bus portal / 为其它浏览器做专门适配（架构上兼容，但不作为目标）。
+- 自建隧道服务器：隧道域名由手机端硬编码并经 EID 指定，二维码无法指定自建
+  服务器；且隧道本就是端到端加密，自建只影响元数据与可用性。见
+  docs/tunnel-server.md。
 - U2F APDU 层（不广告 `U2F_V2`，收到 MSG 命令直接报错）。
 - 本地实现 PIN/UV 协议——全部由手机完成，本机只透传。
 
@@ -148,7 +151,9 @@ AES-256 单块解密，得 16 字节 plaintext EID = `[0x00][nonce 10B]
 成为 proximity proof，密码学上不可绕过。
 5. WSS 连接 `wss://<domain>/cable/connect/<hex routingID>/<hex tunnelID>`，
 子协议 `fido.cable`，跟随重定向。手机侧走 `/cable/new/<hex tunnelID>`，
-隧道服务器在响应头 `X-caBLE-Routing-Id` 分配 routing ID。
+隧道服务器在响应头 `X-caBLE-Routing-Id` 分配 routing ID。**域名由手机经
+EID 指定**（assigned 表下标或 ≥256 的哈希域名），桌面不自选；自建隧道
+服务器不在目标内，见 docs/tunnel-server.md。
 6. 握手 = **Noise KNpsk0 (P-256/AES-GCM/SHA-256)**，桌面为 initiator：
 prologue `0x01` → MixHash(identity 公钥未压缩 65B) → MixKeyAndHash(PSK)
 → MixHash+MixKey(ephemeral 公钥) → 空明文加密。初始消息 81 字节
