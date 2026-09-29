@@ -248,7 +248,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 - [x] QR 浮窗：RP 域名、QR、取消（egui/wgpu 无边框置顶窗，per-transaction
       子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
-- [ ] 与真实硬件密钥共存实测；daemon 开关
+- [x] 与真实硬件密钥共存实测（多设备时弹出"Use phone"选择窗口，见 §5.3）
 - [x] NixOS flake 打包 + systemd user service（module 见 §8）
 - [x] systemd 常驻实测通过（2026-09-29：登录自启、GUI 弹窗正常）
 
@@ -265,7 +265,8 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 QR 流程的协议必需项（PSK 绑定解密后的 advert，proximity proof），
 隧道-only 在密码学上不可能。方案已调整为 BLE 扫描（FR-8a，仅接收、
 无需 GATT）+ 隧道传 CTAP。真机兼容性仍待 S0 真机验收最终确认。
-2. Firefox 多 FIDO 设备枚举行为——实测 + daemon 开关缓解。
+2. ~~Firefox 多 FIDO 设备枚举行为~~——**已解决**：实测确认 Firefox 只能靠
+   触摸选择，故用"Use phone"窗口选中虚拟设备（见 §5.3）；无需 daemon 开关。
 3. getInfo extensions 静态广告与真机能力偏差——表现为个别 RP 报
 INVALID_OPTION，可接受、可迭代。
 4. 隧道服务器可用性/合规——缓释：协议允许 QR 内换自建域名。

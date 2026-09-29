@@ -266,10 +266,9 @@ NixOS module（`nix/module.nix`）：
 
 仍待处理：
 
-- 是否允许活动会话用户启停 system unit（NFR-3 开关）：暂未实现，当前用
-  `systemctl start/stop ucabled`（需提权）。
-- 与真实硬件密钥共存的行为（NFR-3）仍需实测。
-- 真机上 BlueZ 的 polkit/D-Bus 行为需确认（已带 BlueZ polkit 规则兜底）。
+- 活动会话用户启停 system unit：仍未开放，当前用 `systemctl start/stop
+  ucabled`（需提权）。NFR-3 已由 agent 的"Use phone"选择窗口解决（见 §3.4），
+  不再需要该开关。
 
 ## 12. 实现与提交计划
 
