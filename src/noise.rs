@@ -68,6 +68,10 @@ impl Noise {
         self.initialize_key(temp_k);
     }
 
+    /// 96-bit AES-GCM nonce: the 32-bit big-endian counter goes in the
+    /// *first* four bytes. This matches the caBLE v2 handshake as implemented
+    /// by Chromium/Apple and differs from the tunnel crypter, which puts the
+    /// counter last (see `crypter.rs`). Do not "tidy" it without a test vector.
     fn next_nonce(&mut self) -> [u8; 12] {
         let mut nonce = [0u8; 12];
         nonce[..4].copy_from_slice(&self.nonce.to_be_bytes());
@@ -113,5 +117,18 @@ impl Noise {
 
     pub fn handshake_hash(&self) -> [u8; 32] {
         self.h
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonce_counter_is_in_the_first_four_bytes() {
+        let mut n = Noise::new(b"proto");
+        assert_eq!(n.next_nonce(), [0u8; 12]);
+        assert_eq!(n.next_nonce(), [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(n.next_nonce(), [0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

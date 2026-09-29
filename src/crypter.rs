@@ -21,6 +21,10 @@ impl Crypter {
         }
     }
 
+    /// 96-bit AES-GCM nonce: the 32-bit big-endian counter goes in the *last*
+    /// four bytes. This matches caBLE v2 message encryption and differs from
+    /// the Noise handshake, which puts the counter first (see `noise.rs`). Do
+    /// not change it without a test vector.
     fn nonce(seq: u32) -> Option<[u8; 12]> {
         if seq > MAX_SEQUENCE {
             return None;
@@ -88,6 +92,18 @@ mod tests {
         let second = a.encrypt(b"two").unwrap();
         // A message encrypted with sequence 1 does not decrypt under sequence 0.
         assert!(b.decrypt(&second).is_none());
+    }
+
+    #[test]
+    fn nonce_counter_is_in_the_last_four_bytes() {
+        assert_eq!(
+            Crypter::nonce(0).unwrap(),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            Crypter::nonce(1).unwrap(),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
     }
 
     #[test]
