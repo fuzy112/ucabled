@@ -9,7 +9,7 @@
 
 ## 1. 背景与动机
 
-- Firefox 桌面版在 Linux 上只支持基于 USB-HID 的硬件安全密钥（YubiKey 等），
+- Firefox 桌面版在 Linux 上只支持基于 USB-HID 的硬件安全密钥（U2F/CTAP2 设备等），
 没有平台 authenticator，也没有 Chromium 的 caBLE v2（QR + BLE）跨设备流程。
 - KeePassXC 类方案（扩展注入 + 本机存储）把密钥留在本机；Chromium 的 hybrid
 流程则把密钥留在手机。本项目采用后者模型。
@@ -39,7 +39,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | --- | --- |
 | NFR-1 | 本机零密钥材料；隧道流量端到端加密（AES-256-GCM，密钥由 X25519 ECDH + QR secret 经 HKDF 派生），隧道服务器不可见明文 |
 | NFR-2 | 常驻进程资源占用小（systemd user service，事件驱动） |
-| NFR-3 | 与真实硬件密钥共存行为可预期；提供 daemon 开关作为缓解 |
+| NFR-3 | 与真实硬件密钥共存：Firefox 多设备选择时由 agent 弹"Use phone"窗口来选中虚拟设备（见 docs/system-service.md §3.4） |
 | NFR-4 | NixOS 可打包（flake），附 udev 规则与 uhid 内核模块配置 |
 | NFR-5 | 纯 Rust 实现；BLE 使用 bluer（BlueZ D-Bus） |
 | NFR-6 | 安全默认值：pairing 状态文件权限 0600；日志只记命令字与长度，不落 CBOR payload 原文（含 clientDataHash、rpId 等敏感上下文） |
@@ -164,9 +164,10 @@ user service 长驻进程。
 - **KEEPALIVE 是硬需求**：扫码可能耗时 30s+，不发 STATUS_UPNEEDED（每
 100–300ms）Firefox 会判超时；总操作时限 5 分钟。
 - **多通道**：繁忙时收到 broadcast INIT 回 ERR_CHANNEL_BUSY。
-- **多设备共存**：与真实 YubiKey 同时存在时 Firefox 的行为需实测；缓解手段是
-daemon 开关（需要时才注册虚拟设备），可用快捷键
-`systemctl --user start/stop phone-passkey-d`。
+- **多设备共存**：Firefox 检测到多个认证器时只允许触摸实体密钥来选择；虚拟
+设备没有可触摸的按键，所以 daemon 收到选择探测时让 agent 弹"Use phone"窗口，
+点按即选中虚拟设备（实现见 docs/system-service.md §3.4）。`--no-ui` 或无 agent
+时不弹窗，虚拟设备不参与选择，实体密钥照常可用。
 - 沙箱 Firefox（Flatpak/Snap）需额外 udev 规则让沙箱看到 hidraw；NixOS 原生
 包无此问题。
 - **credential transports 恒为 `usb`**：RP 看到的 `transports` 由 Firefox 决定，
@@ -247,7 +248,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 - [x] QR 浮窗：RP 域名、QR、取消（egui/wgpu 无边框置顶窗，per-transaction
       子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
-- [ ] 与真实 YubiKey 共存实测；daemon 开关
+- [ ] 与真实硬件密钥共存实测；daemon 开关
 - [x] NixOS flake 打包 + systemd user service（module 见 §8）
 - [x] systemd 常驻实测通过（2026-09-29：登录自启、GUI 弹窗正常）
 

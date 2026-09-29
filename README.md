@@ -157,6 +157,7 @@ the window or click Cancel to abort.
 | Firefox does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
+| Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window. Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |
 
 Logs contain only command bytes and lengths, never raw CBOR payloads.
 
@@ -172,6 +173,10 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
   usage.
 - No local PIN/UV and no attestation trust decisions — the phone does all of
   that.
+- With another authenticator (e.g. a physical security key) plugged in,
+  Firefox lets the user pick only by touching a physical key, so ucabled shows
+  its own "Use phone" window. Run with `--no-ui` and it cannot participate in
+  the selection and stands down.
 
 ## Development
 

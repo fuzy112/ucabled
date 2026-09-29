@@ -31,6 +31,24 @@ impl Notifier {
         }
     }
 
+    /// Ask the user to pick the phone when another authenticator (e.g. a
+    /// physical security key) is also present. Returns whether a prompt was
+    /// shown; if not, the caller should decline instead of waiting for an
+    /// answer.
+    pub fn select(&self, tid: u64) -> bool {
+        match self {
+            Notifier::Terminal => false,
+            Notifier::Agent(ui) => {
+                if ui.available() {
+                    ui.select(tid);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     /// The phone has been seen over BLE; the user now confirms on it.
     pub fn phone_found(&self) {
         match self {

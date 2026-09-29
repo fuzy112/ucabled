@@ -71,6 +71,10 @@ pub enum UiCommand {
         rp: Option<String>,
         timeout_secs: u64,
     },
+    /// Ask the user to pick the phone when another authenticator is present.
+    Select {
+        tid: u64,
+    },
     Found {
         tid: u64,
     },
@@ -104,6 +108,12 @@ impl UiClient {
         });
     }
 
+    /// Ask the agent to show the "use the phone instead?" prompt. The answer
+    /// comes back through the `select` channel passed to [`start`].
+    pub fn select(&self, tid: u64) {
+        let _ = self.tx.send(UiCommand::Select { tid });
+    }
+
     /// The phone's BLE advert was seen; the user now confirms on it.
     pub fn found(&self) {
         let tid = self.active_tid.load(Ordering::SeqCst);
@@ -118,8 +128,13 @@ impl UiClient {
 }
 
 /// Start the D-Bus service and dispatch threads. `cancel_tx` receives a `()`
-/// when the agent reports that the user cancelled the dialog.
-pub fn start(cancel_tx: UnboundedSender<()>) -> Result<UiClient> {
+/// when the agent reports that the user cancelled the dialog; `select_tx`
+/// receives the user's answer (`true` = use the phone) to a [`UiClient::select`]
+/// request.
+pub fn start(
+    cancel_tx: UnboundedSender<()>,
+    select_tx: UnboundedSender<(u64, bool)>,
+) -> Result<UiClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let (tx, rx) = mpsc::unbounded_channel();
 
@@ -127,7 +142,7 @@ pub fn start(cancel_tx: UnboundedSender<()>) -> Result<UiClient> {
     std::thread::Builder::new()
         .name("ucable-agent-service".into())
         .spawn(move || {
-            if let Err(e) = service_thread(cancel_tx, service_slot) {
+            if let Err(e) = service_thread(cancel_tx, select_tx, service_slot) {
                 tracing::error!("UI D-Bus service stopped: {e:#}");
             }
         })
@@ -190,7 +205,11 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
     Ok(Some(uid))
 }
 
-fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<AgentSlot>>) -> Result<()> {
+fn service_thread(
+    cancel_tx: UnboundedSender<()>,
+    select_tx: UnboundedSender<(u64, bool)>,
+    slot: Arc<Mutex<AgentSlot>>,
+) -> Result<()> {
     let conn = Connection::new_system().context("connect system bus")?;
     conn.request_name(BUS_NAME, false, false, false)
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
@@ -259,6 +278,28 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<AgentSlot>>) -
                     Ok(())
                 },
             );
+
+            let select_slot = slot.clone();
+            builder.method(
+                "SelectionResult",
+                ("tid", "use_phone"),
+                (),
+                move |ctx, _: &mut (), (tid, use_phone): (u64, bool)| {
+                    let sender = ctx.message().sender().map(|s| s.to_string());
+                    let is_current = {
+                        let guard = select_slot.lock().unwrap();
+                        guard
+                            .current()
+                            .map(|p| Some(p.destination.as_str()) == sender.as_deref())
+                            .unwrap_or(false)
+                    };
+                    if is_current {
+                        tracing::info!(tid, use_phone, "agent reported device selection");
+                        let _ = select_tx.send((tid, use_phone));
+                    }
+                    Ok(())
+                },
+            );
         }
     });
     crossroads.insert(UI_PATH, &[iface], ());
@@ -323,6 +364,7 @@ fn dispatch_thread(
                 "Prompt",
                 (tid, url, rp.unwrap_or_default(), timeout_secs),
             ),
+            UiCommand::Select { tid } => proxy.method_call(AGENT_INTERFACE, "Select", (tid,)),
             UiCommand::Found { tid } => proxy.method_call(AGENT_INTERFACE, "Found", (tid,)),
             UiCommand::Close { tid } => proxy.method_call(AGENT_INTERFACE, "Close", (tid,)),
         };

@@ -76,13 +76,35 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - 收到 `Prompt(tid, url, rp, timeout)` 时，按现有 `GuiHandle` 逻辑 spawn
   `ucable-agent-helper`，把 URL 写进它的 stdin；把 helper 的退出转成
   `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
+- 收到 `Select(tid)` 时 spawn `ucable-agent-helper --select`，按退出码
+  （0=用手机，其余=放弃）回 `SelectionResult(tid, use_phone)`。
 - 无图形会话（无 `WAYLAND_DISPLAY`/`DISPLAY`）时**不注册**。
 - agent 掉线（D-Bus 名消失）时，守护进程注销该 agent 并把在途事务按
   取消失败处理。
 
-### 3.3 QR helper `ucable-agent-helper`（不变）
+### 3.3 QR helper `ucable-agent-helper`
 
-仍是从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。
+- 默认：从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。
+- `--select`：设备选择窗口（"Use phone" / "Cancel"），不读 stdin；退出码
+  0 表示用户选择用手机，其余（取消/关闭/超时）表示放弃。
+
+## 3.4 多设备选择（与实体密钥共存）
+
+Firefox 检测到多个认证器时只显示一句"Multiple devices found. Please
+select one."，**只能靠触摸实体密钥来选择**——它会把每个设备的
+`getInfo` 探测（FIDO2.0 用 dummy `makeCredential`，`rp.id=make.me.blink`）
+发给设备，只有回复 `Pin*` 状态的设备才算被选中（见 authenticator-rs
+`transport/mod.rs::block_and_blink`）。虚拟设备没有可触摸的按键，因此：
+
+- 守护进程收到 blink 探测时，不再直接回 `0x2C`（会被判为未选中），而是
+  让 agent 弹出"Use phone"窗口。
+- 用户点"Use phone"→ 回 `0x35`（CTAP2_ERR_PIN_NOT_SET，被判定为选中），
+  Firefox 随即发真正的请求，进入常规 QR 流程。
+- 用户点"Cancel"/关窗/超时 → 回 `0x2C`（未选中），实体密钥仍可被选中。
+- 用户触摸实体密钥 → Firefox 取消我们的 blink（`CTAPHID_CANCEL`），守护
+  进程收到 `CancelRelay` 时关掉选择窗口，不给任何回复。
+- `--no-ui` 或无 agent 时无法弹窗，保持旧行为（直接回 `0x2C`，即不参与
+  选择）。
 
 ## 4. D-Bus 接口
 
@@ -92,7 +114,8 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 interface org.ucabled.Ui1
   RegisterAgent(o path)            # agent 注册其唯一 bus name 上的对象路径
   UnregisterAgent()
-  TransactionCancelled(t tid)         # 用户关闭窗口
+  TransactionCancelled(t tid)         # 用户关闭 QR 窗口
+  SelectionResult(t tid, b use_phone) # 用户对设备选择窗口的回答
 ```
 
 agent 实现（对象路径由 `RegisterAgent` 传入）：
@@ -100,6 +123,7 @@ agent 实现（对象路径由 `RegisterAgent` 传入）：
 ```
 interface org.ucabled.Agent1
   Prompt(t tid, s url, s rp, t timeout_secs)
+  Select(t tid)                    # 弹设备选择窗口
   Found(t tid)
   Close(t tid)
 ```
@@ -244,7 +268,7 @@ NixOS module（`nix/module.nix`）：
 
 - 是否允许活动会话用户启停 system unit（NFR-3 开关）：暂未实现，当前用
   `systemctl start/stop ucabled`（需提权）。
-- 与真实 YubiKey 共存的行为（NFR-3）仍需实测。
+- 与真实硬件密钥共存的行为（NFR-3）仍需实测。
 - 真机上 BlueZ 的 polkit/D-Bus 行为需确认（已带 BlueZ polkit 规则兜底）。
 
 ## 12. 实现与提交计划

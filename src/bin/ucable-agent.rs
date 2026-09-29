@@ -24,6 +24,8 @@ use ucabled::agent::{AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, UI_INTERFACE
 
 const AGENT_PATH: &str = "/org/ucabled/Agent";
 const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
+/// How long the device-selection window stays up before declining.
+const SELECT_TIMEOUT_SECS: u64 = 60;
 
 type ChildSlot = Arc<Mutex<Option<Child>>>;
 
@@ -40,16 +42,21 @@ fn main() -> Result<()> {
     }
 
     let child: ChildSlot = Arc::new(Mutex::new(None));
+    let select_child: ChildSlot = Arc::new(Mutex::new(None));
     let conn = Connection::new_system().context("connect system bus")?;
 
     // Helper exits are reported to the serving loop, which owns `conn` and is
     // therefore the only thread allowed to send over it.
     let (cancel_tx, cancel_rx) = mpsc::channel::<u64>();
+    // (tid, use_phone) from the device-selection window.
+    let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>();
 
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(AGENT_INTERFACE, {
         let child = child.clone();
+        let select_child = select_child.clone();
         let cancel_tx = cancel_tx.clone();
+        let select_tx = select_tx.clone();
         move |builder| {
             let prompt_child = child.clone();
             let prompt_cancel = cancel_tx.clone();
@@ -80,13 +87,27 @@ fn main() -> Result<()> {
                 },
             );
 
+            let select_child_slot = select_child.clone();
+            let select_tx_slot = select_tx.clone();
+            builder.method(
+                "Select",
+                ("tid",),
+                (),
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
+                    show_select_window(&select_child_slot, &select_tx_slot, tid);
+                    Ok(())
+                },
+            );
+
             let close_child = child.clone();
+            let close_select = select_child.clone();
             builder.method(
                 "Close",
                 ("tid",),
                 (),
                 move |_ctx, _: &mut (), (_tid,): (u64,)| {
                     kill_child(&close_child);
+                    kill_child(&close_select);
                     Ok(())
                 },
             );
@@ -134,8 +155,12 @@ fn main() -> Result<()> {
         while let Ok(tid) = cancel_rx.try_recv() {
             notify_cancelled(&conn, tid);
         }
+        while let Ok((tid, use_phone)) = select_rx.try_recv() {
+            notify_selection(&conn, tid, use_phone);
+        }
         if reregister.swap(false, Ordering::SeqCst) && !register_once(&conn).unwrap_or(false) {
             child.lock().unwrap().take();
+            select_child.lock().unwrap().take();
         }
     }
 }
@@ -214,6 +239,64 @@ fn show_window(
     });
 }
 
+/// Show the "another security key is present, use the phone instead?" window
+/// and report the user's answer. The helper exits 0 for "Use phone" and
+/// non-zero for cancel/close/timeout.
+fn show_select_window(state: &ChildSlot, result_tx: &mpsc::Sender<(u64, bool)>, tid: u64) {
+    kill_child(state);
+
+    let Some(helper) = helper_path() else {
+        tracing::warn!("ucable-agent-helper not found next to the agent; cannot ask the user");
+        let _ = result_tx.send((tid, false));
+        return;
+    };
+    let mut command = Command::new(helper);
+    command
+        .arg("--select")
+        .arg("--timeout")
+        .arg(SELECT_TIMEOUT_SECS.to_string())
+        .stdin(Stdio::null());
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            tracing::warn!("failed to spawn ucable-agent-helper: {e}");
+            let _ = result_tx.send((tid, false));
+            return;
+        }
+    };
+    *state.lock().unwrap() = Some(child);
+
+    let state = state.clone();
+    let result_tx = result_tx.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let status = {
+            let mut guard = state.lock().unwrap();
+            match guard.as_mut() {
+                None => return,
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        *guard = None;
+                        Some(status)
+                    }
+                    Ok(None) => None,
+                    Err(_) => {
+                        *guard = None;
+                        return;
+                    }
+                },
+            }
+        };
+        if let Some(status) = status {
+            // Exit code 0 means "Use phone"; anything else (cancel, close,
+            // timeout, signal) declines and lets the other key win.
+            let use_phone = status.code() == Some(0);
+            let _ = result_tx.send((tid, use_phone));
+            return;
+        }
+    });
+}
+
 fn kill_child(state: &ChildSlot) {
     if let Some(mut child) = state.lock().unwrap().take() {
         let _ = child.kill();
@@ -264,5 +347,17 @@ fn notify_cancelled(conn: &Connection, tid: u64) {
     })();
     if let Err(e) = result {
         tracing::warn!("failed to report cancellation: {e:#}");
+    }
+}
+
+/// Report the user's device-selection answer over `conn`.
+fn notify_selection(conn: &Connection, tid: u64, use_phone: bool) {
+    let result = (|| -> Result<()> {
+        let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
+        let _: () = proxy.method_call(UI_INTERFACE, "SelectionResult", (tid, use_phone))?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        tracing::warn!("failed to report device selection: {e:#}");
     }
 }

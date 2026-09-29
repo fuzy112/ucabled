@@ -17,6 +17,32 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);
 /// systemd restart the service and recreate the device).
 const MAX_UHID_READ_FAILURES: u32 = 10;
 
+/// How long to wait for the user to answer the device-selection prompt before
+/// declining. The helper has its own, slightly shorter, timeout.
+const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
+
+/// An in-flight operation that the daemon is waiting on.
+enum Pending {
+    /// A caBLE transaction is running for `cid`; `abort` cancels it.
+    Relay { cid: u32, abort: AbortHandle },
+    /// The user is being asked to choose the phone over another
+    /// authenticator (e.g. a physical security key). Firefox's own prompt can
+    /// only be answered by touching a physical key, so we ask through the
+    /// agent.
+    Select {
+        cid: u32,
+        deadline: tokio::time::Instant,
+    },
+}
+
+impl Pending {
+    fn cid(&self) -> u32 {
+        match self {
+            Pending::Relay { cid, .. } | Pending::Select { cid, .. } => *cid,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -27,10 +53,11 @@ fn main() -> Result<()> {
     let no_ui = std::env::args().any(|a| a == "--no-ui");
 
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
+    let (select_tx, select_rx) = mpsc::unbounded_channel::<(u64, bool)>();
     let notifier = if no_ui {
         Notifier::Terminal
     } else {
-        match ucabled::agent::start(cancel_tx.clone()) {
+        match ucabled::agent::start(cancel_tx.clone(), select_tx.clone()) {
             Ok(ui) => Notifier::Agent(ui),
             Err(e) => {
                 tracing::warn!("UI bridge unavailable ({e:#}), falling back to terminal QR");
@@ -40,10 +67,14 @@ fn main() -> Result<()> {
     };
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(daemon_loop(notifier, cancel_rx))
+    rt.block_on(daemon_loop(notifier, cancel_rx, select_rx))
 }
 
-async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<()>) -> Result<()> {
+async fn daemon_loop(
+    notifier: Notifier,
+    mut cancel_rx: mpsc::UnboundedReceiver<()>,
+    mut select_rx: mpsc::UnboundedReceiver<(u64, bool)>,
+) -> Result<()> {
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
@@ -51,7 +82,7 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
     let mut transport = Transport::new(ucabled::ctap::AAGUID);
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
-    let mut pending: Option<(u32, AbortHandle)> = None;
+    let mut pending: Option<Pending> = None;
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     let mut read_failures = 0u32;
     let mut write_failures = 0u32;
@@ -110,12 +141,25 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
-                                // Firefox's dummy makeCredential exists only to
-                                // make a physical key blink; don't bug the phone.
+                                // Firefox's dummy makeCredential is how it
+                                // asks the user to pick among several
+                                // authenticators ("Multiple devices found").
+                                // It only counts as "selected" if the device
+                                // answers with a Pin* status, which a physical
+                                // key only does once touched. Put the choice in
+                                // the user's hands with our own window.
                                 if ucabled::ctap::is_blink_probe(&payload) {
-                                    tracing::info!("blink probe, answering locally");
-                                    let reports = transport.complete_relay(cid, &[0x2c]);
-                                    write_all(&device, reports, &mut write_failures).await;
+                                    if notifier.select(cid as u64) {
+                                        tracing::info!("asking the user to choose the phone");
+                                        pending = Some(Pending::Select {
+                                            cid,
+                                            deadline: tokio::time::Instant::now() + SELECT_TIMEOUT,
+                                        });
+                                    } else {
+                                        tracing::info!("blink probe, no UI available, declining");
+                                        let reports = transport.complete_relay(cid, &[0x2c]);
+                                        write_all(&device, reports, &mut write_failures).await;
+                                    }
                                     continue;
                                 }
                                 if !notifier.available() {
@@ -162,15 +206,26 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     .await;
                                     let _ = tx.send((cid, r));
                                 });
-                                pending = Some((cid, task.abort_handle()));
+                                pending = Some(Pending::Relay {
+                                    cid,
+                                    abort: task.abort_handle(),
+                                });
                             }
-                            Some(CtapAction::CancelRelay) => {
-                                if let Some((_, abort)) = pending.take() {
+                            Some(CtapAction::CancelRelay) => match pending.take() {
+                                Some(Pending::Relay { abort, .. }) => {
                                     abort.abort();
                                     notifier.hide();
                                     tracing::info!("cancelled caBLE transaction");
                                 }
-                            }
+                                Some(Pending::Select { .. }) => {
+                                    // The host cancelled because another
+                                    // authenticator (the user touched it) won
+                                    // the selection; drop our prompt.
+                                    notifier.hide();
+                                    tracing::info!("device selection cancelled by the host");
+                                }
+                                None => {}
+                            },
                             None => {}
                         }
                     }
@@ -181,7 +236,7 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                 }
             }
             Some((cid, result)) = result_rx.recv() => {
-                if let Some((pending_cid, _)) = &pending {
+                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending {
                     if *pending_cid == cid {
                         notifier.hide();
                         let payload = match result {
@@ -204,8 +259,25 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                     }
                 }
             }
-            Some(()) = cancel_rx.recv(), if pending.is_some() => {
-                if let Some((cid, abort)) = pending.take() {
+            Some((tid, use_phone)) = select_rx.recv() => {
+                if let Some(Pending::Select { cid, .. }) = &pending {
+                    if *cid as u64 == tid {
+                        let cid = *cid;
+                        pending = None;
+                        // 0x35 = CTAP2_ERR_PIN_NOT_SET: on the blink probe a
+                        // Pin* status tells authenticator-rs that this device
+                        // was selected, so Firefox proceeds with the phone flow.
+                        let status = if use_phone { 0x35 } else { 0x2c };
+                        let reports = transport.complete_relay(cid, &[status]);
+                        write_all(&device, reports, &mut write_failures).await;
+                        tracing::info!(use_phone, "device selection answered");
+                    }
+                }
+            }
+            Some(()) = cancel_rx.recv(),
+                if matches!(pending.as_ref(), Some(Pending::Relay { .. })) =>
+            {
+                if let Some(Pending::Relay { cid, abort }) = pending.take() {
                     abort.abort();
                     let reports = transport.cancel_relay(cid);
                     write_all(&device, reports, &mut write_failures).await;
@@ -213,8 +285,19 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                 }
             }
             _ = keepalive.tick(), if pending.is_some() => {
-                if let Some((cid, _)) = &pending {
-                    let reports = transport.keepalive(*cid);
+                let cid = pending.as_ref().map(Pending::cid).unwrap();
+                let timed_out = matches!(
+                    pending.as_ref(),
+                    Some(Pending::Select { deadline, .. })
+                        if tokio::time::Instant::now() >= *deadline
+                );
+                if timed_out {
+                    pending = None;
+                    let reports = transport.complete_relay(cid, &[0x2c]);
+                    write_all(&device, reports, &mut write_failures).await;
+                    tracing::warn!("device selection timed out, declining");
+                } else {
+                    let reports = transport.keepalive(cid);
                     write_all(&device, reports, &mut write_failures).await;
                 }
             }

@@ -7,6 +7,47 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+/// Exit codes for `--select`: the agent maps them to the user's choice.
+const EXIT_USE_PHONE: i32 = 0;
+const EXIT_DECLINE: i32 = 1;
+
+/// Shown when another authenticator (e.g. a physical security key) is plugged
+/// in and Firefox asks the user to pick one. Firefox itself only supports
+/// picking by touching a physical key, so this window is how the user chooses
+/// the phone instead.
+struct SelectWindow {
+    start: Instant,
+    timeout: Duration,
+}
+
+impl eframe::App for SelectWindow {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if ctx.input(|i| i.viewport().close_requested()) {
+            std::process::exit(EXIT_DECLINE);
+        }
+        if self.start.elapsed() >= self.timeout {
+            std::process::exit(EXIT_DECLINE);
+        }
+
+        ui.vertical_centered(|ui| {
+            ui.add_space(12.0);
+            ui.heading("Passkey request");
+            ui.add_space(6.0);
+            ui.label("A security key is also connected.");
+            ui.label("Use your phone passkey instead?");
+            ui.add_space(12.0);
+            if ui.button("Use phone").clicked() {
+                std::process::exit(EXIT_USE_PHONE);
+            }
+            if ui.button("Cancel").clicked() {
+                std::process::exit(EXIT_DECLINE);
+            }
+        });
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+}
+
 struct QrWindow {
     rp: Option<String>,
     texture: egui::TextureHandle,
@@ -112,9 +153,11 @@ fn main() -> eframe::Result<()> {
     let mut url: Option<String> = None;
     let mut rp: Option<String> = None;
     let mut timeout = Duration::from_secs(300);
+    let mut select = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--select" => select = true,
             "--timeout" => {
                 if let Some(secs) = args.next().and_then(|v| v.parse::<u64>().ok()) {
                     timeout = Duration::from_secs(secs);
@@ -128,6 +171,10 @@ fn main() -> eframe::Result<()> {
                 }
             }
         }
+    }
+
+    if select {
+        return run_select_window(timeout);
     }
 
     // The daemon sends the QR URL on stdin (it carries the transaction secret,
@@ -157,6 +204,29 @@ fn main() -> eframe::Result<()> {
                 rp,
                 texture: make_qr_texture(&cc.egui_ctx, &url),
                 phone_found,
+                start: Instant::now(),
+                timeout,
+            }))
+        }),
+    )
+}
+
+fn run_select_window(timeout: Duration) -> eframe::Result<()> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Phone Passkey Bridge")
+            .with_app_id("ucabled")
+            .with_inner_size([360.0, 240.0])
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_always_on_top(),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Phone Passkey Bridge",
+        options,
+        Box::new(move |_cc| {
+            Ok(Box::new(SelectWindow {
                 start: Instant::now(),
                 timeout,
             }))
