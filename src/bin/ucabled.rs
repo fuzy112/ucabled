@@ -54,10 +54,11 @@ fn main() -> Result<()> {
 
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
     let (select_tx, select_rx) = mpsc::unbounded_channel::<(u64, bool)>();
+    let rt = tokio::runtime::Runtime::new()?;
     let notifier = if no_ui {
         Notifier::Terminal
     } else {
-        match ucabled::agent::start(cancel_tx.clone(), select_tx.clone()) {
+        match ucabled::agent::start(rt.handle(), cancel_tx.clone(), select_tx.clone()) {
             Ok(ui) => Notifier::Agent(ui),
             Err(e) => {
                 tracing::warn!("UI bridge unavailable ({e:#}), falling back to terminal QR");
@@ -66,7 +67,6 @@ fn main() -> Result<()> {
         }
     };
 
-    let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(daemon_loop(notifier, cancel_rx, select_rx))
 }
 

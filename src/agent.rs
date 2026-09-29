@@ -19,10 +19,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use dbus::arg::{PropMap, RefArg, Variant};
-use dbus::blocking::{Connection, Proxy};
-use dbus::message::MatchRule;
+use dbus::blocking::Connection;
+use dbus::message::{MatchRule, Message};
+use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
 use dbus::Path;
 use dbus_crossroads::{Crossroads, MethodErr};
+use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
+use futures::StreamExt;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 pub const BUS_NAME: &str = "org.ucabled";
@@ -84,7 +88,7 @@ pub enum UiCommand {
 }
 
 /// Daemon-side handle to the UI bridge. Cheap to clone and safe to use from
-/// any task; commands are handed to a dedicated blocking D-Bus thread.
+/// any task; commands are handed to a dedicated D-Bus dispatch task.
 #[derive(Clone)]
 pub struct UiClient {
     tx: UnboundedSender<UiCommand>,
@@ -127,36 +131,43 @@ impl UiClient {
     }
 }
 
-/// Start the D-Bus service and dispatch threads. `cancel_tx` receives a `()`
-/// when the agent reports that the user cancelled the dialog; `select_tx`
-/// receives the user's answer (`true` = use the phone) to a [`UiClient::select`]
-/// request.
+/// Start the D-Bus service and dispatch tasks on `handle`. `cancel_tx`
+/// receives a `()` when the agent reports that the user cancelled the dialog;
+/// `select_tx` receives the user's answer (`true` = use the phone) to a
+/// [`UiClient::select`] request.
+///
+/// The setup (connect, request the bus name, install matches) runs inline so
+/// a failure still falls back at startup; message routing and outbound calls
+/// then live in spawned tasks on a single async connection.
 pub fn start(
+    handle: &Handle,
     cancel_tx: UnboundedSender<()>,
     select_tx: UnboundedSender<(u64, bool)>,
 ) -> Result<UiClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let service_slot = slot.clone();
-    std::thread::Builder::new()
-        .name("ucable-agent-service".into())
-        .spawn(move || {
-            if let Err(e) = service_thread(cancel_tx, select_tx, service_slot) {
-                tracing::error!("UI D-Bus service stopped: {e:#}");
-            }
-        })
-        .context("spawn UI service thread")?;
+    let (resource, conn) =
+        dbus_tokio::connection::new_system_sync().context("connect system bus")?;
+    handle.spawn(async move {
+        let err = resource.await;
+        tracing::error!("system bus connection lost: {err}");
+    });
 
-    let dispatch_slot = slot.clone();
-    std::thread::Builder::new()
-        .name("ucable-agent-dispatch".into())
-        .spawn(move || {
-            if let Err(e) = dispatch_thread(rx, dispatch_slot) {
-                tracing::error!("UI dispatch stopped: {e:#}");
-            }
-        })
-        .context("spawn UI dispatch thread")?;
+    let crossroads = build_crossroads(&slot, cancel_tx, select_tx);
+    let registered = handle.block_on(register_on_bus(&conn))?;
+    let ((method_match, methods), (signal_match, signals)) = registered;
+
+    handle.spawn(route_messages(
+        conn.clone(),
+        crossroads,
+        method_match,
+        methods,
+        signal_match,
+        signals,
+        slot.clone(),
+    ));
+    handle.spawn(dispatch_commands(conn, rx, slot.clone()));
 
     Ok(UiClient {
         tx,
@@ -167,8 +178,9 @@ pub fn start(
 
 /// Check whether `sender` may register an agent, returning its uid.
 ///
-/// Opens its own bus connection: this runs on the service thread and only on
-/// registration, so the cost is irrelevant.
+/// Opens its own blocking bus connection: this runs inside the message
+/// routing task and only on registration (a rare, locally answered call),
+/// so briefly parking the task there is acceptable.
 fn authorize(sender: &str) -> Result<Option<u32>> {
     let conn = Connection::new_system().context("connect system bus")?;
 
@@ -205,15 +217,33 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
     Ok(Some(uid))
 }
 
-fn service_thread(
+type MatchStream = (MsgMatch, MessageReceiver<Message>);
+
+/// Request the bus name and install the method-call and NameOwnerChanged
+/// matches, returning the guards (dropping them stops matching) and streams.
+async fn register_on_bus(
+    conn: &Arc<SyncConnection>,
+) -> Result<(MatchStream, MatchStream)> {
+    conn.request_name(BUS_NAME, false, false, false)
+        .await
+        .with_context(|| format!("request bus name {BUS_NAME}"))?;
+    let method = conn
+        .add_match(MatchRule::new_method_call())
+        .await
+        .context("match method calls")?;
+    let signal = conn
+        .add_match(MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged").with_sender(DBUS_BUS))
+        .await
+        .context("match NameOwnerChanged")?;
+    tracing::info!("listening on {BUS_NAME} ({MANAGER_INTERFACE})");
+    Ok((method.msg_stream(), signal.msg_stream()))
+}
+
+fn build_crossroads(
+    slot: &Arc<Mutex<AgentSlot>>,
     cancel_tx: UnboundedSender<()>,
     select_tx: UnboundedSender<(u64, bool)>,
-    slot: Arc<Mutex<AgentSlot>>,
-) -> Result<()> {
-    let conn = Connection::new_system().context("connect system bus")?;
-    conn.request_name(BUS_NAME, false, false, false)
-        .with_context(|| format!("request bus name {BUS_NAME}"))?;
-
+) -> Crossroads {
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(MANAGER_INTERFACE, {
         let slot = slot.clone();
@@ -303,25 +333,90 @@ fn service_thread(
         }
     });
     crossroads.insert(MANAGER_PATH, &[iface], ());
+    crossroads
+}
 
-    // Drop a stale agent the moment its connection goes away: the bus
-    // emits NameOwnerChanged(name=":1.x", new_owner="") on disconnect.
-    {
-        let slot = slot.clone();
-        conn.add_match(
-            MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged").with_sender(DBUS_BUS),
-            move |(name, _old_owner, new_owner): (String, String, String), _conn, _msg| {
-                if new_owner.is_empty() {
-                    clear_if_matches(&slot, Some(&name));
+/// The single task that owns the crossroads: feeds it incoming method calls
+/// and drops a stale agent the moment its connection goes away (the bus emits
+/// NameOwnerChanged(name=":1.x", new_owner="") on disconnect).
+async fn route_messages(
+    conn: Arc<SyncConnection>,
+    mut crossroads: Crossroads,
+    _method_match: MsgMatch,
+    mut methods: MessageReceiver<Message>,
+    _signal_match: MsgMatch,
+    mut signals: MessageReceiver<Message>,
+    slot: Arc<Mutex<AgentSlot>>,
+) {
+    loop {
+        tokio::select! {
+            msg = methods.next() => {
+                let Some(msg) = msg else { break };
+                let _ = crossroads.handle_message(msg, &*conn);
+            }
+            sig = signals.next() => {
+                let Some(sig) = sig else { break };
+                if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>() {
+                    if new_owner.is_empty() {
+                        clear_if_matches(&slot, Some(&name));
+                    }
                 }
-                true
-            },
-        )?;
+            }
+        }
     }
+}
 
-    tracing::info!("listening on {BUS_NAME} ({MANAGER_INTERFACE})");
-    crossroads.serve(&conn)?;
-    Ok(())
+async fn dispatch_commands(
+    conn: Arc<SyncConnection>,
+    mut rx: UnboundedReceiver<UiCommand>,
+    slot: Arc<Mutex<AgentSlot>>,
+) {
+    while let Some(command) = rx.recv().await {
+        // The lock is released before the await: only the cloned Agent
+        // crosses it.
+        let Some(agent) = slot.lock().unwrap().current().cloned() else {
+            tracing::debug!("no agent registered, dropping UI command");
+            continue;
+        };
+        let proxy = Proxy::new(
+            agent.destination.as_str(),
+            agent.path.as_str(),
+            Duration::from_secs(15),
+            conn.clone(),
+        );
+        let result: std::result::Result<(), dbus::Error> = match command {
+            UiCommand::Show {
+                tid,
+                url,
+                rp,
+                timeout_secs,
+            } => proxy
+                .method_call(
+                    AGENT_INTERFACE,
+                    "Prompt",
+                    (tid, url, rp.unwrap_or_default(), timeout_secs),
+                )
+                .await,
+            UiCommand::Select { tid } => {
+                proxy.method_call(AGENT_INTERFACE, "Select", (tid,)).await
+            }
+            UiCommand::Found { tid } => {
+                proxy.method_call(AGENT_INTERFACE, "Found", (tid,)).await
+            }
+            UiCommand::Close { tid } => {
+                proxy.method_call(AGENT_INTERFACE, "Close", (tid,)).await
+            }
+        };
+        if let Err(e) = result {
+            tracing::warn!("agent call failed: {e}");
+            // The NameOwnerChanged watch normally drops a dead agent
+            // first; this is a fallback in case that signal was missed. Do
+            // not clear on timeouts or other transient failures.
+            if agent_gone(&e) {
+                clear_if_matches(&slot, Some(&agent.destination));
+            }
+        }
+    }
 }
 
 fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) {
@@ -334,51 +429,6 @@ fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) {
         tracing::info!("agent unregistered");
         guard.current = None;
     }
-}
-
-fn dispatch_thread(
-    mut rx: UnboundedReceiver<UiCommand>,
-    slot: Arc<Mutex<AgentSlot>>,
-) -> Result<()> {
-    let conn = Connection::new_system().context("connect system bus")?;
-
-    while let Some(command) = rx.blocking_recv() {
-        let Some(agent) = slot.lock().unwrap().current().cloned() else {
-            tracing::debug!("no agent registered, dropping UI command");
-            continue;
-        };
-        let proxy = Proxy::new(
-            agent.destination.as_str(),
-            agent.path.as_str(),
-            Duration::from_secs(15),
-            &conn,
-        );
-        let result: std::result::Result<(), dbus::Error> = match command {
-            UiCommand::Show {
-                tid,
-                url,
-                rp,
-                timeout_secs,
-            } => proxy.method_call(
-                AGENT_INTERFACE,
-                "Prompt",
-                (tid, url, rp.unwrap_or_default(), timeout_secs),
-            ),
-            UiCommand::Select { tid } => proxy.method_call(AGENT_INTERFACE, "Select", (tid,)),
-            UiCommand::Found { tid } => proxy.method_call(AGENT_INTERFACE, "Found", (tid,)),
-            UiCommand::Close { tid } => proxy.method_call(AGENT_INTERFACE, "Close", (tid,)),
-        };
-        if let Err(e) = result {
-            tracing::warn!("agent call failed: {e}");
-            // The NameOwnerChanged watch normally drops a dead agent
-            // first; this is a fallback in case that signal was missed. Do
-            // not clear on timeouts or other transient failures.
-            if agent_gone(&e) {
-                clear_if_matches(&slot, Some(&agent.destination));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Whether a call error means the agent's connection is gone for good.

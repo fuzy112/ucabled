@@ -3413,6 +3413,7 @@ dependencies = [
  "bluer",
  "dbus",
  "dbus-crossroads",
+ "dbus-tokio",
  "eframe",
  "futures",
  "hex",

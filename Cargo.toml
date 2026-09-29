@@ -41,6 +41,7 @@ eframe = { version = "0.36", default-features = false, features = [
 bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 dbus = "0.9"
 dbus-crossroads = "0.5"
+dbus-tokio = "0.7"
 libc = "0.2"
 
 [dev-dependencies]
