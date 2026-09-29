@@ -55,13 +55,19 @@ pub async fn await_advert(
         .await
         .context("D-Bus session failed")?;
     let adapter = session.default_adapter().await?;
-    adapter.set_powered(true).await?;
+
+    // Do not switch the radio on behind the user's back; Chromium behaves the
+    // same way. Without power there is nothing to scan, so fail clearly.
+    if !adapter.is_powered().await? {
+        return Err(BleError::Backend(anyhow!(
+            "Bluetooth adapter is powered off; enable it to use a phone passkey"
+        )));
+    }
 
     let uuid: bluer::Uuid = CABLE_BLE_UUID
         .parse()
         .map_err(|e| BleError::Backend(anyhow!("invalid cable UUID: {e}")))?;
-    // Deliberately no UUID filter at the BlueZ level: we match on service
-    // data ourselves, which is more robust while debugging.
+
     let filter = bluer::DiscoveryFilter {
         transport: bluer::DiscoveryTransport::Le,
         duplicate_data: true,
@@ -69,8 +75,23 @@ pub async fn await_advert(
     };
     adapter.set_discovery_filter(filter).await?;
 
+    // The discovery stream lives inside `scan`, so dropping it when scan
+    // returns ends discovery before we hand control back.
+    scan(&adapter, &uuid, eid_key, timeout).await
+}
+
+async fn scan(
+    adapter: &bluer::Adapter,
+    uuid: &bluer::Uuid,
+    eid_key: &[u8; eid::EID_KEY_SIZE],
+    timeout: Duration,
+) -> Result<[u8; eid::EID_PLAINTEXT_SIZE], BleError> {
     // `with_changes` re-emits DeviceAdded whenever a device's properties
     // change; service data typically arrives after the initial DeviceAdded.
+    //
+    // No service_uuids filter at the BlueZ level: the caBLE advert carries
+    // its UUID in service *data* (AD type 0x16), which such a filter would not
+    // match, so we trial-decrypt the service data ourselves instead.
     let mut events = adapter.discover_devices_with_changes().await?;
     let deadline = tokio::time::Instant::now() + timeout;
 
@@ -93,7 +114,7 @@ pub async fn await_advert(
             _ => continue,
         };
         for (data_uuid, payload) in service_data {
-            if data_uuid != uuid {
+            if data_uuid != *uuid {
                 continue;
             }
             tracing::debug!(%address, len = payload.len(), "saw fff9 service data");
