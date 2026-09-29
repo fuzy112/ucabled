@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -75,15 +76,26 @@ fn make_qr_texture(ctx: &egui::Context, url: &str) -> egui::TextureHandle {
     ctx.load_texture("qr", img, egui::TextureOptions::NEAREST)
 }
 
+/// Read the first non-empty line from stdin as the QR URL.
+fn read_url_from_stdin(reader: &mut impl BufRead) -> Option<String> {
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+    }
+}
+
 /// Watch stdin for the daemon's status lines; currently only "found", sent
-/// once the phone's BLE advert has been received.
-fn watch_status() -> Arc<AtomicBool> {
+/// once the phone's BLE advert has been received. If the URL arrived on stdin
+/// it has already been consumed by `read_url_from_stdin`.
+fn watch_status(reader: impl BufRead + Send + 'static) -> Arc<AtomicBool> {
     let found = Arc::new(AtomicBool::new(false));
     let flag = found.clone();
     std::thread::spawn(move || {
-        use std::io::BufRead;
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
+        for line in reader.lines() {
             match line {
                 Ok(l) if l.trim() == "found" => flag.store(true, Ordering::Relaxed),
                 Ok(_) => {}
@@ -107,7 +119,7 @@ fn main() -> eframe::Result<()> {
                 }
             }
             _ => {
-                if url.is_none() {
+                if url.is_none() && arg.starts_with("FIDO:/") {
                     url = Some(arg);
                 } else if rp.is_none() {
                     rp = Some(arg);
@@ -115,9 +127,16 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
-    let url = url.expect("usage: ucabled-qr <qr-url> [rp] [--timeout secs]");
 
-    let phone_found = watch_status();
+    // The daemon sends the QR URL on stdin (it carries the transaction secret,
+    // so it must not appear in argv); any later lines are status updates.
+    let mut stdin = std::io::BufReader::new(std::io::stdin());
+    if url.is_none() {
+        url = read_url_from_stdin(&mut stdin);
+    }
+    let url = url.expect("usage: ucabled-qr [rp] [--timeout secs] (QR URL on stdin)");
+
+    let phone_found = watch_status(stdin);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Phone Passkey Bridge")
