@@ -1,18 +1,18 @@
 # ucabled — Phone Passkey Bridge
 
 Use your phone (iPhone / Android) as a FIDO2 security key on a Linux desktop:
-no Firefox changes, no extension, and no key material on the machine — the
+no browser changes, no extension, and no key material on the machine — the
 passkey always lives on the phone.
 
 ucabled registers a virtual USB HID FIDO2 device with the kernel
-(`/dev/uhid`) and relays WebAuthn registration/sign-in requests from Firefox
-to the phone over **caBLE v2** (QR code + BLE proximity proof + WSS tunnel,
-the same protocol as Chromium's "use a passkey on your phone"), then sends the
-phone's response back to Firefox.
+(`/dev/uhid`) and relays WebAuthn registration/sign-in requests from the
+browser to the phone over **caBLE v2** (QR code + BLE proximity proof + WSS
+tunnel, the hybrid transport from CTAP 2.2 §11.5), then sends the phone's
+response back to the browser.
 
 ```
       ┌─────────────┐
-      │   Firefox   │
+      │   Browser   │
       │  WebAuthn   │
       └──────┬──────┘
              │  CTAP-HID over /dev/uhid
@@ -36,8 +36,11 @@ phone's response back to Firefox.
   └─────────────────────┘
 ```
 
-The machine is only a relay: no FIDO cryptography, no keys at rest, and no
-business-level CBOR parsing (rpId is read-only, purely to title the QR window).
+The machine is only a relay: no FIDO cryptography and no keys at rest. The one
+exception to pure pass-through is a small set of local compatibility answers
+and rewrites (getInfo, Firefox's probe requests, and an iOS-required
+rp.name/user.displayName injection); rpId parsing is read-only, purely to
+title the QR window.
 
 ## Status
 
@@ -45,9 +48,9 @@ business-level CBOR parsing (rpId is read-only, purely to title the QR window).
   sign-in.
 - Android (Google Password Manager) speaks the same protocol and is expected to
   work, but has not been tested on real hardware.
-- Requires Linux (`/dev/uhid`), BlueZ/Bluetooth enabled, and a Firefox that can
-  see hidraw. Flatpak/Snap Firefox needs extra udev configuration; the native
-  NixOS package works out of the box.
+- Requires Linux (`/dev/uhid`), BlueZ/Bluetooth enabled, and a browser that can
+  see hidraw. Flatpak/Snap browsers need extra udev configuration; the native
+  NixOS packages work out of the box.
 
 ## Install (NixOS, recommended)
 
@@ -55,7 +58,7 @@ Add this repository to your flake and enable the module:
 
 ```nix
 {
-  inputs.ucabled.url = "path:/path/to/ucabled";  # or github:you/ucabled
+  inputs.ucabled.url = "github:fuzy112/ucabled/master";
 
   # in your NixOS module:
   imports = [ inputs.ucabled.nixosModules.ucabled ];
@@ -154,7 +157,7 @@ the window or click Cancel to abort.
 | Symptom | Fix |
 | --- | --- |
 | No QR window appears | The `ucable-agent` agent is not registered: `systemctl --user status ucable-agent` and `journalctl --user -u ucable-agent -f`. Only the active local session may show the window |
-| Firefox does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
+| The browser does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
 | Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window. Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |
@@ -168,9 +171,9 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
   is shelved; see `docs/linking.md`.
 - Only the active local session gets a window; a pure TTY or SSH prompt is out
   of scope.
-- RPs always see `transports: ["usb"]`: that is a hardcode in Firefox's Linux
-  CTAP backend (see `docs/plan.md` §5.3). It is cosmetic and does not affect
-  usage.
+- With Firefox, RPs always see `transports: ["usb"]`: that is a hardcode in
+  Firefox's Linux CTAP backend (see `docs/plan.md` §5.3). It is cosmetic and
+  does not affect usage.
 - No local PIN/UV and no attestation trust decisions — the phone does all of
   that.
 - With another authenticator (e.g. a physical security key) plugged in,

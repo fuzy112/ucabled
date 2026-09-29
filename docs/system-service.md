@@ -237,7 +237,7 @@ NixOS module（`nix/module.nix`）：
 
 - `dist/`：系统 unit + 用户 agent unit + 更新后的 udev 规则。
 - `nix/package.nix`：发布 `ucabled`、`ucable-agent`、`ucable-agent-helper`。
-- 依赖：直接依赖 `zbus`（与 `bluer` 同大版本，避免重复版本）。
+- 依赖：直接依赖 `dbus` + `dbus-crossroads`（与 `bluer` 同一套，不引入 zbus）。
 
 ## 9. 与旧模型对比与迁移
 

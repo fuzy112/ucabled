@@ -1,6 +1,7 @@
 # Phone Passkey Bridge — 需求与实现计划（修订版）
 
-> 在 Linux 桌面（Firefox，零改动、零扩展）上复刻 Chromium 的跨设备 passkey 流程：
+> 在 Linux 桌面（Firefox，零改动、零扩展）上复刻 caBLE v2（CTAP 2.2 §11.5
+> hybrid）跨设备 passkey 流程：
 > 通过 QR 码把手机（iCloud Keychain / Google Password Manager）变为 passkey 的
 > 唯一存储位置，笔记本仅承担 QR 展示与通信中继。
 >
@@ -10,8 +11,8 @@
 ## 1. 背景与动机
 
 - Firefox 桌面版在 Linux 上只支持基于 USB-HID 的硬件安全密钥（U2F/CTAP2 设备等），
-没有平台 authenticator，也没有 Chromium 的 caBLE v2（QR + BLE）跨设备流程。
-- KeePassXC 类方案（扩展注入 + 本机存储）把密钥留在本机；Chromium 的 hybrid
+没有平台 authenticator，也没有 caBLE v2（QR + BLE）跨设备流程。
+- KeePassXC 类方案（扩展注入 + 本机存储）把密钥留在本机；hybrid
 流程则把密钥留在手机。本项目采用后者模型。
 - 实现路线：**虚拟 HID FIDO2 设备**（`/dev/uhid`）+ 本机守护进程做 caBLE v2
 initiator。不需要浏览器扩展，不需要打补丁，不需要 native messaging。
@@ -30,7 +31,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | FR-6 | 支持 iPhone（iCloud Keychain）与 Android（Google Password Manager）扫码；手机端零安装 | P0 |
 | FR-7 | state-assisted linking（"记住这台手机"）：存储 contact ID，后续操作免扫码 | P2 |
 | FR-8a | **BLE advert 接收**：扫描手机广播的 EID（UUID 0000fff9 的 20 字节 service data），trial-decrypt 得到 routing ID 与连接 nonce。**协议必需**（CTAP 2.2 §11.5.1：PSK 由 QR secret + 解密后的 BLE advert 派生，作为 proximity proof；无 BLE 则无握手） | P0 |
-| FR-8b | BLE GATT 数据通道（桌面作 central 连接手机的 GATT server）作为隧道的替代传输。Chromium/iOS/Android 实际均走隧道，预期不需要 | P3 |
+| FR-8b | BLE GATT 数据通道（桌面作 central 连接手机的 GATT server）作为隧道的替代传输。主流实现（桌面/手机）实际均走隧道，预期不需要 | P3 |
 | FR-9 | per-RP / 全局策略配置（何时走手机流程） | P2 |
 
 ### 2.2 非功能需求
@@ -38,7 +39,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | 编号 | 需求 |
 | --- | --- |
 | NFR-1 | 本机零密钥材料；隧道流量端到端加密（AES-256-GCM，密钥由 X25519 ECDH + QR secret 经 HKDF 派生），隧道服务器不可见明文 |
-| NFR-2 | 常驻进程资源占用小（systemd user service，事件驱动） |
+| NFR-2 | 常驻进程资源占用小（systemd 常驻服务，事件驱动） |
 | NFR-3 | 与真实硬件密钥共存：Firefox 多设备选择时由 agent 弹"Use phone"窗口来选中虚拟设备（见 docs/system-service.md §3.4） |
 | NFR-4 | NixOS 可打包（flake），附 udev 规则与 uhid 内核模块配置 |
 | NFR-5 | 纯 Rust 实现；BLE 使用 bluer（BlueZ D-Bus） |
@@ -48,7 +49,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 ### 2.3 非目标（Non-goals）
 
 - 本机 passkey 存储（softoken）——明确不做，密钥只在手机。
-- 系统级 D-Bus portal / 为 Chromium 做适配（架构上兼容，但不作为目标）。
+- 系统级 D-Bus portal / 为其它浏览器做专门适配（架构上兼容，但不作为目标）。
 - U2F APDU 层（不广告 `U2F_V2`，收到 MSG 命令直接报错）。
 - 本地实现 PIN/UV 协议——全部由手机完成，本机只透传。
 
@@ -98,8 +99,11 @@ UI 提示（独立会话进程，详见 docs/system-service.md）：
 
 **核心决策：中继（dumb pipe）模型。** daemon 不做任何 FIDO 加密学、不存储
 密钥，`authenticatorMakeCredential`/`GetAssertion` 的请求与响应在手机与
-Firefox 之间搬运。唯一例外：为在 QR 浮窗显示 RP 域名（FR-3），对请求 CBOR
-做**最小只读解析**，仅提取 `rp.id` / `rpId` 字段，不校验、不修改、不缓存。
+浏览器之间搬运。少数本地例外（均为兼容性需要，见 §5.1 与 M3）：getInfo
+本地应答；为在 QR 浮窗显示 RP 域名（FR-3）对请求 CBOR 做**最小只读解析**，
+仅提取 `rp.id` / `rpId`；为 iOS 硬性要求对 makeCredential 做最小注入
+（补 rp.name/user.displayName）；对 Firefox 的静默/闪灯探测本地应答，不
+转发。
 
 由此获得：
 
@@ -114,7 +118,7 @@ Firefox 之间搬运。唯一例外：为在 QR 浮窗显示 RP 域名（FR-3）
 
 | 命令 | 处理 |
 | --- | --- |
-| GetInfo (0x04) | 本地应答：见 FR-5；aaguid 为随机固定值；extensions 静态列表（先保守，实测后加 hmac-secret/prf） |
+| GetInfo (0x04) | 本地应答：见 FR-5；aaguid 为固定常量；不广告 extensions（先保守，实测后按需加 hmac-secret/prf） |
 | MakeCredential (0x01) / GetAssertion (0x02) | 启动 caBLE 流程，CBOR 透传（仅只读提取 rpId 用于 UI）；等待期间持续发 KEEPALIVE |
 | ClientPIN / credMgmt / Reset / 其他 | 返回 COMMAND_NOT_SUPPORTED / INVALID_COMMAND |
 | CANCEL (U2FHID 0x91) | 终止隧道，挂起的 CBOR 回 `0x2D` (KEEPALIVE_CANCEL) |
@@ -159,8 +163,8 @@ AD 为空；明文先补零至 32 字节倍数，末字节记补零数。消息�
 
 ### 5.3 Firefox 侧注意点
 
-- **设备常驻**：浏览器在 WebAuthn 调用时才枚举 hidraw，daemon 必须为 systemd
-user service 长驻进程。
+- **设备常驻**：浏览器在 WebAuthn 调用时才枚举 hidraw，daemon 必须为
+  systemd 常驻服务（现为 system service，见 docs/system-service.md）。
 - **KEEPALIVE 是硬需求**：扫码可能耗时 30s+，不发 STATUS_UPNEEDED（每
 100–300ms）Firefox 会判超时；总操作时限 5 分钟。
 - **多通道**：繁忙时收到 broadcast INIT 回 ERR_CHANNEL_BUSY。
@@ -186,7 +190,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | uhid 设备 | 手写（`src/uhid_dev.rs`） | 直接读写 `/dev/uhid`（tokio `AsyncFd` + `libc`），不用维护状态一般的 `uhid-virt`；FIDO 标准 report descriptor（U2FHID spec §4.3，34 字节）：`06 D0 F1 09 01 A1 01 09 20 15 00 26 FF 00 75 08 95 40 81 02 09 21 15 00 26 FF 00 75 08 95 40 91 02 C0`（Usage Page 0xF1D0 是 16 位值，必须用长项 `06 D0 F1`） |
 | 运行时 | `tokio` | HID / 隧道 / UI 共用一个 runtime |
 | U2FHID 传输层 | 手写 | INIT/PING/WINK/CANCEL/CBOR/ERROR/KEEPALIVE；分片重组；最大 7609B |
-| CBOR | `ciborium` | getInfo 构造、命令分发、rpId 最小只读提取；其余业务 CBOR 不解析 |
+| CBOR | 手写（`src/ctap.rs`） | 最短编码的 minimal encoder + 只读 cursor（深度上限 16）；canonical CBOR 是硬要求——严格的解析器会拒绝非最短整数编码并丢弃整个 getInfo。业务 CBOR 不解析 |
 | caBLE v2 | 手写 | 逐函数对齐 Chromium `device/fido/cable`；无成熟独立移植，边界清晰 |
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
@@ -220,7 +224,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 
 - [x] uhid 设备注册（上述 34 字节 descriptor），命名如 "Phone Passkey Bridge"
 - [x] U2FHID INIT / PING / WINK / ERROR 帧处理
-- [x] systemd user service + udev/uaccess 规则
+- [x] systemd 常驻服务 + udev 规则（后改为 system service + ACL，见 docs/system-service.md）
 - [x] 验收：`ls /dev/hidraw*` 可见；webauthn.io 探测到 security key
 
 ### M1 — CTAP2 应答（验收：webauthn.io 触发 makeCredential 并挂起）
@@ -249,7 +253,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
       子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
 - [x] 与真实硬件密钥共存实测（多设备时弹出"Use phone"选择窗口，见 §5.3）
-- [x] NixOS flake 打包 + systemd user service（module 见 §8）
+- [x] NixOS flake 打包 + systemd 常驻服务（module 见 §8）
 - [x] systemd 常驻实测通过（2026-09-29：登录自启、GUI 弹窗正常）
 
 ### M5 — 增强（可选）
@@ -264,7 +268,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 1. ~~隧道-only 是否被手机接受~~——**已解决**：spec 考证确认 BLE advert 是
 QR 流程的协议必需项（PSK 绑定解密后的 advert，proximity proof），
 隧道-only 在密码学上不可能。方案已调整为 BLE 扫描（FR-8a，仅接收、
-无需 GATT）+ 隧道传 CTAP。真机兼容性仍待 S0 真机验收最终确认。
+无需 GATT）+ 隧道传 CTAP；S0 真机验收已通过。
 2. ~~Firefox 多 FIDO 设备枚举行为~~——**已解决**：实测确认 Firefox 只能靠
    触摸选择，故用"Use phone"窗口选中虚拟设备（见 §5.3）；无需 daemon 开关。
 3. getInfo extensions 静态广告与真机能力偏差——表现为个别 RP 报
