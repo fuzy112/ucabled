@@ -20,6 +20,7 @@ use ucabled::session::DesktopFlow;
 type ServerWs = WebSocketStream<TcpStream>;
 type PendingTunnels = Arc<Mutex<HashMap<String, ServerWs>>>;
 
+#[allow(clippy::result_large_err)] // signature dictated by tungstenite's callback
 async fn run_relay(listener: TcpListener) {
     let pending: PendingTunnels = Arc::new(Mutex::new(HashMap::new()));
     loop {

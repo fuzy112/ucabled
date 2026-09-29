@@ -74,3 +74,64 @@ pub fn decrypt(advert: &[u8], key: &[u8; EID_KEY_SIZE]) -> Option<[u8; EID_PLAIN
     }
     Some(plaintext)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(seed: u8) -> [u8; EID_KEY_SIZE] {
+        let mut k = [0u8; EID_KEY_SIZE];
+        for (i, b) in k.iter_mut().enumerate() {
+            *b = seed.wrapping_add(i as u8);
+        }
+        k
+    }
+
+    fn sample() -> EidComponents {
+        EidComponents {
+            nonce: [7; NONCE_SIZE],
+            routing_id: [1, 2, 3],
+            tunnel_server_domain: 0x0102,
+        }
+    }
+
+    #[test]
+    fn components_roundtrip() {
+        let eid = sample();
+        let pt = plaintext_from_components(&eid);
+        assert_eq!(pt[0], 0);
+        let back = to_components(&pt);
+        assert_eq!(back.nonce, eid.nonce);
+        assert_eq!(back.routing_id, eid.routing_id);
+        assert_eq!(back.tunnel_server_domain, 0x0102);
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let k = key(9);
+        let pt = plaintext_from_components(&sample());
+        let adv = encrypt(&pt, &k);
+        assert_eq!(adv.len(), ADVERT_SIZE);
+        assert_eq!(decrypt(&adv, &k), Some(pt));
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_key_and_tampering() {
+        let k = key(1);
+        let pt = plaintext_from_components(&sample());
+        let mut adv = encrypt(&pt, &k);
+        assert_eq!(decrypt(&adv, &key(2)), None);
+        adv[3] ^= 0x40; // corrupt ciphertext -> MAC mismatch
+        assert_eq!(decrypt(&adv, &k), None);
+        adv[3] ^= 0x40;
+        adv[18] ^= 0x01; // corrupt tag
+        assert_eq!(decrypt(&adv, &k), None);
+    }
+
+    #[test]
+    fn decrypt_rejects_bad_length() {
+        let k = key(1);
+        assert_eq!(decrypt(&[0u8; ADVERT_SIZE - 1], &k), None);
+        assert_eq!(decrypt(&[0u8; ADVERT_SIZE + 1], &k), None);
+    }
+}

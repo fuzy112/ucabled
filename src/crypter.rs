@@ -60,3 +60,41 @@ impl Crypter {
         Some(plaintext[..plaintext.len() - padding_len - 1].to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (a, b) where a writes with key 1 and b reads with key 1, and vice versa.
+    fn pair() -> (Crypter, Crypter) {
+        (Crypter::new([2u8; 32], [1u8; 32]), Crypter::new([1u8; 32], [2u8; 32]))
+    }
+
+    #[test]
+    fn roundtrip_at_padding_boundaries() {
+        let (mut a, mut b) = pair();
+        for len in [0usize, 1, 30, 31, 32, 33, 63, 64, 65] {
+            let msg: Vec<u8> = (0..len).map(|i| i as u8).collect();
+            let ct = a.encrypt(&msg).unwrap();
+            assert_eq!((ct.len() - 16) % PADDING_GRANULARITY, 0, "len {len}");
+            assert_eq!(b.decrypt(&ct).unwrap(), msg, "len {len}");
+        }
+    }
+
+    #[test]
+    fn sequence_number_must_match() {
+        let (mut a, mut b) = pair();
+        let _first = a.encrypt(b"one").unwrap();
+        let second = a.encrypt(b"two").unwrap();
+        // A message encrypted with sequence 1 does not decrypt under sequence 0.
+        assert!(b.decrypt(&second).is_none());
+    }
+
+    #[test]
+    fn tampering_fails() {
+        let (mut a, mut b) = pair();
+        let mut ct = a.encrypt(b"payload").unwrap();
+        ct[0] ^= 1;
+        assert!(b.decrypt(&ct).is_none());
+    }
+}

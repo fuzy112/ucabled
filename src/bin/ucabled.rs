@@ -210,7 +210,7 @@ async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u3
             Ok(()) => *failures = 0,
             Err(e) => {
                 *failures += 1;
-                if *failures == 1 || *failures % 100 == 0 {
+                if *failures == 1 || failures.is_multiple_of(100) {
                     tracing::warn!("uhid write failed ({failures} times): {e}");
                 }
             }

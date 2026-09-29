@@ -20,3 +20,36 @@ pub fn derive(secret: &[u8], salt: &[u8], purpose: Purpose, out: &mut [u8]) {
     let hk = Hkdf::<Sha256>::new(Some(salt), secret);
     hk.expand(&info, out).expect("HKDF expand failed");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_and_purpose_separated() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        derive(b"secret", b"salt", Purpose::Psk, &mut a);
+        derive(b"secret", b"salt", Purpose::Psk, &mut b);
+        assert_eq!(a, b);
+
+        let mut other_purpose = [0u8; 32];
+        derive(b"secret", b"salt", Purpose::TunnelId, &mut other_purpose);
+        assert_ne!(a, other_purpose);
+
+        let mut other_salt = [0u8; 32];
+        derive(b"secret", b"other", Purpose::Psk, &mut other_salt);
+        assert_ne!(a, other_salt);
+    }
+
+    #[test]
+    fn empty_and_long_outputs() {
+        let mut empty = [0u8; 0];
+        derive(b"secret", b"", Purpose::Psk, &mut empty);
+        let mut long = [0u8; 96];
+        derive(b"secret", b"", Purpose::Psk, &mut long);
+        // Prefix-stability is not guaranteed by HKDF, but output must be
+        // filled and not all zero for this input.
+        assert!(long.iter().any(|&b| b != 0));
+    }
+}

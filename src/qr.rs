@@ -275,4 +275,19 @@ mod tests {
         assert_eq!(digits, "00000000000000000");
         assert_eq!(digits_to_bytes(&digits).unwrap(), data);
     }
+
+    #[test]
+    fn digits_reject_malformed_input() {
+        assert!(digits_to_bytes("abc").is_none());
+        assert!(digits_to_bytes("12a45").is_none());
+        // Invalid tail length (1 digit is not a legal 1..6 byte chunk).
+        assert!(digits_to_bytes("1").is_none());
+        // Too large for the chunk's byte width.
+        assert!(digits_to_bytes("18446744073709551616").is_none());
+    }
+
+    #[test]
+    fn digits_empty_is_empty() {
+        assert_eq!(digits_to_bytes("").unwrap(), Vec::<u8>::new());
+    }
 }

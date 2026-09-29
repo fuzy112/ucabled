@@ -116,3 +116,45 @@ pub async fn read_binary(ws: &mut Ws) -> Result<Vec<u8>> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assigned_domains() {
+        assert_eq!(
+            decode_tunnel_server_domain(0).as_deref(),
+            Some("cable.ua5v.com")
+        );
+        assert_eq!(
+            decode_tunnel_server_domain(1).as_deref(),
+            Some("cable.auth.com")
+        );
+        assert!(decode_tunnel_server_domain(2).is_none());
+        assert!(decode_tunnel_server_domain(3).is_none());
+    }
+
+    #[test]
+    fn hashed_domains_are_deterministic() {
+        let a = decode_tunnel_server_domain(256).unwrap();
+        assert_eq!(a, decode_tunnel_server_domain(256).unwrap());
+        assert!(a.starts_with("cable."));
+        assert!([".com", ".org", ".net", ".info"]
+            .iter()
+            .any(|tld| a.ends_with(tld)));
+        assert_ne!(a, decode_tunnel_server_domain(257).unwrap());
+    }
+
+    #[test]
+    fn url_shapes() {
+        assert_eq!(
+            new_tunnel_url("cable.ua5v.com", &[0xab; 16]),
+            format!("wss://cable.ua5v.com/cable/new/{}", "ab".repeat(16))
+        );
+        assert_eq!(
+            connect_url("d.example", &[0x01, 0x02, 0x03], &[0x0f; 16]),
+            format!("wss://d.example/cable/connect/010203/{}", "0f".repeat(16))
+        );
+    }
+}
