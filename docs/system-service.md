@@ -1,6 +1,8 @@
 # 系统服务与用户 UI Agent 设计（M2/M3 修订）
 
-> 状态：设计已定，待实现。
+> 状态：已实现。代码见 `src/prompter.rs`（D-Bus 层与 polkit 授权）、
+> `src/bin/ucabled-ui.rs`（session agent）、`src/bin/ucabled.rs`（daemon
+> 接线）与 `nix/module.nix` / `dist/`（打包）。
 > 本文取代 `docs/plan.md` 中"systemd user service"的运行模型，以及 M2/M3
 > 两次临时缓解（udev `uaccess` + user unit sandbox）。
 >
@@ -210,25 +212,33 @@ NixOS module（`nix/module.nix`）：
   直接失败。
 - 不做 **tty/SSH prompter**（不在当前范围）。
 
-## 11. 待定项
+## 11. 已定 / 仍待处理
 
-- bus/interface 命名：暂定 `org.ucabled` + `org.ucabled.Ui1` / `Prompter1`。
-- D-Bus 库：zbus（倾向）还是 dbus-rs。
-- 守护进程启动时机：boot 常驻（倾向）还是随（首个）用户会话启动。
-- 是否允许活动会话用户启停 system unit（NFR-3 开关）。
+已定：
+
+- 命名：`org.ucabled` + `org.ucabled.Ui1` / `org.ucabled.Prompter1`。
+- D-Bus 库：**dbus / dbus-crossroads**（与 `bluer` 同一套依赖，避免新增
+  依赖；服务与分发各用一个阻塞连接线程）。
+- 守护进程启动时机：system unit，boot 常驻（`multi-user.target`）。
+- polkit action `org.ucabled.register-prompter`，`allow_active=yes`。
+
+仍待处理：
+
+- 是否允许活动会话用户启停 system unit（NFR-3 开关）：暂未实现，当前用
+  `systemctl start/stop ucabled`（需提权）。
 - 与真实 YubiKey 共存的行为（NFR-3）仍需实测。
+- 真机上 BlueZ 的 polkit/D-Bus 行为需确认（已带 BlueZ polkit 规则兜底）。
 
 ## 12. 实现与提交计划
 
-1. 引入 D-Bus UI 层：守护进程 `Ui1` 服务 + `Prompter1` proxy + 注册表与
-   polkit 授权；单测/接口测试；不改变现有行为。
-2. 新增 `ucabled-ui` agent：迁移 `GuiHandle`，实现 `Prompter1`，复用
-   `ucabled-qr`。
-3. 守护进程改用 D-Bus UI 驱动；无 prompter 快速失败；移除进程内 GUI。
-4. 系统服务化：system 用户/组、udev group 规则、system unit + sandbox、
+1. ~~引入 D-Bus UI 层~~：`src/prompter.rs`（`Ui1` 服务 + `Prompter1` 回调 +
+   注册表 + polkit 授权）。
+2. ~~新增 `ucabled-ui` agent~~：实现 `Prompter1`，复用 `ucabled-qr`。
+3. ~~守护进程改用 D-Bus UI 驱动~~；无 prompter 快速失败；移除进程内 GUI。
+4. ~~系统服务化~~：system 用户/组、udev group 规则、system unit + sandbox、
    agent unit、D-Bus policy、polkit action（+ 规则）、BlueZ polkit、dist
-   单元；取代 M2/M3 的内容。
-5. 文档：README（安装/迁移/安全）与 `docs/plan.md`。
+   单元。
+5. ~~文档~~：README 与 `docs/plan.md`。
 
 ## 13. 参考
 

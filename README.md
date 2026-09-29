@@ -11,8 +11,12 @@ the same protocol as Chromium's "use a passkey on your phone"), then sends the
 phone's response back to Firefox.
 
 ```
-Firefox ──CTAP-HID (64B reports)──▶ /dev/uhid ──▶ ucabled (user service)
-                                                    │  QR window + BLE scan + WSS tunnel
+Firefox ──CTAP-HID (64B reports)──▶ /dev/uhid ──▶ ucabled        (system service)
+                                                    │ caBLE: BLE scan + WSS tunnel
+                                                    │ D-Bus: org.ucabled
+                                                    ▼
+                                          ucabled-ui         (session agent)
+                                                    │  QR window
                                                     ▼
                                           iPhone (iCloud Keychain)
                                           Android (Google Password Manager)
@@ -47,35 +51,54 @@ Add this repository to your flake and enable the module:
 
 The module configures everything:
 
+- a dedicated `ucabled` system user and group
+- udev rule `KERNEL=="uhid", GROUP="ucabled", MODE="0660"` so only that account
+  can create virtual HID devices
 - `boot.kernelModules = [ "uhid" ]`
-- udev rule `KERNEL=="uhid", TAG+="uaccess"` so the logged-in user can open
-  `/dev/uhid`
 - `hardware.bluetooth.enable = true` (`mkDefault`, overridable; BLE adverts are
   cryptographically required by caBLE)
-- `systemd.user.services.ucabled` (starts at login, `Restart=on-failure`)
+- the system service `systemd.services.ucabled`
+- the per-user agent `systemd.user.services.ucabled-ui`, enabled for every user
+- a D-Bus policy, the polkit action `org.ucabled.register-prompter`, and a polkit
+  rule letting the `ucabled` user drive BlueZ
 
-Run `nixos-rebuild switch` and log out/in once so the uaccess rule takes effect.
+Run `nixos-rebuild switch`, then log out and back in (or run
+`systemctl --user start ucabled-ui`) so the agent registers.
 
 ## Install (other distros, manual)
 
 ```bash
 cargo build --release
-sudo install -Dm755 target/release/ucabled /usr/local/bin/ucabled
+sudo install -Dm755 target/release/ucabled    /usr/local/bin/ucabled
+sudo install -Dm755 target/release/ucabled-ui /usr/local/bin/ucabled-ui
 sudo install -Dm755 target/release/ucabled-qr /usr/local/bin/ucabled-qr
 
-# kernel module and udev rule
+# dedicated service account, kernel module and udev rule
+sudo groupadd --system ucabled
+sudo useradd --system --gid ucabled --no-create-home ucabled
 sudo modprobe uhid
-echo 'KERNEL=="uhid", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/90-ucabled.rules
+sudo cp dist/90-ucabled.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 
-# user service (adjust ExecStart if the binary is installed elsewhere)
+# system D-Bus policy, polkit action + BlueZ rule
+sudo cp dist/org.ucabled.conf  /etc/dbus-1/system.d/
+sudo cp dist/org.ucabled.policy /usr/share/polkit-1/actions/
+sudo cp dist/50-ucabled-bluez.rules /etc/polkit-1/rules.d/
+
+# system daemon
+sudo cp dist/ucabled.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ucabled
+
+# per-user session agent
 mkdir -p ~/.config/systemd/user
-cp dist/ucabled.service ~/.config/systemd/user/
+cp dist/ucabled-ui.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now ucabled
+systemctl --user enable --now ucabled-ui
 ```
 
-Log out and back in, then it is ready.
+Reload the udev rule (`sudo udevadm trigger --subsystem-match=misc`) and log
+out/in once. Adjust the `ExecStart` paths if the binaries live elsewhere.
 
 ## Usage
 
@@ -84,8 +107,10 @@ always-on-top window with a QR code; scan it with your phone and follow the
 prompt (Face ID / fingerprint), and the browser finishes the operation. Close
 the window or click Cancel to abort.
 
-- Without a graphical session (or started with `--no-ui`) it falls back to a
-  terminal QR code.
+- The window is shown by the `ucabled-ui` session agent. If it is not running,
+  or you are not the active local session, the request fails with a CTAP
+  timeout instead of starting an invisible transaction. Running the daemon with
+  `--no-ui` prints the QR code on a controlling terminal instead.
 - Cancel/timeout/disconnect are mapped back to Firefox as the proper CTAP
   error codes.
 
@@ -95,31 +120,27 @@ the window or click Cancel to abort.
   stay on the phone. The daemon is a relay; the tunnel carries end-to-end
   encrypted CTAP (Noise KNpsk0, AES-256-GCM), so the tunnel server sees only
   ciphertext, and the BLE advert is a cryptographic proximity proof.
-- The transaction secret (in the QR code) is shown on screen and handed to the
-  QR helper over a pipe, not via its command line. It is a short-lived,
-  single-transaction bearer token: treat the screen as sensitive until the
-  transaction ends.
-- **`/dev/uhid` access is broad.** The udev rule uses the seat's `uaccess` tag,
-  which lets *any* process of the logged-in user create arbitrary virtual HID
-  devices — including a virtual keyboard, i.e. input injection. On a machine
-  where that user runs untrusted code, this is already a strong capability. To
-  narrow it from "whoever holds the active seat" to a chosen account, replace
-  the rule with
-
-  ```
-  KERNEL=="uhid", GROUP="ucabled", MODE="0660"
-  ```
-
-  create the `ucabled` group, and add only the account that runs the daemon to
-  it (then re-login or run `udevadm control --reload`).
+- **`/dev/uhid` is granted only to the dedicated `ucabled` service account.**
+  `/dev/uhid` lets a process create arbitrary virtual HID devices (including a
+  keyboard), so it is not given to the human user; Firefox only needs the
+  resulting hidraw node, which still gets uaccess from systemd's FIDO rules.
+  The daemon runs unprivileged in a systemd sandbox.
+- **Only the active local session may show the QR window.** The session agent
+  registers as a D-Bus prompter, and the daemon authorizes the registration
+  through polkit (`allow_active=yes`), re-checking on every prompt. SSH and
+  remote sessions are refused by construction.
+- The transaction secret (in the QR code) travels from the daemon to the agent
+  as a D-Bus unicast message and then to the helper over a pipe — never via a
+  command line or the journal. It is a short-lived, single-transaction bearer
+  token: treat the screen as sensitive until the transaction ends.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| No QR window appears | The user service did not inherit the graphical environment: check `systemctl --user show-environment \| grep WAYLAND`, and if needed run `systemctl --user import-environment WAYLAND_DISPLAY DISPLAY` |
-| Firefox does not see the device | `ls /dev/hidraw*`; check `udevadm info` for `ID_FIDO_TOKEN=1`; the uaccess rule needs a re-login |
-| Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); watch `journalctl --user -u ucabled -f` |
+| No QR window appears | The `ucabled-ui` agent is not registered: `systemctl --user status ucabled-ui` and `journalctl --user -u ucabled-ui -f`. Only the active local session may show the window |
+| Firefox does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
+| Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
 
 Logs contain only command bytes and lengths, never raw CBOR payloads.
@@ -129,6 +150,8 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
 - **Only iOS has been tested**; Android is untested. State-assisted linking
   ("remember this computer", scan-free reconnect) is not supported on iOS and
   is shelved; see `docs/linking.md`.
+- Only the active local session gets a window; a pure TTY or SSH prompt is out
+  of scope.
 - RPs always see `transports: ["usb"]`: that is a hardcode in Firefox's Linux
   CTAP backend (see `docs/plan.md` §5.3). It is cosmetic and does not affect
   usage.
@@ -153,7 +176,8 @@ Helper tools in the repo (not shipped in the package):
 - `src/bin/hidraw-probe.rs`: kernel HID path diagnostics
 - `examples/qrgen.rs`: generate a QR code only
 
-Requirements and design: `docs/plan.md`; linking design: `docs/linking.md`.
+Requirements and design: `docs/plan.md`; system service / UI agent design:
+`docs/system-service.md`; linking design: `docs/linking.md`.
 
 ## License
 

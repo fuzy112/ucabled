@@ -43,7 +43,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | NFR-4 | NixOS 可打包（flake），附 udev 规则与 uhid 内核模块配置 |
 | NFR-5 | 纯 Rust 实现；BLE 使用 bluer（BlueZ D-Bus） |
 | NFR-6 | 安全默认值：pairing 状态文件权限 0600；日志只记命令字与长度，不落 CBOR payload 原文（含 clientDataHash、rpId 等敏感上下文） |
-| NFR-7 | 文档化 `/dev/uhid` 的权限含义：`uaccess` 授予 seat 用户的**任意**进程创建虚拟 HID 设备（含键盘/输入注入）的能力，并非仅限本设备的 FIDO 用途；多用户或不可信进程环境下应改用专用 group 收窄到指定账户（见 README Security） |
+| NFR-7 | `/dev/uhid` 仅授予专用服务账号 `ucabled`（system service），人类用户的进程不再能创建虚拟 HID 设备；UI 由每用户 session agent 经 system D-Bus 提供，注册用 polkit 限定为当前活动本地会话（见 docs/system-service.md） |
 
 ### 2.3 非目标（Non-goals）
 
@@ -174,7 +174,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
 | QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
-| UI | `eframe`/`egui`（无边框置顶窗，per-transaction 子进程 `ucabled-qr`；Wayland 无法隐藏窗口，故不用常驻窗口；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
+| UI | system daemon + 每用户 session agent `ucabled-ui`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucabled-qr`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
 | BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；GATT central 预期不需要 |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
@@ -255,17 +255,23 @@ INVALID_OPTION，可接受、可迭代。
 
 ## 8. NixOS 配置
 
-仓库自带 flake：包 `ucabled`（rustPlatform.buildRustPackage，只发布
-`ucabled` + `ucabled-qr`，QR helper 包装了 Vulkan/Wayland 运行时库路径），
-NixOS module `nixosModules.ucabled`，devShell。
+仓库自带 flake：包 `ucabled`（rustPlatform.buildRustPackage，发布
+`ucabled` + `ucabled-ui` + `ucabled-qr`，QR helper 包装了 Vulkan/Wayland
+运行时库路径），NixOS module `nixosModules.ucabled`，devShell。
+
+运行模型见 `docs/system-service.md`：daemon 是 system service（专用
+`ucabled` 用户，独占 `/dev/uhid`），每用户 session agent `ucabled-ui`
+经 system D-Bus 注册 prompter（polkit 限定活动本地会话）。
 
 ```nix
 {
   # configuration.nix / flake 引用：
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
-  # 模块自动带上：boot.kernelModules=[uhid]、udev uaccess 规则、
-  # hardware.bluetooth.enable=mkDefault true、systemd user service
+  # 模块自动带上：ucabled 系统用户/组、udev group 规则（GROUP=ucabled）、
+  # boot.kernelModules=[uhid]、hardware.bluetooth.enable=mkDefault true、
+  # system service ucabled、user service ucabled-ui、D-Bus policy、
+  # polkit action 与 BlueZ 规则
 }
 ```
 
@@ -274,7 +280,7 @@ NixOS module `nixosModules.ucabled`，devShell。
 ```nix
 {
   boot.kernelModules = [ "uhid" ];
-  services.udev.extraRules = ''KERNEL=="uhid", TAG+="uaccess"'';
+  services.udev.extraRules = ''KERNEL=="uhid", GROUP="ucabled", MODE="0660"'';
   hardware.bluetooth.enable = true;
 }
 ```
