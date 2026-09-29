@@ -1,0 +1,4 @@
+# Allow the active seat's user to open /dev/uhid so ucabled (a systemd user
+# service) can register the virtual FIDO2 device. The resulting hidraw node
+# picks up uaccess via systemd's 60-fido-id.rules + 70-uaccess.rules.
+KERNEL=="uhid", TAG+="uaccess"

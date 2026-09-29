@@ -1,12 +1,17 @@
 pub mod crypter;
+pub mod ctap;
+pub mod ctaphid;
 pub mod eid;
 pub mod handshake;
 pub mod kdf;
 pub mod noise;
 pub mod phone;
 pub mod qr;
+#[cfg(feature = "ble")]
+pub mod relay;
 pub mod session;
 pub mod tunnel;
+pub mod uhid_dev;
 
 #[cfg(feature = "ble")]
 pub mod ble;

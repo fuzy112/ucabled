@@ -192,27 +192,30 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 
 ### M0 — 虚拟设备打通（验收：Firefox 能枚举）
 
-- [ ] uhid 设备注册（上述 34 字节 descriptor），命名如 "Phone Passkey Bridge"
-- [ ] U2FHID INIT / PING / WINK / ERROR 帧处理
-- [ ] systemd user service + udev/uaccess 规则
-- [ ] 验收：`ls /dev/hidraw*` 可见；webauthn.io 探测到 security key
+- [x] uhid 设备注册（上述 34 字节 descriptor），命名如 "Phone Passkey Bridge"
+- [x] U2FHID INIT / PING / WINK / ERROR 帧处理
+- [x] systemd user service + udev/uaccess 规则
+- [x] 验收：`ls /dev/hidraw*` 可见；webauthn.io 探测到 security key
 
 ### M1 — CTAP2 应答（验收：webauthn.io 触发 makeCredential 并挂起）
 
-- [ ] CBOR 命令分发；GetInfo 按 FR-5 应答
-- [ ] MakeCredential/GetAssertion 占位：进入 KEEPALIVE 循环
-- [ ] 验收：观察 Firefox 端 UX 与超时行为，校准 KEEPALIVE 间隔
+- [x] CBOR 命令分发；GetInfo 按 FR-5 应答
+- [x] MakeCredential/GetAssertion：进入 KEEPALIVE 循环（150ms UPNEEDED）
+- [x] CANCEL 正确应答挂起的 CBOR（0x2D KEEPALIVE_CANCEL）
 
 ### M2 — caBLE initiator 完整化（验收：隧道握手成功，模拟 responder 全往返）
 
-- [ ] S0 spike 代码产品化：QR 生成、WSS 隧道、握手、消息加解密
-- [ ] 模拟 responder 完成一次完整 CTAP 往返（集成测试）
+- [x] S0 spike 代码产品化：QR 生成、WSS 隧道、握手、消息加解密
+- [x] 模拟 responder 完成一次完整 CTAP 往返（集成测试）
 
 ### M3 — 真机端到端（验收：iPhone + Android 各完成注册与登录）
 
-- [ ] CBOR 中继接线；错误码映射；CANCEL/超时路径
-- [ ] 验收：webauthn.io / demo.yubico.com 上真机扫码完成
-register + login（隧道-only）
+- [x] CBOR 中继接线；错误码映射；CANCEL/超时路径
+- [x] iPhone 真机验收：webauthn.io 注册 + 登录成功（2026-09-29）
+- [x] Firefox 兼容处理：iOS 要求 rp.name/user.displayName（最小注入）；
+      Firefox `up=false` 静默探测（本地伪造成功响应）与
+      "make.me.blink" 闪灯探测（本地回错误，不转发）
+- [ ] Android 真机复测
 
 ### M4 — UX 打磨（验收：日常使用可接受）
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=Phone Passkey Bridge (virtual FIDO2 device relaying to a phone via caBLE v2)
+
+[Service]
+ExecStart=%h/.nix-profile/bin/ucabled
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

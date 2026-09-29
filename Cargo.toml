@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [features]
-default = []
+default = ["ble"]
 ble = ["dep:bluer"]
 
 [dependencies]
@@ -35,6 +35,7 @@ rustls = { version = "0.23", default-features = false, features = [
 qrcode = "0.14"
 
 bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
