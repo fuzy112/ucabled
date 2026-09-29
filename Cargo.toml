@@ -30,7 +30,6 @@ tokio-tungstenite = { version = "0.26", features = [
 rustls = { version = "0.23", default-features = false, features = [
   "ring",
   "std",
-  "tls12",
 ] }
 qrcode = { version = "0.14", default-features = false }
 eframe = { version = "0.36", default-features = false, features = [

@@ -120,6 +120,14 @@ impl Noise {
     }
 }
 
+impl Drop for Noise {
+    fn drop(&mut self) {
+        crate::secure_erase(&mut self.ck);
+        crate::secure_erase(&mut self.h);
+        crate::secure_erase(&mut self.key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

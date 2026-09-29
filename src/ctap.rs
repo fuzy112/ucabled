@@ -1,3 +1,8 @@
+/// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
+/// identity consistent across daemon restarts; the real attestation AAGUID
+/// still comes from the phone.
+pub const AAGUID: [u8; 16] = *b"ucabled-aaguid01";
+
 /// authenticatorGetInfo response (status byte + canonical CBOR map).
 ///
 /// Advertised per FR-5: FIDO_2_0 only (no U2F_V2), rk/up/uv, no clientPin,
@@ -615,7 +620,10 @@ mod tests {
 
         let mut deep = vec![0x81u8; MAX_CBOR_DEPTH + 4];
         deep.push(0x00);
-        let mut c = CborCursor { data: &deep, pos: 0 };
+        let mut c = CborCursor {
+            data: &deep,
+            pos: 0,
+        };
         assert!(c.skip_value().is_none());
     }
 }

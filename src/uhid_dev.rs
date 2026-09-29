@@ -105,7 +105,10 @@ impl UhidDevice {
                 UHID_OPEN => UhidEvent::Open,
                 UHID_CLOSE => UhidEvent::Close,
                 UHID_OUTPUT => {
-                    let size = buf[4 + 4096] as usize;
+                    // uhid_output_req: `data[4096]` followed by a little-endian
+                    // u16 size. Read both bytes; a single byte would truncate
+                    // reports larger than 255.
+                    let size = u16::from_le_bytes([buf[4 + 4096], buf[4 + 4096 + 1]]) as usize;
                     let mut data = buf[4..4 + size.min(4096)].to_vec();
                     // hidraw writes carry a leading report-ID byte (0 when the
                     // descriptor defines no report IDs); strip it.

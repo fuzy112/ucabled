@@ -65,6 +65,13 @@ impl Crypter {
     }
 }
 
+impl Drop for Crypter {
+    fn drop(&mut self) {
+        crate::secure_erase(&mut self.read_key);
+        crate::secure_erase(&mut self.write_key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

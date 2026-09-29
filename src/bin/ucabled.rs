@@ -1,8 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rand::rngs::OsRng;
-use rand::RngCore;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
@@ -38,14 +36,11 @@ fn main() -> Result<()> {
 }
 
 async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<()>) -> Result<()> {
-    let mut aaguid = [0u8; 16];
-    OsRng.fill_bytes(&mut aaguid);
-
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
 
-    let mut transport = Transport::new(aaguid);
+    let mut transport = Transport::new(ucabled::ctap::AAGUID);
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
     let mut pending: Option<(u32, AbortHandle)> = None;

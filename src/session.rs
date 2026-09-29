@@ -42,7 +42,7 @@ pub struct DesktopResult {
 impl DesktopFlow {
     /// Run the desktop side: connect tunnel, perform Noise handshake, read the
     /// post-handshake message, send one CTAP command, return its reply.
-    pub async fn run(self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
+    pub async fn run(mut self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
         let components = eid::to_components(&self.plaintext_eid);
         let domain = decode_tunnel_server_domain(components.tunnel_server_domain)
             .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain")))?;
@@ -55,6 +55,8 @@ impl DesktopFlow {
         derive(&self.qr_secret, &[], Purpose::TunnelId, &mut tunnel_id);
         let mut psk = [0u8; 32];
         derive(&self.qr_secret, &self.plaintext_eid, Purpose::Psk, &mut psk);
+        // The QR secret is no longer needed once the tunnel ID and PSK exist.
+        crate::secure_erase(&mut self.qr_secret);
 
         let url = format!(
             "{tunnel_base}/cable/connect/{}/{}",
@@ -67,6 +69,8 @@ impl DesktopFlow {
             .map_err(TransactionError::transport)?;
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
+        // The PSK now lives inside the handshake state.
+        crate::secure_erase(&mut psk);
         let initial = handshake.build_initial_message();
         tunnel::write_binary(&mut ws, initial)
             .await
