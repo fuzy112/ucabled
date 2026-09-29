@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use p256::SecretKey;
 
 use crate::eid;
+use crate::error::TransactionError;
 use crate::handshake::HandshakeInitiator;
 use crate::kdf::{derive, Purpose};
 use crate::phone::{CableLink, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
@@ -29,10 +30,10 @@ pub struct DesktopResult {
 impl DesktopFlow {
     /// Run the desktop side: connect tunnel, perform Noise handshake, read the
     /// post-handshake message, send one CTAP command, return its reply.
-    pub async fn run(self, ctap_command: &[u8]) -> Result<DesktopResult> {
+    pub async fn run(self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
         let components = eid::to_components(&self.plaintext_eid);
         let domain = decode_tunnel_server_domain(components.tunnel_server_domain)
-            .context("unknown tunnel server domain")?;
+            .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain")))?;
 
         let tunnel_base = self
             .tunnel_base
@@ -48,17 +49,23 @@ impl DesktopFlow {
             hex::encode(components.routing_id),
             hex::encode(tunnel_id)
         );
-        tracing::info!(url, "connecting caBLE tunnel");
-        let (mut ws, _response) = tunnel::dial(&url).await?;
+        tracing::info!("connecting caBLE tunnel");
+        let (mut ws, _response) = tunnel::dial(&url)
+            .await
+            .map_err(TransactionError::transport)?;
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
         let initial = handshake.build_initial_message();
-        tunnel::write_binary(&mut ws, initial).await?;
+        tunnel::write_binary(&mut ws, initial)
+            .await
+            .map_err(TransactionError::transport)?;
 
-        let response = tunnel::read_binary(&mut ws).await?;
+        let response = tunnel::read_binary(&mut ws)
+            .await
+            .map_err(TransactionError::transport)?;
         let (crypter, handshake_hash) = handshake
             .process_response(&response)
-            .context("caBLE handshake failed")?;
+            .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("caBLE handshake failed")))?;
         tracing::info!("caBLE handshake complete");
 
         let mut link = CableLink {
@@ -67,20 +74,30 @@ impl DesktopFlow {
             handshake_hash,
         };
 
-        let post_handshake = recv_raw(&mut link).await?;
+        let post_handshake = recv_raw(&mut link).await.map_err(TransactionError::transport)?;
         tracing::info!(len = post_handshake.len(), "received post-handshake message");
 
-        link.send_ctap(ctap_command).await?;
+        link.send_ctap(ctap_command)
+            .await
+            .map_err(TransactionError::transport)?;
 
         let ctap_reply = loop {
-            let (ty, payload) = link.recv_message().await?;
+            let (ty, payload) = link.recv_message().await.map_err(TransactionError::transport)?;
             match ty {
                 MSG_CTAP => break payload,
                 MSG_UPDATE => {
                     tracing::info!(len = payload.len(), "received update message");
                 }
-                MSG_SHUTDOWN => bail!("unexpected shutdown from authenticator"),
-                other => bail!("unexpected message type {other}"),
+                MSG_SHUTDOWN => {
+                    return Err(TransactionError::failed(anyhow::anyhow!(
+                        "unexpected shutdown from authenticator"
+                    )))
+                }
+                other => {
+                    return Err(TransactionError::failed(anyhow::anyhow!(
+                        "unexpected message type {other}"
+                    )))
+                }
             }
         };
 

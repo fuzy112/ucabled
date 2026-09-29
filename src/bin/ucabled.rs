@@ -42,7 +42,8 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
 
     let mut transport = Transport::new(aaguid);
-    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<(u32, Result<Vec<u8>>)>();
+    let (result_tx, mut result_rx) =
+        mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
     let mut pending: Option<(u32, AbortHandle)> = None;
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
 
@@ -158,8 +159,8 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                 p
                             }
                             Err(e) => {
-                                tracing::warn!("caBLE transaction failed: {e:#}");
-                                vec![0x2e] // CTAP2_ERR_NO_CREDENTIALS
+                                tracing::warn!("caBLE transaction failed: {e}");
+                                vec![e.ctap_status()]
                             }
                         };
                         for r in transport.complete_relay(cid, &payload) {

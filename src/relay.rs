@@ -5,6 +5,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use std::time::Duration;
 
+use crate::ble::BleError;
+use crate::error::TransactionError;
 use crate::kdf::{derive, Purpose};
 use crate::qr::{self, RequestType};
 use crate::session::DesktopFlow;
@@ -20,7 +22,7 @@ pub async fn run_qr_transaction(
     ctap_command: &[u8],
     request_type: RequestType,
     on_qr: impl FnOnce(&str),
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, TransactionError> {
     let identity = SecretKey::random(&mut OsRng);
     let compressed = identity.public_key().to_encoded_point(true);
     let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
@@ -40,7 +42,11 @@ pub async fn run_qr_transaction(
     let mut eid_key = [0u8; eid::EID_KEY_SIZE];
     derive(&qr_secret, &[], Purpose::EidKey, &mut eid_key);
 
-    let plaintext_eid = crate::ble::await_advert(&eid_key, Duration::from_secs(300)).await?;
+    let plaintext_eid = match crate::ble::await_advert(&eid_key, Duration::from_secs(300)).await {
+        Ok(eid) => eid,
+        Err(BleError::Timeout) => return Err(TransactionError::Timeout),
+        Err(BleError::Backend(e)) => return Err(TransactionError::transport(e)),
+    };
     tracing::info!("received valid caBLE advert");
 
     let flow = DesktopFlow {

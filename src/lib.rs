@@ -2,6 +2,7 @@ pub mod crypter;
 pub mod ctap;
 pub mod ctaphid;
 pub mod eid;
+pub mod error;
 pub mod handshake;
 pub mod kdf;
 pub mod noise;

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use bluer::AdapterEvent;
 use futures::StreamExt;
 use std::time::Duration;
@@ -6,19 +6,60 @@ use std::time::Duration;
 use crate::eid;
 use crate::CABLE_BLE_UUID;
 
+/// Failure while waiting for a caBLE BLE advert.
+#[derive(Debug)]
+pub enum BleError {
+    /// No matching advert arrived within the timeout.
+    Timeout,
+    /// Bluetooth/BlueZ backend failure.
+    Backend(anyhow::Error),
+}
+
+impl std::fmt::Display for BleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => write!(f, "timed out waiting for caBLE BLE advert"),
+            Self::Backend(e) => write!(f, "BLE backend error: {e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for BleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(e) => Some(e.as_ref()),
+            Self::Timeout => None,
+        }
+    }
+}
+
+impl From<anyhow::Error> for BleError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Backend(e)
+    }
+}
+
+impl From<bluer::Error> for BleError {
+    fn from(e: bluer::Error) -> Self {
+        Self::Backend(e.into())
+    }
+}
+
 /// Scan BLE advertisements until one trial-decrypts with `eid_key`.
 /// Returns the 16-byte plaintext EID.
 pub async fn await_advert(
     eid_key: &[u8; eid::EID_KEY_SIZE],
     timeout: Duration,
-) -> Result<[u8; eid::EID_PLAINTEXT_SIZE]> {
+) -> Result<[u8; eid::EID_PLAINTEXT_SIZE], BleError> {
     let session = bluer::Session::new()
         .await
         .context("D-Bus session failed")?;
     let adapter = session.default_adapter().await?;
     adapter.set_powered(true).await?;
 
-    let uuid: bluer::Uuid = CABLE_BLE_UUID.parse()?;
+    let uuid: bluer::Uuid = CABLE_BLE_UUID
+        .parse()
+        .map_err(|e| BleError::Backend(anyhow!("invalid cable UUID: {e}")))?;
     // Deliberately no UUID filter at the BlueZ level: we match on service
     // data ourselves, which is more robust while debugging.
     let filter = bluer::DiscoveryFilter {
@@ -36,8 +77,8 @@ pub async fn await_advert(
     loop {
         let event = match tokio::time::timeout_at(deadline, events.next()).await {
             Ok(Some(event)) => event,
-            Ok(None) => anyhow::bail!("BLE discovery stream ended"),
-            Err(_) => anyhow::bail!("timed out waiting for caBLE BLE advert"),
+            Ok(None) => return Err(BleError::Backend(anyhow!("BLE discovery stream ended"))),
+            Err(_) => return Err(BleError::Timeout),
         };
         let address = match event {
             AdapterEvent::DeviceAdded(address) => address,
