@@ -101,8 +101,12 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     continue;
                                 }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
-                                tracing::info!(?rp, "starting caBLE transaction");
-                                tracing::debug!(payload = %hex::encode(&payload), "CTAP relay payload");
+                                tracing::info!(
+                                    ?rp,
+                                    cmd = %format_args!("{:#04x}", payload.first().copied().unwrap_or(0)),
+                                    len = payload.len(),
+                                    "starting caBLE transaction"
+                                );
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);

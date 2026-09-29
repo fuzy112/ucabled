@@ -68,11 +68,7 @@ impl DesktopFlow {
         };
 
         let post_handshake = recv_raw(&mut link).await?;
-        tracing::info!(
-            len = post_handshake.len(),
-            hex = hex::encode(&post_handshake),
-            "received post-handshake message"
-        );
+        tracing::info!(len = post_handshake.len(), "received post-handshake message");
 
         link.send_ctap(ctap_command).await?;
 
@@ -110,7 +106,7 @@ async fn collect_updates(link: &mut CableLink, window: std::time::Duration) -> V
     loop {
         match tokio::time::timeout_at(deadline, link.recv_message()).await {
             Ok(Ok((MSG_UPDATE, payload))) => {
-                tracing::info!(len = payload.len(), hex = hex::encode(&payload), "update message");
+                tracing::info!(len = payload.len(), "received update message");
                 updates.push(payload);
             }
             Ok(Ok(_)) => {}
