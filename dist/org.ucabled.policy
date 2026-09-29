@@ -12,5 +12,8 @@
       <allow_inactive>no</allow_inactive>
       <allow_active>yes</allow_active>
     </defaults>
+    <!-- Lets the non-root ucabled service authorize a session user's subject;
+         without it polkit rejects cross-uid CheckAuthorization from non-root. -->
+    <annotate key="org.freedesktop.policykit.owner">unix-user:ucabled</annotate>
   </action>
 </policyconfig>

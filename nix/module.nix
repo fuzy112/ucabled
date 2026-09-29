@@ -26,7 +26,10 @@ let
     </busconfig>
   '';
 
-  # Only the active local session may register a prompter.
+  # Only the active local session may register a prompter. The
+  # org.freedesktop.policykit.owner annotation lets the non-root ucabled
+  # service call CheckAuthorization on a *session user's* subject: without it
+  # polkit rejects cross-uid checks from anyone but uid 0.
   polkitAction = pkgs.writeTextDir "share/polkit-1/actions/org.ucabled.policy" ''
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE policyconfig PUBLIC
@@ -42,6 +45,7 @@ let
           <allow_inactive>no</allow_inactive>
           <allow_active>yes</allow_active>
         </defaults>
+        <annotate key="org.freedesktop.policykit.owner">unix-user:ucabled</annotate>
       </action>
     </policyconfig>
   '';

@@ -135,8 +135,16 @@ interface org.ucabled.Prompter1
     <allow_inactive>no</allow_inactive>
     <allow_active>yes</allow_active>
   </defaults>
+  <annotate key="org.freedesktop.policykit.owner">unix-user:ucabled</annotate>
 </action>
 ```
+
+> **`org.freedesktop.policykit.owner` 注解是必需的**：非 root 的 `ucabled`
+> 守护进程对**其他 uid**（会话用户）的 subject 调 `CheckAuthorization` 时，
+> polkit 默认只放行 uid 0 或 action 的 owner；没有这个注解，跨 uid 检查
+> 会被直接拒绝（"polkit check fails"）。另外 NixOS 的 polkit 用
+> `--datadir=/run/current-system/sw/share` 构建，因此 action 文件随包放进
+> `share/polkit-1/actions/` 并加入 `environment.systemPackages` 即可被发现。
 
 需要更严时可再加 JS 规则，把"本地"显式化：
 

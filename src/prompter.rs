@@ -160,7 +160,9 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
     let subject = ("system-bus-name".to_string(), details);
 
     let proxy = conn.with_proxy(POLKIT_BUS, POLKIT_PATH, Duration::from_secs(25));
-    let (authorized, _challenge, _details): (bool, bool, HashMap<String, String>) = proxy
+    // The result is a single struct argument `(b b a{ss})`, so it must be
+    // read as a one-element tuple wrapping the struct.
+    let ((authorized, _challenge, _details),): ((bool, bool, HashMap<String, String>),) = proxy
         .method_call(
             POLKIT_INTERFACE,
             "CheckAuthorization",
