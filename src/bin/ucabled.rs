@@ -132,11 +132,19 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                 };
                                 let tx = result_tx.clone();
                                 let notifier2 = notifier.clone();
+                                let notifier3 = notifier.clone();
                                 let task = tokio::spawn(async move {
                                     let r = ucabled::relay::run_qr_transaction(
                                         &payload,
                                         request_type,
-                                        move |url| notifier2.show(url, rp),
+                                        move |url| {
+                                            notifier2.show(
+                                                url,
+                                                rp,
+                                                ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
+                                            )
+                                        },
+                                        move || notifier3.phone_found(),
                                     )
                                     .await;
                                     let _ = tx.send((cid, r));

@@ -1,4 +1,5 @@
-use std::process::{Child, Command};
+use std::io::Write;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -37,10 +38,18 @@ impl GuiHandle {
 }
 
 impl Notifier {
-    pub fn show(&self, url: &str, rp: Option<String>) {
+    pub fn show(&self, url: &str, rp: Option<String>, timeout_secs: u64) {
         match self {
             Notifier::Terminal => print_qr_terminal(url),
-            Notifier::Gui(handle) => handle.show(url, rp),
+            Notifier::Gui(handle) => handle.show(url, rp, timeout_secs),
+        }
+    }
+
+    /// The phone has been seen over BLE; the user now confirms on it.
+    pub fn phone_found(&self) {
+        match self {
+            Notifier::Terminal => println!("=== phone detected, confirm on your phone ===\n"),
+            Notifier::Gui(handle) => handle.phone_found(),
         }
     }
 
@@ -53,7 +62,7 @@ impl Notifier {
 }
 
 impl GuiHandle {
-    fn show(&self, url: &str, rp: Option<String>) {
+    fn show(&self, url: &str, rp: Option<String>, timeout_secs: u64) {
         self.hide();
 
         let mut cmd = Command::new(Self::helper_path());
@@ -61,6 +70,10 @@ impl GuiHandle {
         if let Some(rp) = &rp {
             cmd.arg(rp);
         }
+        cmd.arg("--timeout").arg(timeout_secs.to_string());
+        // The helper reads status lines from stdin ("found" once the phone's
+        // BLE advert is seen) and updates its label.
+        cmd.stdin(Stdio::piped());
         let child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -100,6 +113,16 @@ impl GuiHandle {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+
+    fn phone_found(&self) {
+        let mut guard = self.current.lock().unwrap();
+        if let Some(child) = guard.as_mut() {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(b"found\n");
+                let _ = stdin.flush();
+            }
         }
     }
 }
