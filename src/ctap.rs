@@ -34,10 +34,11 @@ pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
         out.push(0xf5);
     }
 
-    // 5: maxMsgSize = 7609
+    // 5: maxMsgSize = 7609. Must be minimally encoded (0x19 0x1d 0xb9):
+    // Chromium's CBOR reader rejects non-minimal integers, which would
+    // invalidate the whole getInfo response and drop the device.
     out.push(0x05);
-    out.push(0x1a);
-    out.extend_from_slice(&7609u32.to_be_bytes());
+    encode_uint(&mut out, 7609);
 
     // 9: transports
     out.push(0x09);
@@ -514,6 +515,10 @@ mod tests {
         let s = String::from_utf8_lossy(&r);
         assert!(s.contains("FIDO_2_0"));
         assert!(s.contains("hybrid"));
+        // maxMsgSize must use the minimal two-byte encoding (canonical CBOR),
+        // otherwise strict parsers (Chromium) reject the whole response.
+        assert!(r.windows(3).any(|w| w == [0x19, 0x1d, 0xb9]));
+        assert!(!r.windows(5).any(|w| w == [0x1a, 0x00, 0x00, 0x1d, 0xb9]));
     }
 
     #[test]
