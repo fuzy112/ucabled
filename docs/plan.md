@@ -219,9 +219,11 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 
 ### M4 — UX 打磨（验收：日常使用可接受）
 
-- [ ] egui 浮窗：RP 域名（CBOR 最小只读解析）、QR、取消
-- [ ] 取消/超时/断连全路径打磨；日志与配置项
+- [x] QR 浮窗：RP 域名、QR、取消（egui/wgpu 无边框置顶窗，per-transaction
+      子进程 `ucabled-qr`；Wayland 无法隐藏窗口，故不用常驻窗口）
+- [x] 取消/超时/断连路径；日志
 - [ ] 与真实 YubiKey 共存实测；daemon 开关
+- [x] NixOS flake 打包 + systemd user service（module 见 §8）
 
 ### M5 — 增强（可选）
 
@@ -243,12 +245,27 @@ INVALID_OPTION，可接受、可迭代。
 
 ## 8. NixOS 配置
 
+仓库自带 flake：包 `ucabled`（rustPlatform.buildRustPackage，只发布
+`ucabled` + `ucabled-qr`，QR helper 包装了 Vulkan/Wayland 运行时库路径），
+NixOS module `nixosModules.ucabled`，devShell。
+
+```nix
+{
+  # configuration.nix / flake 引用：
+  imports = [ inputs.ucabled.nixosModules.ucabled ];
+  services.ucabled.enable = true;
+  # 模块自动带上：boot.kernelModules=[uhid]、udev uaccess 规则、
+  # hardware.bluetooth.enable=mkDefault true、systemd user service
+}
+```
+
+手工等效配置（不使用 module 时）：
+
 ```nix
 {
   boot.kernelModules = [ "uhid" ];
   services.udev.extraRules = ''KERNEL=="uhid", TAG+="uaccess"'';
-  hardware.bluetooth.enable = true;  # M5 BLE（central 角色）需要
-  # daemon 经 flake (rustPlatform.buildRustPackage) 打包为 systemd.user 服务
+  hardware.bluetooth.enable = true;
 }
 ```
 
