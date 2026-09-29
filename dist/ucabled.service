@@ -6,8 +6,7 @@ Wants=bluetooth.target
 After=bluetooth.target
 
 [Service]
-# Adjust this path if ucabled is installed elsewhere (e.g. /usr/local/bin).
-ExecStart=%h/.nix-profile/bin/ucabled
+ExecStart=/usr/local/bin/ucabled
 Restart=on-failure
 
 [Install]
