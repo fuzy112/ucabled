@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
         compressed,
         &qr_secret,
         NUM_ASSIGNED_TUNNEL_DOMAINS,
-        false,
+        true, // supports_linking (L0: verify whether phones send linking data)
         request_type,
     );
 
@@ -124,5 +124,9 @@ async fn main() -> Result<()> {
         result.ctap_reply.len(),
         hex::encode(&result.ctap_reply)
     );
+    println!("update messages received after shutdown: {}", result.updates.len());
+    for (i, u) in result.updates.iter().enumerate() {
+        println!("  update[{i}] ({} bytes): {}", u.len(), hex::encode(u));
+    }
     Ok(())
 }

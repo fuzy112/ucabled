@@ -22,6 +22,8 @@ pub struct DesktopResult {
     /// First CTAP reply payload (status byte + CBOR) received from the phone.
     pub ctap_reply: Vec<u8>,
     pub handshake_hash: [u8; 32],
+    /// Update messages received after the CTAP reply (linking data etc.).
+    pub updates: Vec<Vec<u8>>,
 }
 
 impl DesktopFlow {
@@ -88,12 +90,34 @@ impl DesktopFlow {
 
         link.send_shutdown().await.ok();
 
+        // After a transaction the phone may send linking data in update
+        // messages (if the QR advertised supports_linking). Keep listening
+        // briefly; the phone closes the tunnel when done.
+        let updates = collect_updates(&mut link, std::time::Duration::from_secs(15)).await;
+
         Ok(DesktopResult {
             post_handshake,
             ctap_reply,
             handshake_hash,
+            updates,
         })
     }
+}
+
+async fn collect_updates(link: &mut CableLink, window: std::time::Duration) -> Vec<Vec<u8>> {
+    let mut updates = Vec::new();
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        match tokio::time::timeout_at(deadline, link.recv_message()).await {
+            Ok(Ok((MSG_UPDATE, payload))) => {
+                tracing::info!(len = payload.len(), hex = hex::encode(&payload), "update message");
+                updates.push(payload);
+            }
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+    }
+    updates
 }
 
 async fn recv_raw(link: &mut CableLink) -> Result<Vec<u8>> {

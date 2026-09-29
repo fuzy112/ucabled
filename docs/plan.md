@@ -229,7 +229,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 ### M5 — 增强（可选）
 
 - [ ] FR-8b（预期不需要）：BLE GATT 数据通道（桌面 central）
-- [ ] FR-7：state-assisted "remember this phone"（contact ID 落盘，0600）
+- [ ] ~~FR-7：state-assisted "remember this phone"~~ **搁置**（2026-09-29 真机验证：iOS 不支持 linking；无 Android 设备复测）——设计见 docs/linking.md
 - [ ] FR-9：per-RP 策略
 - [ ] extensions 静态列表按真机实测结果扩充
 

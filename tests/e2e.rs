@@ -82,6 +82,8 @@ async fn pipe(a: ServerWs, b: ServerWs) {
                 Err(_) => break,
             }
         }
+        // Propagate teardown so the peer sees a close instead of hanging.
+        let _ = tx.send(Message::Close(None)).await;
     };
     tokio::join!(fwd(a_rx, b_tx), fwd(b_rx, a_tx));
 }
