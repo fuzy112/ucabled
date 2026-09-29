@@ -165,15 +165,15 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 
 | 模块 | crate | 说明 |
 | --- | --- | --- |
-| uhid 设备 | `uhid-virt`（维护状态一般，预留调试时间；fd 轮询接 tokio `AsyncFd`，注意 `UHID_OUTPUT` 事件与非阻塞边界） | FIDO 标准 report descriptor（U2FHID spec §4.3，34 字节）：`06 D0 F1 09 01 A1 01 09 20 15 00 26 FF 00 75 08 95 40 81 02 09 21 15 00 26 FF 00 75 08 95 40 91 02 C0`（Usage Page 0xF1D0 是 16 位值，必须用长项 `06 D0 F1`） |
+| uhid 设备 | 手写（`src/uhid_dev.rs`） | 直接读写 `/dev/uhid`（tokio `AsyncFd` + `libc`），不用维护状态一般的 `uhid-virt`；FIDO 标准 report descriptor（U2FHID spec §4.3，34 字节）：`06 D0 F1 09 01 A1 01 09 20 15 00 26 FF 00 75 08 95 40 81 02 09 21 15 00 26 FF 00 75 08 95 40 91 02 C0`（Usage Page 0xF1D0 是 16 位值，必须用长项 `06 D0 F1`） |
 | 运行时 | `tokio` | HID / 隧道 / UI 共用一个 runtime |
 | U2FHID 传输层 | 手写 | INIT/PING/WINK/CANCEL/CBOR/ERROR/KEEPALIVE；分片重组；最大 7609B |
 | CBOR | `ciborium` | getInfo 构造、命令分发、rpId 最小只读提取；其余业务 CBOR 不解析 |
 | caBLE v2 | 手写 | 逐函数对齐 Chromium `device/fido/cable`；无成熟独立移植，边界清晰 |
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
-| QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 MVP / 后期进 egui |
-| UI | `zenity`（子进程，零 GUI 库依赖；缺失时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
+| QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
+| UI | `eframe`/`egui`（无边框置顶窗，per-transaction 子进程 `ucabled-qr`；Wayland 无法隐藏窗口，故不用常驻窗口；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
 | BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；GATT central 预期不需要 |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
