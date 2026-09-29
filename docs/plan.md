@@ -165,7 +165,7 @@ daemon 开关（需要时才注册虚拟设备），可用快捷键
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
 | QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 MVP / 后期进 egui |
-| UI | `eframe`/`egui` | RP 域名 + QR + 取消 |
+| UI | `zenity`（子进程，零 GUI 库依赖；缺失时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
 | BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；GATT central 预期不需要 |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层

@@ -12,6 +12,7 @@ pub mod relay;
 pub mod session;
 pub mod tunnel;
 pub mod uhid_dev;
+pub mod ui;
 
 #[cfg(feature = "ble")]
 pub mod ble;

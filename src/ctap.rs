@@ -46,7 +46,10 @@ pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
 /// Returns None on any parse irregularity; callers must tolerate that.
 pub fn extract_rp_id(command: &[u8]) -> Option<String> {
     let (&cmd, params) = command.split_first()?;
-    let mut c = CborCursor { data: params, pos: 0 };
+    let mut c = CborCursor {
+        data: params,
+        pos: 0,
+    };
     let pairs = c.map_header()?;
     // makeCredential: key 2 = rp entity map; getAssertion: key 1 = rpId.
     let wanted = match cmd {
@@ -102,11 +105,7 @@ fn encode_map_header(out: &mut Vec<u8>, n: u64) {
 /// keeping canonical key order (length first, then lexicographic).
 /// `data` must start exactly at the map header. Returns the rebuilt map and
 /// the number of input bytes consumed.
-fn patch_text_map(
-    data: &[u8],
-    add_key: &str,
-    add_value: &str,
-) -> Option<(Vec<u8>, usize)> {
+fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8>, usize)> {
     let mut c = CborCursor { data, pos: 0 };
     let pairs = c.map_header()?;
     let header_len = c.pos;
@@ -151,7 +150,10 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
     let Some((&0x02, params)) = command.split_first() else {
         return false;
     };
-    let mut c = CborCursor { data: params, pos: 0 };
+    let mut c = CborCursor {
+        data: params,
+        pos: 0,
+    };
     let Some(pairs) = c.map_header() else {
         return false;
     };
@@ -159,7 +161,9 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
         let Some(key) = c.uint() else { return false };
         if key == 5 {
             // options map
-            let Some(inner) = c.map_header() else { return false };
+            let Some(inner) = c.map_header() else {
+                return false;
+            };
             for _ in 0..inner {
                 let Some(k) = c.text() else { return false };
                 if k == "up" {
@@ -194,7 +198,10 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
     let Some((&0x02, params)) = command.split_first() else {
         return None;
     };
-    let mut c = CborCursor { data: params, pos: 0 };
+    let mut c = CborCursor {
+        data: params,
+        pos: 0,
+    };
     let pairs = c.map_header()?;
 
     let mut rp_id: Option<String> = None;
@@ -249,7 +256,7 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
 
     let mut out = vec![0x00]; // CTAP2 success
     out.push(0xa3); // map(3)
-    // 1: credential descriptor {"id": cred_id, "type": "public-key"}
+                    // 1: credential descriptor {"id": cred_id, "type": "public-key"}
     out.push(0x01);
     out.push(0xa2);
     encode_text(&mut out, "id");
@@ -298,7 +305,10 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     };
 
     let result = (|| -> Option<Vec<u8>> {
-        let mut c = CborCursor { data: params, pos: 0 };
+        let mut c = CborCursor {
+            data: params,
+            pos: 0,
+        };
         let pairs = c.map_header()?;
 
         let mut out = vec![0x01];
@@ -322,7 +332,10 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
                 3 => {
                     // user entity: add "displayName", falling back to "name"
                     let display = {
-                        let mut inner = CborCursor { data: value, pos: 0 };
+                        let mut inner = CborCursor {
+                            data: value,
+                            pos: 0,
+                        };
                         let mut found = None;
                         if let Some(p) = inner.map_header() {
                             for _ in 0..p {
@@ -375,7 +388,8 @@ fn encode_uint(out: &mut Vec<u8>, v: u64) {
     }
 }
 
-struct CborCursor<'a> {    data: &'a [u8],
+struct CborCursor<'a> {
+    data: &'a [u8],
     pos: usize,
 }
 
@@ -499,7 +513,7 @@ mod tests {
         // {1: h'..32..', 2: {"id": "webauthn.io"}, 3: {...user...}}
         let mut cmd = vec![0x01, 0xa3, 0x01, 0x58, 0x20];
         cmd.extend_from_slice(&[0xbb; 32]); // clientDataHash
-        // key 2: rp map {"id": "webauthn.io"}
+                                            // key 2: rp map {"id": "webauthn.io"}
         cmd.extend_from_slice(&[0x02, 0xa1, 0x62]);
         cmd.extend_from_slice(b"id");
         cmd.push(0x6b);
@@ -531,7 +545,10 @@ mod tests {
         assert!(text.contains("displayName"));
         assert!(text.contains("name"));
         // user.displayName falls back to user.name ("qr")
-        let key_pos = patched.windows(11).position(|w| w == b"displayName").unwrap();
+        let key_pos = patched
+            .windows(11)
+            .position(|w| w == b"displayName")
+            .unwrap();
         assert_eq!(patched[key_pos + 11], 0x62); // text(2)
         assert_eq!(&patched[key_pos + 12..key_pos + 14], b"qr");
     }

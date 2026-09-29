@@ -9,42 +9,37 @@ use tokio::task::AbortHandle;
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
 use ucabled::uhid_dev::{UhidDevice, UhidEvent, FIDO_REPORT_DESCRIPTOR};
+use ucabled::ui::Notifier;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);
 
-fn show_qr(url: &str) {
-    tracing::debug!(url, "caBLE QR");
-    println!("\n=== Scan with your phone (passkey) ===");
-    match qrcode::QrCode::new(url.as_bytes()) {
-        Ok(code) => {
-            let image = code
-                .render::<qrcode::render::unicode::Dense1x2>()
-                .dark_color(qrcode::render::unicode::Dense1x2::Dark)
-                .light_color(qrcode::render::unicode::Dense1x2::Light)
-                .build();
-            println!("{image}");
-        }
-        Err(e) => println!("QR render failed: {e}\n{url}"),
-    }
-    println!("=======================================\n");
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
+    let no_ui = std::env::args().any(|a| a == "--no-ui");
+
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
+    let notifier = if no_ui {
+        Notifier::Terminal
+    } else {
+        Notifier::Gui(ucabled::ui::GuiHandle::new(cancel_tx))
+    };
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(daemon_loop(notifier, cancel_rx))
+}
+
+async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<()>) -> Result<()> {
     let mut aaguid = [0u8; 16];
     OsRng.fill_bytes(&mut aaguid);
 
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
-    println!("ucabled ready: virtual FIDO2 device registered (build with caBLE relay)");
 
     let mut transport = Transport::new(aaguid);
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<(u32, Result<Vec<u8>>)>();
@@ -107,18 +102,24 @@ async fn main() -> Result<()> {
                                 }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
                                 tracing::info!(?rp, "starting caBLE transaction");
+                                tracing::debug!(payload = %hex::encode(&payload), "CTAP relay payload");
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);
-                                tracing::debug!(payload = %hex::encode(&payload), "CTAP relay payload");
                                 let request_type = if payload.first() == Some(&0x01) {
                                     RequestType::MakeCredential
                                 } else {
                                     RequestType::GetAssertion
                                 };
                                 let tx = result_tx.clone();
+                                let notifier2 = notifier.clone();
                                 let task = tokio::spawn(async move {
-                                    let r = relay_or_log(payload, request_type).await;
+                                    let r = ucabled::relay::run_qr_transaction(
+                                        &payload,
+                                        request_type,
+                                        move |url| notifier2.show(url, rp),
+                                    )
+                                    .await;
                                     let _ = tx.send((cid, r));
                                 });
                                 pending = Some((cid, task.abort_handle()));
@@ -126,6 +127,7 @@ async fn main() -> Result<()> {
                             Some(CtapAction::CancelRelay) => {
                                 if let Some((_, abort)) = pending.take() {
                                     abort.abort();
+                                    notifier.hide();
                                     tracing::info!("cancelled caBLE transaction");
                                 }
                             }
@@ -141,6 +143,7 @@ async fn main() -> Result<()> {
             Some((cid, result)) = result_rx.recv() => {
                 if let Some((pending_cid, _)) = &pending {
                     if *pending_cid == cid {
+                        notifier.hide();
                         let payload = match result {
                             Ok(p) => {
                                 tracing::info!(
@@ -162,6 +165,15 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+            Some(()) = cancel_rx.recv(), if pending.is_some() => {
+                if let Some((cid, abort)) = pending.take() {
+                    abort.abort();
+                    for r in transport.cancel_relay(cid) {
+                        device.write_input(&r).await?;
+                    }
+                    tracing::info!("transaction cancelled from UI");
+                }
+            }
             _ = keepalive.tick(), if pending.is_some() => {
                 if let Some((cid, _)) = &pending {
                     for r in transport.keepalive(*cid) {
@@ -171,8 +183,4 @@ async fn main() -> Result<()> {
             }
         }
     }
-}
-
-async fn relay_or_log(payload: Vec<u8>, request_type: RequestType) -> Result<Vec<u8>> {
-    ucabled::relay::run_qr_transaction(&payload, request_type, show_qr).await
 }

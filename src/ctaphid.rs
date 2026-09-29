@@ -127,7 +127,12 @@ impl Transport {
         }
     }
 
-    fn dispatch(&mut self, cid: u32, cmd: u8, payload: &[u8]) -> (Vec<Vec<u8>>, Option<CtapAction>) {
+    fn dispatch(
+        &mut self,
+        cid: u32,
+        cmd: u8,
+        payload: &[u8],
+    ) -> (Vec<Vec<u8>>, Option<CtapAction>) {
         match cmd {
             CMD_INIT => {
                 if payload.len() != 8 {
@@ -261,7 +266,11 @@ mod tests {
     #[test]
     fn init_allocates_channel() {
         let mut t = Transport::new([0u8; 16]);
-        let (resp, action) = t.handle_report(&init_frame(BROADCAST_CID, CMD_INIT, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        let (resp, action) = t.handle_report(&init_frame(
+            BROADCAST_CID,
+            CMD_INIT,
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        ));
         assert!(action.is_none());
         assert_eq!(resp.len(), 1);
         assert_eq!(resp[0][4], CMD_INIT);
