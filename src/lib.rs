@@ -7,6 +7,7 @@ pub mod handshake;
 pub mod kdf;
 pub mod noise;
 pub mod phone;
+pub mod prompter;
 pub mod qr;
 #[cfg(feature = "ble")]
 pub mod relay;

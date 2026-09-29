@@ -3411,6 +3411,8 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "bluer",
+ "dbus",
+ "dbus-crossroads",
  "eframe",
  "futures",
  "hex",
