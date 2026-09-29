@@ -1,0 +1,128 @@
+use anyhow::{Context, Result};
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::SecretKey;
+use rand::rngs::OsRng;
+use rand::RngCore;
+
+use ucabled::kdf::{derive, Purpose};
+use ucabled::qr::{self, RequestType};
+use ucabled::session::DesktopFlow;
+use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
+
+#[derive(Default)]
+struct Args {
+    advert_hex: Option<String>,
+    tunnel_base: Option<String>,
+    make_credential: bool,
+    cmd_hex: Option<String>,
+}
+
+fn parse_args() -> Result<Args> {
+    let mut args = Args::default();
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--advert-hex" => {
+                args.advert_hex = Some(it.next().context("--advert-hex needs a value")?)
+            }
+            "--tunnel-base" => {
+                args.tunnel_base = Some(it.next().context("--tunnel-base needs a value")?)
+            }
+            "--mc" => args.make_credential = true,
+            "--cmd" => args.cmd_hex = Some(it.next().context("--cmd needs a value")?),
+            other => anyhow::bail!("unknown argument: {other}"),
+        }
+    }
+    Ok(args)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let args = parse_args()?;
+
+    let identity = SecretKey::random(&mut OsRng);
+    let compressed = identity.public_key().to_encoded_point(true);
+    let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
+
+    let mut qr_secret = [0u8; 16];
+    OsRng.fill_bytes(&mut qr_secret);
+
+    let request_type = if args.make_credential {
+        RequestType::MakeCredential
+    } else {
+        RequestType::GetAssertion
+    };
+    let qr_url = qr::encode_qr_url(
+        compressed,
+        &qr_secret,
+        NUM_ASSIGNED_TUNNEL_DOMAINS,
+        false,
+        request_type,
+    );
+
+    println!("caBLE QR URL: {qr_url}");
+    let code = qrcode::QrCode::new(qr_url.as_bytes())?;
+    let image = code
+        .render::<qrcode::render::unicode::Dense1x2>()
+        .dark_color(qrcode::render::unicode::Dense1x2::Dark)
+        .light_color(qrcode::render::unicode::Dense1x2::Light)
+        .build();
+    println!("{image}");
+    println!("Scan with your phone (iCloud Keychain / Google Password Manager).");
+
+    let mut eid_key = [0u8; eid::EID_KEY_SIZE];
+    derive(&qr_secret, &[], Purpose::EidKey, &mut eid_key);
+
+    let plaintext_eid: [u8; 16] = if let Some(advert_hex) = &args.advert_hex {
+        let advert = hex::decode(advert_hex.trim()).context("bad --advert-hex")?;
+        eid::decrypt(&advert, &eid_key).context("advert failed trial decrypt")?
+    } else {
+        #[cfg(feature = "ble")]
+        {
+            println!("Scanning for BLE advert...");
+            ucabled::ble::await_advert(&eid_key, std::time::Duration::from_secs(300)).await?
+        }
+        #[cfg(not(feature = "ble"))]
+        {
+            anyhow::bail!(
+                "built without BLE support; pass --advert-hex or build with --features ble"
+            );
+        }
+    };
+    println!(
+        "Received valid caBLE advert: {}",
+        hex::encode(plaintext_eid)
+    );
+
+    let cmd = match &args.cmd_hex {
+        Some(h) => hex::decode(h.trim())?,
+        None => vec![0x04], // authenticatorGetInfo
+    };
+
+    let flow = DesktopFlow {
+        tunnel_base: args.tunnel_base,
+        qr_secret,
+        identity,
+        plaintext_eid,
+    };
+    let result = flow.run(&cmd).await?;
+
+    println!("handshake hash: {}", hex::encode(result.handshake_hash));
+    println!(
+        "post-handshake message ({} bytes): {}",
+        result.post_handshake.len(),
+        hex::encode(&result.post_handshake)
+    );
+    println!(
+        "CTAP reply ({} bytes): {}",
+        result.ctap_reply.len(),
+        hex::encode(&result.ctap_reply)
+    );
+    Ok(())
+}
