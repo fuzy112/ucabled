@@ -2,7 +2,7 @@
 Description=Phone Passkey Bridge UI agent
 
 [Service]
-ExecStart=/usr/local/bin/ucabled-ui
+ExecStart=/usr/local/bin/ucable-agent
 Restart=on-failure
 NoNewPrivileges=true
 

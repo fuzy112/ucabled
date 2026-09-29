@@ -1,4 +1,4 @@
-//! Per-user session agent: registers a prompter with the system daemon and
+//! Per-user session agent: registers an agent with the system daemon and
 //! shows the QR window on request.
 //!
 //! It only registers when it has a graphical session; whether it is *allowed*
@@ -18,9 +18,9 @@ use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::Crossroads;
 
-use ucabled::prompter::{BUS_NAME, ERR_NOT_AUTHORIZED, PROMPTER_INTERFACE, UI_INTERFACE, UI_PATH};
+use ucabled::agent::{AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, UI_INTERFACE, UI_PATH};
 
-const PROMPTER_PATH: &str = "/org/ucabled/Prompter";
+const AGENT_PATH: &str = "/org/ucabled/Agent";
 const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 
 type ChildSlot = Arc<Mutex<Option<Child>>>;
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
         .init();
 
     if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
-        tracing::info!("no graphical session, not registering a prompter");
+        tracing::info!("no graphical session, not registering an agent");
         return Ok(());
     }
 
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let (cancel_tx, cancel_rx) = mpsc::channel::<u64>();
 
     let mut crossroads = Crossroads::new();
-    let iface = crossroads.register(PROMPTER_INTERFACE, {
+    let iface = crossroads.register(AGENT_INTERFACE, {
         let child = child.clone();
         let cancel_tx = cancel_tx.clone();
         move |builder| {
@@ -90,9 +90,9 @@ fn main() -> Result<()> {
             );
         }
     });
-    crossroads.insert(PROMPTER_PATH, &[iface], ());
+    crossroads.insert(AGENT_PATH, &[iface], ());
 
-    // Serve the prompter and report cancellations on the very same
+    // Serve the agent and report cancellations on the very same
     // connection, so the daemon always sees the sender's unique name.
     conn.start_receive(
         MatchRule::new_method_call(),
@@ -103,7 +103,7 @@ fn main() -> Result<()> {
     );
 
     // Re-register whenever the daemon (re)appears: a restart clears its
-    // in-memory prompter slot, and only this signal tells us about it.
+    // in-memory agent slot, and only this signal tells us about it.
     let reregister = Arc::new(AtomicBool::new(false));
     {
         let reregister = reregister.clone();
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    tracing::info!("prompter registered at {PROMPTER_PATH}");
+    tracing::info!("agent registered at {AGENT_PATH}");
 
     loop {
         conn.process(Duration::from_millis(200))?;
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
 fn helper_path() -> Option<std::path::PathBuf> {
     let sibling = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("ucabled-qr")))?;
+        .and_then(|p| p.parent().map(|d| d.join("ucable-agent-helper")))?;
     sibling.exists().then_some(sibling)
 }
 
@@ -156,7 +156,7 @@ fn show_window(
     kill_child(state);
 
     let Some(helper) = helper_path() else {
-        tracing::warn!("ucabled-qr not found next to the agent; cannot show the QR code");
+        tracing::warn!("ucable-agent-helper not found next to the agent; cannot show the QR code");
         return;
     };
     let mut command = Command::new(helper);
@@ -168,7 +168,7 @@ fn show_window(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            tracing::warn!("failed to spawn ucabled-qr: {e}");
+            tracing::warn!("failed to spawn ucable-agent-helper: {e}");
             return;
         }
     };
@@ -220,21 +220,21 @@ fn kill_child(state: &ChildSlot) {
 }
 
 /// One registration attempt over `conn` (which must be the connection serving
-/// the prompter object). `Ok(true)` = registered, `Ok(false)` = refused
+/// the agent object). `Ok(true)` = registered, `Ok(false)` = refused
 /// (not the active session), `Err` = transient.
 fn register_once(conn: &Connection) -> Result<bool> {
     let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
     let result: std::result::Result<(), dbus::Error> = proxy.method_call(
         UI_INTERFACE,
-        "RegisterPrompter",
-        (dbus::Path::from(PROMPTER_PATH),),
+        "RegisterAgent",
+        (dbus::Path::from(AGENT_PATH),),
     );
     match result {
         Ok(()) => Ok(true),
         Err(e) if e.name().map(|n| n.to_string()) == Some(ERR_NOT_AUTHORIZED.to_string()) => {
             Ok(false)
         }
-        Err(e) => Err(e).context("RegisterPrompter"),
+        Err(e) => Err(e).context("RegisterAgent"),
     }
 }
 
@@ -253,7 +253,7 @@ fn register_blocking(conn: &Connection) -> bool {
 }
 
 /// Report the cancellation over `conn`: the daemon only accepts it from the
-/// currently registered prompter's unique name.
+/// currently registered agent's unique name.
 fn notify_cancelled(conn: &Connection, tid: u64) {
     let result = (|| -> Result<()> {
         let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));

@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     let notifier = if no_ui {
         Notifier::Terminal
     } else {
-        match ucabled::prompter::start(cancel_tx.clone()) {
+        match ucabled::agent::start(cancel_tx.clone()) {
             Ok(ui) => Notifier::Agent(ui),
             Err(e) => {
                 tracing::warn!("UI bridge unavailable ({e:#}), falling back to terminal QR");
@@ -118,7 +118,7 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                 }
                                 if !notifier.available() {
                                     tracing::warn!(
-                                        "no UI prompter registered; refusing the transaction"
+                                        "no UI agent registered; refusing the transaction"
                                     );
                                     let reports = transport
                                         .complete_relay(cid, &[ucabled::error::CTAP1_ERR_TIMEOUT]);

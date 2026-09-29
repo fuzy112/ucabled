@@ -134,7 +134,7 @@ fn main() -> eframe::Result<()> {
     if url.is_none() {
         url = read_url_from_stdin(&mut stdin);
     }
-    let url = url.expect("usage: ucabled-qr [rp] [--timeout secs] (QR URL on stdin)");
+    let url = url.expect("usage: ucable-agent-helper [rp] [--timeout secs] (QR URL on stdin)");
 
     let phone_found = watch_status(stdin);
     let options = eframe::NativeOptions {

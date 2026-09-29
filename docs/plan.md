@@ -174,7 +174,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
 | QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
-| UI | system daemon + 每用户 session agent `ucabled-ui`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucabled-qr`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
+| UI | system daemon + 每用户 session agent `ucable-agent`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucable-agent-helper`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
 | BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；GATT central 预期不需要 |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
@@ -229,7 +229,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 ### M4 — UX 打磨（验收：日常使用可接受）
 
 - [x] QR 浮窗：RP 域名、QR、取消（egui/wgpu 无边框置顶窗，per-transaction
-      子进程 `ucabled-qr`；Wayland 无法隐藏窗口，故不用常驻窗口）
+      子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
 - [ ] 与真实 YubiKey 共存实测；daemon 开关
 - [x] NixOS flake 打包 + systemd user service（module 见 §8）
@@ -256,12 +256,12 @@ INVALID_OPTION，可接受、可迭代。
 ## 8. NixOS 配置
 
 仓库自带 flake：包 `ucabled`（rustPlatform.buildRustPackage，发布
-`ucabled` + `ucabled-ui` + `ucabled-qr`，QR helper 包装了 Vulkan/Wayland
+`ucabled` + `ucable-agent` + `ucable-agent-helper`，QR helper 包装了 Vulkan/Wayland
 运行时库路径），NixOS module `nixosModules.ucabled`，devShell。
 
 运行模型见 `docs/system-service.md`：daemon 是 system service（专用
-`ucabled` 用户，独占 `/dev/uhid`），每用户 session agent `ucabled-ui`
-经 system D-Bus 注册 prompter（polkit 限定活动本地会话）。
+`ucabled` 用户，独占 `/dev/uhid`），每用户 session agent `ucable-agent`
+经 system D-Bus 注册 agent（polkit 限定活动本地会话）。
 
 ```nix
 {
@@ -270,7 +270,7 @@ INVALID_OPTION，可接受、可迭代。
   services.ucabled.enable = true;
   # 模块自动带上：ucabled 系统用户/组、udev ACL 规则（setfacl 给 ucabled rw）、
   # boot.kernelModules=[uhid]、hardware.bluetooth.enable=mkDefault true、
-  # system service ucabled、user service ucabled-ui、D-Bus policy、
+  # system service ucabled、user service ucable-agent、D-Bus policy、
   # polkit action 与 BlueZ 规则
 }
 ```

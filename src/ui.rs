@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::prompter::UiClient;
+use crate::agent::UiClient;
 
 /// How the daemon asks the user to scan the QR code.
 ///

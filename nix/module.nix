@@ -26,7 +26,7 @@ let
     </busconfig>
   '';
 
-  # Only the active local session may register a prompter. The
+  # Only the active local session may register an agent. The
   # org.freedesktop.policykit.owner annotation lets the non-root ucabled
   # service call CheckAuthorization on a *session user's* subject: without it
   # polkit rejects cross-uid checks from anyone but uid 0.
@@ -37,7 +37,7 @@ let
      "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
     <policyconfig>
       <vendor>ucabled</vendor>
-      <action id="org.ucabled.register-prompter">
+      <action id="org.ucabled.register-agent">
         <description>Register the phone passkey dialog</description>
         <message>Authentication is required to show passkey prompts</message>
         <defaults>
@@ -148,11 +148,11 @@ in
 
     # Per-user UI agent, enabled for every user; polkit decides who may
     # actually register (the active local session only).
-    systemd.user.services.ucabled-ui = {
+    systemd.user.services.ucable-agent = {
       description = "Phone Passkey Bridge UI agent";
       wantedBy = [ "default.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/ucabled-ui";
+        ExecStart = "${cfg.package}/bin/ucable-agent";
         Restart = "on-failure";
         NoNewPrivileges = true;
       };

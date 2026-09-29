@@ -1,14 +1,14 @@
 //! D-Bus bridge between the system daemon and the per-user session agent.
 //!
 //! The daemon owns the system-bus name `org.ucabled` and exposes
-//! `org.ucabled.Ui1`; a session agent registers an `org.ucabled.Prompter1`
+//! `org.ucabled.Ui1`; a session agent registers an `org.ucabled.Agent1`
 //! object and is then called back to show the QR window.
 //!
 //! Registration is authorized through polkit (action
-//! `org.ucabled.register-prompter`, `allow_active=yes`), so only the user of
+//! `org.ucabled.register-agent`, `allow_active=yes`), so only the user of
 //! the current active local session can register. The daemon passes the
 //! caller's unique bus name as a `system-bus-name` subject and re-checks on
-//! every prompt, so a prompter left over from a previous session is ignored.
+//! every prompt, so an agent left over from a previous session is ignored.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,8 +26,8 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 pub const BUS_NAME: &str = "org.ucabled";
 pub const UI_PATH: &str = "/org/ucabled/Ui";
 pub const UI_INTERFACE: &str = "org.ucabled.Ui1";
-pub const PROMPTER_INTERFACE: &str = "org.ucabled.Prompter1";
-pub const POLKIT_ACTION: &str = "org.ucabled.register-prompter";
+pub const AGENT_INTERFACE: &str = "org.ucabled.Agent1";
+pub const POLKIT_ACTION: &str = "org.ucabled.register-agent";
 /// Returned to an agent whose user is not the active local session user; the
 /// agent treats this as final and exits instead of retrying.
 pub const ERR_NOT_AUTHORIZED: &str = "org.ucabled.NotAuthorized";
@@ -41,22 +41,22 @@ const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 
 /// A registered UI agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Prompter {
+pub struct Agent {
     /// Unique bus name of the agent (`:1.x`), used as call destination.
     pub destination: String,
-    /// Object path of its `org.ucabled.Prompter1` implementation.
+    /// Object path of its `org.ucabled.Agent1` implementation.
     pub path: String,
     pub uid: u32,
 }
 
-/// The single prompter the daemon currently talks to.
+/// The single agent the daemon currently talks to.
 #[derive(Default)]
-pub struct PrompterSlot {
-    current: Option<Prompter>,
+pub struct AgentSlot {
+    current: Option<Agent>,
 }
 
-impl PrompterSlot {
-    pub fn current(&self) -> Option<&Prompter> {
+impl AgentSlot {
+    pub fn current(&self) -> Option<&Agent> {
         self.current.as_ref()
     }
 }
@@ -82,12 +82,12 @@ pub enum UiCommand {
 #[derive(Clone)]
 pub struct UiClient {
     tx: UnboundedSender<UiCommand>,
-    slot: Arc<Mutex<PrompterSlot>>,
+    slot: Arc<Mutex<AgentSlot>>,
     active_tid: Arc<AtomicU64>,
 }
 
 impl UiClient {
-    /// Whether an authorized prompter is currently registered.
+    /// Whether an authorized agent is currently registered.
     pub fn available(&self) -> bool {
         self.slot.lock().unwrap().current.is_some()
     }
@@ -118,12 +118,12 @@ impl UiClient {
 /// Start the D-Bus service and dispatch threads. `cancel_tx` receives a `()`
 /// when the agent reports that the user cancelled the dialog.
 pub fn start(cancel_tx: UnboundedSender<()>) -> Result<UiClient> {
-    let slot = Arc::new(Mutex::new(PrompterSlot::default()));
+    let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let (tx, rx) = mpsc::unbounded_channel();
 
     let service_slot = slot.clone();
     std::thread::Builder::new()
-        .name("ucabled-ui-service".into())
+        .name("ucable-agent-service".into())
         .spawn(move || {
             if let Err(e) = service_thread(cancel_tx, service_slot) {
                 tracing::error!("UI D-Bus service stopped: {e:#}");
@@ -133,7 +133,7 @@ pub fn start(cancel_tx: UnboundedSender<()>) -> Result<UiClient> {
 
     let dispatch_slot = slot.clone();
     std::thread::Builder::new()
-        .name("ucabled-ui-dispatch".into())
+        .name("ucable-agent-dispatch".into())
         .spawn(move || {
             if let Err(e) = dispatch_thread(rx, dispatch_slot) {
                 tracing::error!("UI dispatch stopped: {e:#}");
@@ -148,7 +148,7 @@ pub fn start(cancel_tx: UnboundedSender<()>) -> Result<UiClient> {
     })
 }
 
-/// Check whether `sender` may register a prompter, returning its uid.
+/// Check whether `sender` may register an agent, returning its uid.
 ///
 /// Opens its own bus connection: this runs on the service thread and only on
 /// registration, so the cost is irrelevant.
@@ -188,7 +188,7 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
     Ok(Some(uid))
 }
 
-fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>) -> Result<()> {
+fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<AgentSlot>>) -> Result<()> {
     let conn = Connection::new_system().context("connect system bus")?;
     conn.request_name(BUS_NAME, false, false, false)
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
@@ -199,7 +199,7 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
         move |builder| {
             let register_slot = slot.clone();
             builder.method(
-                "RegisterPrompter",
+                "RegisterAgent",
                 ("path",),
                 (),
                 move |ctx, _: &mut (), (path,): (Path<'static>,)| {
@@ -213,14 +213,14 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
                         MethodErr::failed(&"authorization check failed")
                     })?;
                     let Some(uid) = authorized else {
-                        tracing::warn!(%sender, "prompter registration denied by polkit");
+                        tracing::warn!(%sender, "agent registration denied by polkit");
                         return Err(MethodErr::from((
                             ERR_NOT_AUTHORIZED,
-                            "only the active local session may register a prompter",
+                            "only the active local session may register an agent",
                         )));
                     };
-                    tracing::info!(%sender, %path, uid, "prompter registered");
-                    register_slot.lock().unwrap().current = Some(Prompter {
+                    tracing::info!(%sender, %path, uid, "agent registered");
+                    register_slot.lock().unwrap().current = Some(Agent {
                         destination: sender,
                         path: path.to_string(),
                         uid,
@@ -230,7 +230,7 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
             );
 
             let unregister_slot = slot.clone();
-            builder.method("UnregisterPrompter", (), (), move |ctx, _: &mut (), ()| {
+            builder.method("UnregisterAgent", (), (), move |ctx, _: &mut (), ()| {
                 let sender = ctx.message().sender().map(|s| s.to_string());
                 clear_if_matches(&unregister_slot, sender.as_deref());
                 Ok(())
@@ -251,7 +251,7 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
                             .unwrap_or(false)
                     };
                     if is_current {
-                        tracing::info!(tid, "prompter reported cancellation");
+                        tracing::info!(tid, "agent reported cancellation");
                         let _ = cancel_tx.send(());
                     }
                     Ok(())
@@ -261,7 +261,7 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
     });
     crossroads.insert(UI_PATH, &[iface], ());
 
-    // Drop a stale prompter the moment its connection goes away: the bus
+    // Drop a stale agent the moment its connection goes away: the bus
     // emits NameOwnerChanged(name=":1.x", new_owner="") on disconnect.
     {
         let slot = slot.clone();
@@ -281,32 +281,32 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
     Ok(())
 }
 
-fn clear_if_matches(slot: &Arc<Mutex<PrompterSlot>>, sender: Option<&str>) {
+fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) {
     let mut guard = slot.lock().unwrap();
     if guard
         .current()
         .map(|p| Some(p.destination.as_str()) == sender)
         .unwrap_or(false)
     {
-        tracing::info!("prompter unregistered");
+        tracing::info!("agent unregistered");
         guard.current = None;
     }
 }
 
 fn dispatch_thread(
     mut rx: UnboundedReceiver<UiCommand>,
-    slot: Arc<Mutex<PrompterSlot>>,
+    slot: Arc<Mutex<AgentSlot>>,
 ) -> Result<()> {
     let conn = Connection::new_system().context("connect system bus")?;
 
     while let Some(command) = rx.blocking_recv() {
-        let Some(prompter) = slot.lock().unwrap().current().cloned() else {
-            tracing::debug!("no prompter registered, dropping UI command");
+        let Some(agent) = slot.lock().unwrap().current().cloned() else {
+            tracing::debug!("no agent registered, dropping UI command");
             continue;
         };
         let proxy = Proxy::new(
-            prompter.destination.as_str(),
-            prompter.path.as_str(),
+            agent.destination.as_str(),
+            agent.path.as_str(),
             Duration::from_secs(15),
             &conn,
         );
@@ -317,28 +317,28 @@ fn dispatch_thread(
                 rp,
                 timeout_secs,
             } => proxy.method_call(
-                PROMPTER_INTERFACE,
+                AGENT_INTERFACE,
                 "Prompt",
                 (tid, url, rp.unwrap_or_default(), timeout_secs),
             ),
-            UiCommand::Found { tid } => proxy.method_call(PROMPTER_INTERFACE, "Found", (tid,)),
-            UiCommand::Close { tid } => proxy.method_call(PROMPTER_INTERFACE, "Close", (tid,)),
+            UiCommand::Found { tid } => proxy.method_call(AGENT_INTERFACE, "Found", (tid,)),
+            UiCommand::Close { tid } => proxy.method_call(AGENT_INTERFACE, "Close", (tid,)),
         };
         if let Err(e) = result {
-            tracing::warn!("prompter call failed: {e}");
-            // The NameOwnerChanged watch normally drops a dead prompter
+            tracing::warn!("agent call failed: {e}");
+            // The NameOwnerChanged watch normally drops a dead agent
             // first; this is a fallback in case that signal was missed. Do
             // not clear on timeouts or other transient failures.
-            if prompter_gone(&e) {
-                clear_if_matches(&slot, Some(&prompter.destination));
+            if agent_gone(&e) {
+                clear_if_matches(&slot, Some(&agent.destination));
             }
         }
     }
     Ok(())
 }
 
-/// Whether a call error means the prompter's connection is gone for good.
-fn prompter_gone(e: &dbus::Error) -> bool {
+/// Whether a call error means the agent's connection is gone for good.
+fn agent_gone(e: &dbus::Error) -> bool {
     matches!(
         e.name(),
         Some(
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn availability_tracks_the_slot() {
-        let slot = Arc::new(Mutex::new(PrompterSlot::default()));
+        let slot = Arc::new(Mutex::new(AgentSlot::default()));
         let (tx, _rx) = mpsc::unbounded_channel();
         let client = UiClient {
             tx,
@@ -364,9 +364,9 @@ mod tests {
         };
         assert!(!client.available());
 
-        slot.lock().unwrap().current = Some(Prompter {
+        slot.lock().unwrap().current = Some(Agent {
             destination: ":1.7".into(),
-            path: "/org/ucabled/Prompter".into(),
+            path: "/org/ucabled/Agent".into(),
             uid: 1000,
         });
         assert!(client.available());
@@ -378,20 +378,20 @@ mod tests {
     }
 
     #[test]
-    fn only_peer_gone_errors_clear_the_prompter() {
+    fn only_peer_gone_errors_clear_the_agent() {
         for name in [
             "org.freedesktop.DBus.Error.NameHasNoOwner",
             "org.freedesktop.DBus.Error.ServiceUnknown",
             "org.freedesktop.DBus.Error.Disconnected",
         ] {
-            assert!(prompter_gone(&dbus::Error::new_custom(name, "gone")));
+            assert!(agent_gone(&dbus::Error::new_custom(name, "gone")));
         }
         for name in [
             "org.freedesktop.DBus.Error.NoReply",
             "org.freedesktop.DBus.Error.TimedOut",
             "org.freedesktop.DBus.Error.UnknownMethod",
         ] {
-            assert!(!prompter_gone(&dbus::Error::new_custom(name, "transient")));
+            assert!(!agent_gone(&dbus::Error::new_custom(name, "transient")));
         }
     }
 }

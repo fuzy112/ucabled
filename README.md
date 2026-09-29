@@ -15,7 +15,7 @@ Firefox ──CTAP-HID (64B reports)──▶ /dev/uhid ──▶ ucabled       
                                                     │ caBLE: BLE scan + WSS tunnel
                                                     │ D-Bus: org.ucabled
                                                     ▼
-                                          ucabled-ui         (session agent)
+                                          ucable-agent       (session agent)
                                                     │  QR window
                                                     ▼
                                           iPhone (iCloud Keychain)
@@ -59,20 +59,20 @@ The module configures everything:
 - `hardware.bluetooth.enable = true` (`mkDefault`, overridable; BLE adverts are
   cryptographically required by caBLE)
 - the system service `systemd.services.ucabled`
-- the per-user agent `systemd.user.services.ucabled-ui`, enabled for every user
-- a D-Bus policy, the polkit action `org.ucabled.register-prompter`, and a polkit
+- the per-user agent `systemd.user.services.ucable-agent`, enabled for every user
+- a D-Bus policy, the polkit action `org.ucabled.register-agent`, and a polkit
   rule letting the `ucabled` user drive BlueZ
 
 Run `nixos-rebuild switch`, then log out and back in (or run
-`systemctl --user start ucabled-ui`) so the agent registers.
+`systemctl --user start ucable-agent`) so the agent registers.
 
 ## Install (other distros, manual)
 
 ```bash
 cargo build --release
 sudo install -Dm755 target/release/ucabled    /usr/local/bin/ucabled
-sudo install -Dm755 target/release/ucabled-ui /usr/local/bin/ucabled-ui
-sudo install -Dm755 target/release/ucabled-qr /usr/local/bin/ucabled-qr
+sudo install -Dm755 target/release/ucable-agent /usr/local/bin/ucable-agent
+sudo install -Dm755 target/release/ucable-agent-helper /usr/local/bin/ucable-agent-helper
 
 # dedicated service account, kernel module and udev rule
 sudo groupadd --system ucabled
@@ -93,9 +93,9 @@ sudo systemctl enable --now ucabled
 
 # per-user session agent
 mkdir -p ~/.config/systemd/user
-cp dist/ucabled-ui.service ~/.config/systemd/user/
+cp dist/ucable-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now ucabled-ui
+systemctl --user enable --now ucable-agent
 ```
 
 Reload the udev rule (`sudo udevadm trigger --subsystem-match=misc`) and log
@@ -108,7 +108,7 @@ always-on-top window with a QR code; scan it with your phone and follow the
 prompt (Face ID / fingerprint), and the browser finishes the operation. Close
 the window or click Cancel to abort.
 
-- The window is shown by the `ucabled-ui` session agent. If it is not running,
+- The window is shown by the `ucable-agent` session agent. If it is not running,
   or you are not the active local session, the request fails with a CTAP
   timeout instead of starting an invisible transaction. Running the daemon with
   `--no-ui` prints the QR code on a controlling terminal instead.
@@ -127,7 +127,7 @@ the window or click Cancel to abort.
   resulting hidraw node, which still gets uaccess from systemd's FIDO rules.
   The daemon runs unprivileged in a systemd sandbox.
 - **Only the active local session may show the QR window.** The session agent
-  registers as a D-Bus prompter, and the daemon authorizes the registration
+  registers as a D-Bus agent, and the daemon authorizes the registration
   through polkit (`allow_active=yes`), re-checking on every prompt. SSH and
   remote sessions are refused by construction.
 - The transaction secret (in the QR code) travels from the daemon to the agent
@@ -139,7 +139,7 @@ the window or click Cancel to abort.
 
 | Symptom | Fix |
 | --- | --- |
-| No QR window appears | The `ucabled-ui` agent is not registered: `systemctl --user status ucabled-ui` and `journalctl --user -u ucabled-ui -f`. Only the active local session may show the window |
+| No QR window appears | The `ucable-agent` agent is not registered: `systemctl --user status ucable-agent` and `journalctl --user -u ucable-agent -f`. Only the active local session may show the window |
 | Firefox does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |

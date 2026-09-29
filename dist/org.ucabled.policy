@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>ucabled</vendor>
-  <action id="org.ucabled.register-prompter">
+  <action id="org.ucabled.register-agent">
     <description>Register the phone passkey dialog</description>
     <message>Authentication is required to show passkey prompts</message>
     <defaults>

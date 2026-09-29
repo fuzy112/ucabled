@@ -110,9 +110,9 @@ Link {
   管理子命令（可选，MVP 可手工删文件）。
 - 日志：不落 linkSecret/contactID 原文（NFR-6），只记名称与长度。
 
-### 2.5 UI（`src/bin/ucabled-qr.rs`）
+### 2.5 UI（`src/bin/ucable-agent-helper.rs`）
 
-- 增加"连接中"模式：`ucabled-qr --connecting <手机名>`——无 QR，
+- 增加"连接中"模式：`ucable-agent-helper --connecting <手机名>`——无 QR，
   显示手机名 + 旋转指示 + Cancel。模式参数为 argv，Notifier 接口不变。
 
 ### 2.6 mock phone 扩展（测试）
