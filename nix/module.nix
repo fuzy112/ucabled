@@ -62,10 +62,12 @@ in
     boot.kernelModules = [ "uhid" ];
 
     # SECURITY: /dev/uhid lets a process create arbitrary virtual HID devices
-    # (including a keyboard). Grant it only to the dedicated service account;
-    # the human user only needs the resulting hidraw node, which picks up
-    # uaccess from systemd's FIDO/uaccess rules.
-    services.udev.extraRules = ''KERNEL=="uhid", GROUP="ucabled", MODE="0660"'';
+    # (including a keyboard). Grant the dedicated service account rw via an
+    # ACL, leaving the node's group alone; the human user only needs the
+    # resulting hidraw node (uaccess via systemd's FIDO/uaccess rules).
+    services.udev.extraRules = ''
+      KERNEL=="uhid", RUN+="${pkgs.acl}/bin/setfacl -m u:ucabled:rw /dev/uhid"
+    '';
 
     # BLE advert reception is cryptographically mandatory for caBLE.
     hardware.bluetooth.enable = lib.mkDefault true;
@@ -132,8 +134,9 @@ in
           "AF_BLUETOOTH"
           "AF_NETLINK"
         ];
-        DevicePolicy = "closed";
-        DeviceAllow = [ "/dev/uhid rw" ];
+        # /dev/uhid is gated by the ucabled group (mode 0660); a cgroup device
+        # filter would be redundant and has path-resolution failure modes, so
+        # leave it off.
         UMask = "0077";
         LimitCORE = 0;
       };

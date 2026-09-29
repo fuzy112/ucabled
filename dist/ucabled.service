@@ -33,8 +33,6 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK
-DevicePolicy=closed
-DeviceAllow=/dev/uhid rw
 UMask=0077
 LimitCORE=0
 

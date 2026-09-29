@@ -268,7 +268,7 @@ INVALID_OPTION，可接受、可迭代。
   # configuration.nix / flake 引用：
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
-  # 模块自动带上：ucabled 系统用户/组、udev group 规则（GROUP=ucabled）、
+  # 模块自动带上：ucabled 系统用户/组、udev ACL 规则（setfacl 给 ucabled rw）、
   # boot.kernelModules=[uhid]、hardware.bluetooth.enable=mkDefault true、
   # system service ucabled、user service ucabled-ui、D-Bus policy、
   # polkit action 与 BlueZ 规则
@@ -280,7 +280,7 @@ INVALID_OPTION，可接受、可迭代。
 ```nix
 {
   boot.kernelModules = [ "uhid" ];
-  services.udev.extraRules = ''KERNEL=="uhid", GROUP="ucabled", MODE="0660"'';
+  services.udev.extraRules = ''KERNEL=="uhid", RUN+="/usr/bin/setfacl -m u:ucabled:rw /dev/uhid"'';
   hardware.bluetooth.enable = true;
 }
 ```

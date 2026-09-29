@@ -1,5 +1,5 @@
-# SECURITY: /dev/uhid is not FIDO-specific; access lets a process create
-# arbitrary virtual HID devices (including a keyboard). Grant it only to the
-# dedicated ucabled service account. The human user only needs the resulting
-# hidraw node, which picks up uaccess from systemd's FIDO/uaccess rules.
-KERNEL=="uhid", GROUP="ucabled", MODE="0660"
+# SECURITY: /dev/uhid lets a process create arbitrary virtual HID devices
+# (including a keyboard). Grant the ucabled service account rw via an ACL,
+# leaving the node's group alone; the human user only needs the resulting
+# hidraw node (uaccess via systemd's FIDO/uaccess rules).
+KERNEL=="uhid", RUN+="/usr/bin/setfacl -m u:ucabled:rw /dev/uhid"

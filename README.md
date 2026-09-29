@@ -52,8 +52,9 @@ Add this repository to your flake and enable the module:
 The module configures everything:
 
 - a dedicated `ucabled` system user and group
-- udev rule `KERNEL=="uhid", GROUP="ucabled", MODE="0660"` so only that account
-  can create virtual HID devices
+- udev rule granting the `ucabled` account rw to `/dev/uhid` via an ACL
+  (`RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`), leaving the node's group
+  alone
 - `boot.kernelModules = [ "uhid" ]`
 - `hardware.bluetooth.enable = true` (`mkDefault`, overridable; BLE adverts are
   cryptographically required by caBLE)

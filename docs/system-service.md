@@ -51,7 +51,7 @@ Firefox ──hidraw──▶ [virtual FIDO2] ──/dev/uhid──▶ ucabled.s
 ### 3.1 系统守护进程 `ucabled.service`
 
 - system unit，`User=ucabled`、`Group=ucabled`（专用系统账号）。
-- 依赖：`/dev/uhid`（udev `GROUP="ucabled", MODE="0660"`）、BlueZ（system
+- 依赖：`/dev/uhid`（udev ACL `setfacl -m u:ucabled:rw`，不改节点组）、BlueZ（system
   bus）、网络（WSS 隧道）。
 - 拥有 system bus 名 `org.ucabled`（暂定），对象 `/org/ucabled/Ui`，实现
   接口 `org.ucabled.Ui1`。
@@ -153,13 +153,14 @@ polkit.addRule(function (action, subject) {
 
 ## 6. 安全属性
 
-- **M2 解决**：只有 `ucabled` 服务账号能打开 `/dev/uhid`；人类用户的进程
-  无法创建任何虚拟 HID 设备。Firefox 不受影响（走 hidraw uaccess）。
+- **M2 解决**：只有 `ucabled` 服务账号（经 `/dev/uhid` 上的 ACL）能打开该
+  节点；人类用户的进程无法创建任何虚拟 HID 设备。Firefox 不受影响（走
+  hidraw uaccess）。
 - **M3 强化**：守护进程在真正的 system unit sandbox 中运行，且因为没有
-  GUI 可以更严：`DevicePolicy=closed` + `DeviceAllow=/dev/uhid rw`、
-  `MemoryDenyWriteExecute`、`SystemCallFilter=@system-service`、空
-  `CapabilityBoundingSet`、`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-  AF_BLUETOOTH AF_NETLINK`，加上文件系统/命名空间保护。
+  GUI 可以更严：`MemoryDenyWriteExecute`、`SystemCallFilter=@system-service`、
+  空 `CapabilityBoundingSet`、`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+  AF_BLUETOOTH AF_NETLINK`，加上文件系统/命名空间保护。（`DevicePolicy`/
+  `DeviceAllow` 因路径解析有失败模式且与 ACL 冗余，故未启用。）
 - QR secret 仅经 system bus unicast → agent → helper stdin，不进 argv/日志。
 - prompter 只能来自活动本地会话用户，且在 `Prompt` 时复核。
 
@@ -181,7 +182,8 @@ polkit.addRule(function (action, subject) {
 NixOS module（`nix/module.nix`）：
 
 - `users.users.ucabled` / `users.groups.ucabled`（`isSystemUser`）。
-- udev：`KERNEL=="uhid", GROUP="ucabled", MODE="0660"`（取代 `uaccess`）。
+- udev：`KERNEL=="uhid", RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`（ACL 授予，
+  不改节点组；取代 `uaccess`）。
 - `systemd.services.ucabled`（system unit，含第 6 节的 sandbox）。
 - `systemd.user.services.ucabled-ui`：作为全局 user unit 对所有用户启用
   （`wantedBy = default.target`）；不必按用户配置，能否弹窗由 polkit 判定。
@@ -235,7 +237,7 @@ NixOS module（`nix/module.nix`）：
    注册表 + polkit 授权）。
 2. ~~新增 `ucabled-ui` agent~~：实现 `Prompter1`，复用 `ucabled-qr`。
 3. ~~守护进程改用 D-Bus UI 驱动~~；无 prompter 快速失败；移除进程内 GUI。
-4. ~~系统服务化~~：system 用户/组、udev group 规则、system unit + sandbox、
+4. ~~系统服务化~~：system 用户/组、udev ACL 规则、system unit + sandbox、
    agent unit、D-Bus policy、polkit action（+ 规则）、BlueZ polkit、dist
    单元。
 5. ~~文档~~：README 与 `docs/plan.md`。
