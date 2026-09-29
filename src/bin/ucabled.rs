@@ -28,7 +28,13 @@ fn main() -> Result<()> {
     let notifier = if no_ui {
         Notifier::Terminal
     } else {
-        Notifier::Gui(ucabled::ui::GuiHandle::new(cancel_tx))
+        match ucabled::prompter::start(cancel_tx.clone()) {
+            Ok(ui) => Notifier::Agent(ui),
+            Err(e) => {
+                tracing::warn!("UI bridge unavailable ({e:#}), falling back to terminal QR");
+                Notifier::Terminal
+            }
+        }
     };
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -110,6 +116,15 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
+                                if !notifier.available() {
+                                    tracing::warn!(
+                                        "no UI prompter registered; refusing the transaction"
+                                    );
+                                    let reports = transport
+                                        .complete_relay(cid, &[ucabled::error::CTAP1_ERR_TIMEOUT]);
+                                    write_all(&device, reports, &mut write_failures).await;
+                                    continue;
+                                }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
                                 tracing::info!(
                                     ?rp,
@@ -134,6 +149,7 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                         request_type,
                                         move |url| {
                                             notifier2.show(
+                                                cid as u64,
                                                 url,
                                                 rp,
                                                 ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
