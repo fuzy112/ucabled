@@ -37,7 +37,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   meta = {
     description = "Virtual FIDO2 device that relays WebAuthn ceremonies to a phone via caBLE v2 (hybrid transport)";
-    license = lib.licenses.mit;
+    license = lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;
     mainProgram = "ucabled";
   };

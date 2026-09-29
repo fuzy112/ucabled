@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use hkdf::Hkdf;
 use sha2::Sha256;
 

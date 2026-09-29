@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{bail, Context, Result};
 use rand::rngs::OsRng;
 use rand::RngCore;

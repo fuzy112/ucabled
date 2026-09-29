@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
 /// identity consistent across daemon restarts; the real attestation AAGUID
 /// still comes from the phone.

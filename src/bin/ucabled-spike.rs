@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{Context, Result};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;

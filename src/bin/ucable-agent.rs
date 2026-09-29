@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Per-user session agent: registers an agent with the system daemon and
 //! shows the QR window on request.
 //!

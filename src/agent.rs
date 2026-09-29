@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! D-Bus bridge between the system daemon and the per-user session agent.
 //!
 //! The daemon owns the system-bus name `org.ucabled` and exposes

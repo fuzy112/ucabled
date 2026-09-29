@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const QR_SECRET_SIZE: usize = 16;

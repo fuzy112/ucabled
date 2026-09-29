@@ -182,4 +182,4 @@ Requirements and design: `docs/plan.md`; system service / UI agent design:
 
 ## License
 
-MIT
+GPL-3.0-or-later; see `COPYING`.

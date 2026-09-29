@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fmt;
 
 /// CTAP status bytes used when a caBLE transaction fails.

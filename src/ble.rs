@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{anyhow, Context, Result};
 use bluer::AdapterEvent;
 use futures::StreamExt;
