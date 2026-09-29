@@ -13,6 +13,10 @@ use ucabled::ui::Notifier;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);
 
+/// Consecutive uhid read failures tolerated before giving up (and letting
+/// systemd restart the service and recreate the device).
+const MAX_UHID_READ_FAILURES: u32 = 10;
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -46,15 +50,29 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
     let mut pending: Option<(u32, AbortHandle)> = None;
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+    let mut read_failures = 0u32;
+    let mut write_failures = 0u32;
 
     loop {
         tokio::select! {
             event = device.next_event() => {
                 let event = match event {
-                    Ok(e) => e,
+                    Ok(e) => {
+                        read_failures = 0;
+                        e
+                    }
                     Err(e) => {
-                        tracing::error!("uhid error: {e}");
-                        return Err(e.into());
+                        // Transient errors (EINTR, a closed hidraw fd, ...)
+                        // should not tear down the whole daemon, but a
+                        // persistent one means the device is gone.
+                        read_failures += 1;
+                        if read_failures >= MAX_UHID_READ_FAILURES {
+                            tracing::error!("uhid read failing repeatedly, giving up: {e}");
+                            return Err(e.into());
+                        }
+                        tracing::warn!("uhid read error ({read_failures}/{MAX_UHID_READ_FAILURES}): {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
                     }
                 };
                 match event {
@@ -67,9 +85,7 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                             );
                         }
                         let (responses, action) = transport.handle_report(&report);
-                        for r in responses {
-                            device.write_input(&r).await?;
-                        }
+                        write_all(&device, responses, &mut write_failures).await;
                         match action {
                             Some(CtapAction::Relay(payload)) => {
                                 let Some(cid) = transport.busy_channel() else { continue };
@@ -87,18 +103,16 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     let response = ucabled::ctap::fake_silent_assertion(&payload)
                                         .unwrap_or_else(|| vec![0x2e]);
                                     tracing::info!("silent probe (up=false), answering locally");
-                                    for r in transport.complete_relay(cid, &response) {
-                                        device.write_input(&r).await?;
-                                    }
+                                    let reports = transport.complete_relay(cid, &response);
+                                    write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
                                 // Firefox's dummy makeCredential exists only to
                                 // make a physical key blink; don't bug the phone.
                                 if ucabled::ctap::is_blink_probe(&payload) {
                                     tracing::info!("blink probe, answering locally");
-                                    for r in transport.complete_relay(cid, &[0x2c]) {
-                                        device.write_input(&r).await?;
-                                    }
+                                    let reports = transport.complete_relay(cid, &[0x2c]);
+                                    write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
@@ -163,9 +177,8 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                 vec![e.ctap_status()]
                             }
                         };
-                        for r in transport.complete_relay(cid, &payload) {
-                            device.write_input(&r).await?;
-                        }
+                        let reports = transport.complete_relay(cid, &payload);
+                        write_all(&device, reports, &mut write_failures).await;
                         pending = None;
                     }
                 }
@@ -173,17 +186,32 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
             Some(()) = cancel_rx.recv(), if pending.is_some() => {
                 if let Some((cid, abort)) = pending.take() {
                     abort.abort();
-                    for r in transport.cancel_relay(cid) {
-                        device.write_input(&r).await?;
-                    }
+                    let reports = transport.cancel_relay(cid);
+                    write_all(&device, reports, &mut write_failures).await;
                     tracing::info!("transaction cancelled from UI");
                 }
             }
             _ = keepalive.tick(), if pending.is_some() => {
                 if let Some((cid, _)) = &pending {
-                    for r in transport.keepalive(*cid) {
-                        device.write_input(&r).await?;
-                    }
+                    let reports = transport.keepalive(*cid);
+                    write_all(&device, reports, &mut write_failures).await;
+                }
+            }
+        }
+    }
+}
+
+/// Write response reports to the host, tolerating transient failures so a
+/// hiccup does not kill an in-flight transaction. Persistent failure is
+/// handled by the read path, which eventually restarts the daemon.
+async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u32) {
+    for r in reports {
+        match device.write_input(&r).await {
+            Ok(()) => *failures = 0,
+            Err(e) => {
+                *failures += 1;
+                if *failures == 1 || *failures % 100 == 0 {
+                    tracing::warn!("uhid write failed ({failures} times): {e}");
                 }
             }
         }
