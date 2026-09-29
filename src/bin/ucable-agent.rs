@@ -20,7 +20,7 @@ use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::Crossroads;
 
-use ucabled::agent::{AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, UI_INTERFACE, UI_PATH};
+use ucabled::agent::{AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, MANAGER_INTERFACE, MANAGER_PATH};
 
 const AGENT_PATH: &str = "/org/ucabled/Agent";
 const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
@@ -308,9 +308,9 @@ fn kill_child(state: &ChildSlot) {
 /// the agent object). `Ok(true)` = registered, `Ok(false)` = refused
 /// (not the active session), `Err` = transient.
 fn register_once(conn: &Connection) -> Result<bool> {
-    let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
+    let proxy = conn.with_proxy(BUS_NAME, MANAGER_PATH, Duration::from_secs(5));
     let result: std::result::Result<(), dbus::Error> = proxy.method_call(
-        UI_INTERFACE,
+        MANAGER_INTERFACE,
         "RegisterAgent",
         (dbus::Path::from(AGENT_PATH),),
     );
@@ -341,8 +341,8 @@ fn register_blocking(conn: &Connection) -> bool {
 /// currently registered agent's unique name.
 fn notify_cancelled(conn: &Connection, tid: u64) {
     let result = (|| -> Result<()> {
-        let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
-        let _: () = proxy.method_call(UI_INTERFACE, "TransactionCancelled", (tid,))?;
+        let proxy = conn.with_proxy(BUS_NAME, MANAGER_PATH, Duration::from_secs(5));
+        let _: () = proxy.method_call(MANAGER_INTERFACE, "TransactionCancelled", (tid,))?;
         Ok(())
     })();
     if let Err(e) = result {
@@ -353,8 +353,8 @@ fn notify_cancelled(conn: &Connection, tid: u64) {
 /// Report the user's device-selection answer over `conn`.
 fn notify_selection(conn: &Connection, tid: u64, use_phone: bool) {
     let result = (|| -> Result<()> {
-        let proxy = conn.with_proxy(BUS_NAME, UI_PATH, Duration::from_secs(5));
-        let _: () = proxy.method_call(UI_INTERFACE, "SelectionResult", (tid, use_phone))?;
+        let proxy = conn.with_proxy(BUS_NAME, MANAGER_PATH, Duration::from_secs(5));
+        let _: () = proxy.method_call(MANAGER_INTERFACE, "SelectionResult", (tid, use_phone))?;
         Ok(())
     })();
     if let Err(e) = result {

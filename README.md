@@ -21,7 +21,7 @@ response back to the browser.
   │      ucabled       │<─────────────────────────────>│ iPhone / Android │
   │  (system service)  │                               │  passkey store   │
   └──────────┬─────────┘                               └────────┬─────────┘
-             │  D-Bus org.ucabled.Ui1                           ^
+             │  D-Bus org.ucabled.Manager1                      ^
              │  Prompt / Found / Close                          .
              V                                                  .
   ┌────────────────────┐                                        .

@@ -3,7 +3,7 @@
 //! D-Bus bridge between the system daemon and the per-user session agent.
 //!
 //! The daemon owns the system-bus name `org.ucabled` and exposes
-//! `org.ucabled.Ui1`; a session agent registers an `org.ucabled.Agent1`
+//! `org.ucabled.Manager1`; a session agent registers an `org.ucabled.Agent1`
 //! object and is then called back to show the QR window.
 //!
 //! Registration is authorized through polkit (action
@@ -26,8 +26,8 @@ use dbus_crossroads::{Crossroads, MethodErr};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 pub const BUS_NAME: &str = "org.ucabled";
-pub const UI_PATH: &str = "/org/ucabled/Ui";
-pub const UI_INTERFACE: &str = "org.ucabled.Ui1";
+pub const MANAGER_PATH: &str = "/org/ucabled/Manager";
+pub const MANAGER_INTERFACE: &str = "org.ucabled.Manager1";
 pub const AGENT_INTERFACE: &str = "org.ucabled.Agent1";
 pub const POLKIT_ACTION: &str = "org.ucabled.register-agent";
 /// Returned to an agent whose user is not the active local session user; the
@@ -215,7 +215,7 @@ fn service_thread(
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
 
     let mut crossroads = Crossroads::new();
-    let iface = crossroads.register(UI_INTERFACE, {
+    let iface = crossroads.register(MANAGER_INTERFACE, {
         let slot = slot.clone();
         move |builder| {
             let register_slot = slot.clone();
@@ -302,7 +302,7 @@ fn service_thread(
             );
         }
     });
-    crossroads.insert(UI_PATH, &[iface], ());
+    crossroads.insert(MANAGER_PATH, &[iface], ());
 
     // Drop a stale agent the moment its connection goes away: the bus
     // emits NameOwnerChanged(name=":1.x", new_owner="") on disconnect.
@@ -319,7 +319,7 @@ fn service_thread(
         )?;
     }
 
-    tracing::info!("listening on {BUS_NAME} ({UI_INTERFACE})");
+    tracing::info!("listening on {BUS_NAME} ({MANAGER_INTERFACE})");
     crossroads.serve(&conn)?;
     Ok(())
 }

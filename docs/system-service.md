@@ -38,7 +38,7 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
  └─────────┘         └─────────────────┘           └──────────────────┘
 （hidraw = CTAP-HID / /dev/uhid；caBLE v2 = BLE advert + WSS 隧道）
 
-控制通路（system D-Bus，org.ucabled；ucabled 实现 Ui1，对象 /org/ucabled/Ui）
+控制通路（system D-Bus，org.ucabled；ucabled 实现 Manager1，对象 /org/ucabled/Manager）
  ┌───────────────┐             ┌─────────────────┐
  │ ucable-agent  │────────────>│ ucabled.service │ RegisterAgent / TransactionCancelled
  │ （user unit） │<────────────│ （system unit） │ Prompt / Found / Close
@@ -61,8 +61,8 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - system unit，`User=ucabled`、`Group=ucabled`（专用系统账号）。
 - 依赖：`/dev/uhid`（udev ACL `setfacl -m u:ucabled:rw`，不改节点组）、BlueZ（system
   bus）、网络（WSS 隧道）。
-- 拥有 system bus 名 `org.ucabled`（暂定），对象 `/org/ucabled/Ui`，实现
-  接口 `org.ucabled.Ui1`。
+- 拥有 system bus 名 `org.ucabled`（暂定），对象 `/org/ucabled/Manager`，实现
+  接口 `org.ucabled.Manager1`。
 - 仍然负责 HID 收发、U2FHID 分片、CTAP 分发、caBLE 握手与中继；**不再
   spawn 任何 GUI 子进程**。
 - 无可用 agent 时，对 `MakeCredential`/`GetAssertion` 直接回 CTAP 错误
@@ -72,7 +72,7 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 
 - user unit，对所有用户启用；谁真正能弹窗完全由 polkit 决定，不按用户配置。
 - 连接到 **system bus**，导出一个对象实现 `org.ucabled.Agent1`，调用
-  `org.ucabled.Ui1.RegisterAgent(path)` 注册自己。
+  `org.ucabled.Manager1.RegisterAgent(path)` 注册自己。
 - 收到 `Prompt(tid, url, rp, timeout)` 时，按现有 `GuiHandle` 逻辑 spawn
   `ucable-agent-helper`，把 URL 写进它的 stdin；把 helper 的退出转成
   `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
@@ -108,10 +108,10 @@ select one."，**只能靠触摸实体密钥来选择**——它会把每个设�
 
 ## 4. D-Bus 接口
 
-守护进程实现（对象 `/org/ucabled/Ui`）：
+守护进程实现（对象 `/org/ucabled/Manager`）：
 
 ```
-interface org.ucabled.Ui1
+interface org.ucabled.Manager1
   RegisterAgent(o path)            # agent 注册其唯一 bus name 上的对象路径
   UnregisterAgent()
   TransactionCancelled(t tid)         # 用户关闭 QR 窗口
@@ -258,7 +258,7 @@ NixOS module（`nix/module.nix`）：
 
 已定：
 
-- 命名：`org.ucabled` + `org.ucabled.Ui1` / `org.ucabled.Agent1`。
+- 命名：`org.ucabled` + `org.ucabled.Manager1` / `org.ucabled.Agent1`。
 - D-Bus 库：**dbus / dbus-crossroads**（与 `bluer` 同一套依赖，避免新增
   依赖；服务与分发各用一个阻塞连接线程）。
 - 守护进程启动时机：system unit，boot 常驻（`multi-user.target`）。
@@ -272,7 +272,7 @@ NixOS module（`nix/module.nix`）：
 
 ## 12. 实现与提交计划
 
-1. ~~引入 D-Bus UI 层~~：`src/agent.rs`（`Ui1` 服务 + `Agent1` 回调 +
+1. ~~引入 D-Bus UI 层~~：`src/agent.rs`（`Manager1` 服务 + `Agent1` 回调 +
    注册表 + polkit 授权）。
 2. ~~新增 `ucable-agent` agent~~：实现 `Agent1`，复用 `ucable-agent-helper`。
 3. ~~守护进程改用 D-Bus UI 驱动~~；无 agent 快速失败；移除进程内 GUI。
