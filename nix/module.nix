@@ -48,6 +48,35 @@ in
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/ucabled";
         Restart = "on-failure";
+        # The daemon parses untrusted network/BLE input and spawns the QR
+        # helper, which needs the Wayland socket (XDG_RUNTIME_DIR), /dev/dri
+        # for wgpu and /dev/uhid, so no PrivateDevices/DevicePolicy here.
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
+        ProtectControlGroups = true;
+        ProtectClock = true;
+        ProtectHostname = true;
+        ProtectProc = "invisible";
+        ProcSubset = "pid";
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        SystemCallArchitectures = "native";
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+          "AF_BLUETOOTH"
+          "AF_NETLINK"
+        ];
+        UMask = "0077";
+        LimitCORE = 0;
       };
     };
   };
