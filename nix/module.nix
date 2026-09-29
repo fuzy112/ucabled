@@ -35,7 +35,12 @@ in
 
     systemd.user.services.ucabled = {
       description = "Phone Passkey Bridge";
+      # Order after the session's bluetooth.target (active when an adapter is
+      # present). Wants, not Requires: the daemon must still start without
+      # Bluetooth — caBLE transactions fail individually in that case.
       wantedBy = [ "default.target" ];
+      wants = [ "bluetooth.target" ];
+      after = [ "bluetooth.target" ];
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/ucabled";
         Restart = "on-failure";
