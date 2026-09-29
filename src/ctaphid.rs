@@ -179,7 +179,9 @@ impl Transport {
     }
 
     fn dispatch_cbor(&mut self, cid: u32, payload: &[u8]) -> (Vec<Vec<u8>>, Option<CtapAction>) {
-        if self.busy.is_some() && self.busy != Some(cid) {
+        // One relayed operation at a time: a second CBOR command while one is
+        // pending (on this or another channel) is rejected, never dropped.
+        if self.busy.is_some() {
             return (error_response(cid, ERR_CHANNEL_BUSY), None);
         }
         let Some(&subcmd) = payload.first() else {
@@ -370,6 +372,18 @@ mod tests {
         let (resp, _) = t.handle_report(&init_frame(2, CMD_CBOR, &[0x04]));
         assert_eq!(resp[0][4], CMD_ERROR);
         assert_eq!(resp[0][7], ERR_CHANNEL_BUSY);
+    }
+
+    #[test]
+    fn busy_channel_rejects_same_cid() {
+        let mut t = Transport::new([0u8; 16]);
+        let _ = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        let (resp, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x02, 0xa4]));
+        assert!(action.is_none());
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_CHANNEL_BUSY);
+        // The pending relay is untouched and can still complete.
+        assert_eq!(t.busy_channel(), Some(1));
     }
 
     #[test]
