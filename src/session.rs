@@ -14,6 +14,11 @@ pub struct DesktopFlow {
     pub qr_secret: [u8; 16],
     pub identity: SecretKey,
     pub plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE],
+    /// True only when the QR advertised `supports_linking`, i.e. the phone may
+    /// send linking data in update messages after the transaction. Collecting
+    /// those messages means staying on the tunnel after the CTAP reply, which
+    /// must never delay that reply, so this defaults to false.
+    pub supports_linking: bool,
 }
 
 /// Result of a completed desktop-side caBLE session.
@@ -103,10 +108,14 @@ impl DesktopFlow {
 
         link.send_shutdown().await.ok();
 
-        // After a transaction the phone may send linking data in update
-        // messages (if the QR advertised supports_linking). Keep listening
-        // briefly; the phone closes the tunnel when done.
-        let updates = collect_updates(&mut link, std::time::Duration::from_secs(15)).await;
+        // Only when linking was advertised is it worth staying on the tunnel
+        // to catch update messages; the CTAP reply above is already complete
+        // and is returned as soon as this function returns.
+        let updates = if self.supports_linking {
+            collect_updates(&mut link, std::time::Duration::from_secs(15)).await
+        } else {
+            Vec::new()
+        };
 
         Ok(DesktopResult {
             post_handshake,

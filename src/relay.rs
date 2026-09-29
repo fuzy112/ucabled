@@ -30,11 +30,14 @@ pub async fn run_qr_transaction(
     let mut qr_secret = [0u8; 16];
     OsRng.fill_bytes(&mut qr_secret);
 
+    // Linking is shelved (iOS does not implement it, see docs/linking.md), so
+    // do not advertise it and do not stay on the tunnel after the reply.
+    let supports_linking = false;
     let qr_url = qr::encode_qr_url(
         compressed,
         &qr_secret,
         NUM_ASSIGNED_TUNNEL_DOMAINS,
-        false,
+        supports_linking,
         request_type,
     );
     on_qr(&qr_url);
@@ -54,6 +57,7 @@ pub async fn run_qr_transaction(
         qr_secret,
         identity,
         plaintext_eid,
+        supports_linking,
     };
     let result = flow.run(ctap_command).await?;
     Ok(result.ctap_reply)

@@ -110,6 +110,9 @@ async fn main() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
+        // The spike advertises linking (for L0 testing), so it is willing to
+        // stay on the tunnel after the reply to catch update messages.
+        supports_linking: true,
     };
     let result = flow.run(&cmd).await?;
 
