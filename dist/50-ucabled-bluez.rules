@@ -1,0 +1,6 @@
+// Allow the non-session ucabled service user to drive the Bluetooth adapter.
+polkit.addRule(function(action, subject) {
+  if (action.id.indexOf("org.bluez.") === 0 && subject.user === "ucabled") {
+    return polkit.Result.YES;
+  }
+});

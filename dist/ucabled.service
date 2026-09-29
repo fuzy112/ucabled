@@ -7,11 +7,11 @@ After=bluetooth.target
 
 [Service]
 ExecStart=/usr/local/bin/ucabled
+User=ucabled
+Group=ucabled
 Restart=on-failure
 
-# The daemon parses untrusted network/BLE input and spawns the QR helper,
-# which needs the Wayland socket (in XDG_RUNTIME_DIR), /dev/dri for wgpu and
-# /dev/uhid, so no PrivateDevices/DevicePolicy here.
+# The daemon only needs /dev/uhid plus the system bus and the network.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -28,10 +28,15 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK
+DevicePolicy=closed
+DeviceAllow=/dev/uhid rw
 UMask=0077
 LimitCORE=0
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

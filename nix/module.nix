@@ -8,6 +8,43 @@
 
 let
   cfg = config.services.ucabled;
+
+  # D-Bus system policy: the daemon owns org.ucabled and may call the session
+  # agent back (to a unique name); local users may call the daemon.
+  dbusPolicy = pkgs.writeTextDir "share/dbus-1/system.d/org.ucabled.conf" ''
+    <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+     "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+    <busconfig>
+      <policy user="ucabled">
+        <allow own="org.ucabled"/>
+        <allow send_destination="*"/>
+        <allow receive_sender="*"/>
+      </policy>
+      <policy context="default">
+        <allow send_destination="org.ucabled"/>
+      </policy>
+    </busconfig>
+  '';
+
+  # Only the active local session may register a prompter.
+  polkitAction = pkgs.writeTextDir "share/polkit-1/actions/org.ucabled.policy" ''
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE policyconfig PUBLIC
+     "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+     "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+    <policyconfig>
+      <vendor>ucabled</vendor>
+      <action id="org.ucabled.register-prompter">
+        <description>Register the phone passkey dialog</description>
+        <message>Authentication is required to show passkey prompts</message>
+        <defaults>
+          <allow_any>no</allow_any>
+          <allow_inactive>no</allow_inactive>
+          <allow_active>yes</allow_active>
+        </defaults>
+      </action>
+    </policyconfig>
+  '';
 in
 {
   options.services.ucabled = {
@@ -22,35 +59,52 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # The daemon creates a virtual HID device; the uaccess tag lets the
-    # active seat's user open /dev/uhid. The resulting hidraw node gets
-    # uaccess via systemd's 60-fido-id.rules + 70-uaccess.rules.
-    #
-    # SECURITY: /dev/uhid access lets any process of that user create
-    # arbitrary virtual HID devices (including a keyboard), not just this
-    # FIDO device. See the note in README.md to narrow it to a group.
     boot.kernelModules = [ "uhid" ];
-    services.udev.extraRules = ''KERNEL=="uhid", TAG+="uaccess"'';
 
-    # BLE advert reception is cryptographically mandatory for caBLE
-    # (proof of proximity); without bluetoothd every transaction fails.
-    # mkDefault so hosts with Bluetooth deliberately off can override.
+    # SECURITY: /dev/uhid lets a process create arbitrary virtual HID devices
+    # (including a keyboard). Grant it only to the dedicated service account;
+    # the human user only needs the resulting hidraw node, which picks up
+    # uaccess from systemd's FIDO/uaccess rules.
+    services.udev.extraRules = ''KERNEL=="uhid", GROUP="ucabled", MODE="0660"'';
+
+    # BLE advert reception is cryptographically mandatory for caBLE.
     hardware.bluetooth.enable = lib.mkDefault true;
 
-    systemd.user.services.ucabled = {
+    # Registration authorization goes through polkit.
+    security.polkit.enable = true;
+
+    users.groups.ucabled = { };
+    users.users.ucabled = {
+      isSystemUser = true;
+      group = "ucabled";
       description = "Phone Passkey Bridge";
-      # Order after the session's bluetooth.target (active when an adapter is
-      # present). Wants, not Requires: the daemon must still start without
-      # Bluetooth — caBLE transactions fail individually in that case.
-      wantedBy = [ "default.target" ];
+    };
+
+    services.dbus.packages = [ dbusPolicy ];
+    environment.systemPackages = [ polkitAction ];
+
+    # Let the daemon drive the Bluetooth adapter even though it is not part of
+    # an active session.
+    security.polkit.extraConfig = ''
+      polkit.addRule(function(action, subject) {
+        if (action.id.indexOf("org.bluez.") === 0 && subject.user === "ucabled") {
+          return polkit.Result.YES;
+        }
+      });
+    '';
+
+    systemd.services.ucabled = {
+      description = "Phone Passkey Bridge (virtual FIDO2 device relaying to a phone via caBLE v2)";
+      # Wants, not Requires: the daemon must still start without Bluetooth.
+      wantedBy = [ "multi-user.target" ];
       wants = [ "bluetooth.target" ];
       after = [ "bluetooth.target" ];
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/ucabled";
+        User = "ucabled";
+        Group = "ucabled";
         Restart = "on-failure";
-        # The daemon parses untrusted network/BLE input and spawns the QR
-        # helper, which needs the Wayland socket (XDG_RUNTIME_DIR), /dev/dri
-        # for wgpu and /dev/uhid, so no PrivateDevices/DevicePolicy here.
+        # The daemon only needs /dev/uhid plus the system bus and the network.
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
@@ -67,7 +121,10 @@ in
         RestrictRealtime = true;
         RestrictSUIDSGID = true;
         LockPersonality = true;
+        MemoryDenyWriteExecute = true;
         SystemCallArchitectures = "native";
+        SystemCallFilter = [ "@system-service" ];
+        CapabilityBoundingSet = [ "" ];
         RestrictAddressFamilies = [
           "AF_UNIX"
           "AF_INET"
@@ -75,8 +132,22 @@ in
           "AF_BLUETOOTH"
           "AF_NETLINK"
         ];
+        DevicePolicy = "closed";
+        DeviceAllow = [ "/dev/uhid rw" ];
         UMask = "0077";
         LimitCORE = 0;
+      };
+    };
+
+    # Per-user UI agent, enabled for every user; polkit decides who may
+    # actually register (the active local session only).
+    systemd.user.services.ucabled-ui = {
+      description = "Phone Passkey Bridge UI agent";
+      wantedBy = [ "default.target" ];
+      serviceConfig = {
+        ExecStart = "${cfg.package}/bin/ucabled-ui";
+        Restart = "on-failure";
+        NoNewPrivileges = true;
       };
     };
   };

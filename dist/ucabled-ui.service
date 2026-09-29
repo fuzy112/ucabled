@@ -1,0 +1,10 @@
+[Unit]
+Description=Phone Passkey Bridge UI agent
+
+[Service]
+ExecStart=/usr/local/bin/ucabled-ui
+Restart=on-failure
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
