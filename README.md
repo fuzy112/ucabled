@@ -89,6 +89,30 @@ the window or click Cancel to abort.
 - Cancel/timeout/disconnect are mapped back to Firefox as the proper CTAP
   error codes.
 
+## Security
+
+- The host keeps no key material: the private key and every FIDO operation
+  stay on the phone. The daemon is a relay; the tunnel carries end-to-end
+  encrypted CTAP (Noise KNpsk0, AES-256-GCM), so the tunnel server sees only
+  ciphertext, and the BLE advert is a cryptographic proximity proof.
+- The transaction secret (in the QR code) is shown on screen and handed to the
+  QR helper over a pipe, not via its command line. It is a short-lived,
+  single-transaction bearer token: treat the screen as sensitive until the
+  transaction ends.
+- **`/dev/uhid` access is broad.** The udev rule uses the seat's `uaccess` tag,
+  which lets *any* process of the logged-in user create arbitrary virtual HID
+  devices — including a virtual keyboard, i.e. input injection. On a machine
+  where that user runs untrusted code, this is already a strong capability. To
+  narrow it from "whoever holds the active seat" to a chosen account, replace
+  the rule with
+
+  ```
+  KERNEL=="uhid", GROUP="ucabled", MODE="0660"
+  ```
+
+  create the `ucabled` group, and add only the account that runs the daemon to
+  it (then re-login or run `udevadm control --reload`).
+
 ## Troubleshooting
 
 | Symptom | Fix |

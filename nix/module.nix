@@ -25,6 +25,10 @@ in
     # The daemon creates a virtual HID device; the uaccess tag lets the
     # active seat's user open /dev/uhid. The resulting hidraw node gets
     # uaccess via systemd's 60-fido-id.rules + 70-uaccess.rules.
+    #
+    # SECURITY: /dev/uhid access lets any process of that user create
+    # arbitrary virtual HID devices (including a keyboard), not just this
+    # FIDO device. See the note in README.md to narrow it to a group.
     boot.kernelModules = [ "uhid" ];
     services.udev.extraRules = ''KERNEL=="uhid", TAG+="uaccess"'';
 

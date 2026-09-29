@@ -43,6 +43,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | NFR-4 | NixOS 可打包（flake），附 udev 规则与 uhid 内核模块配置 |
 | NFR-5 | 纯 Rust 实现；BLE 使用 bluer（BlueZ D-Bus） |
 | NFR-6 | 安全默认值：pairing 状态文件权限 0600；日志只记命令字与长度，不落 CBOR payload 原文（含 clientDataHash、rpId 等敏感上下文） |
+| NFR-7 | 文档化 `/dev/uhid` 的权限含义：`uaccess` 授予 seat 用户的**任意**进程创建虚拟 HID 设备（含键盘/输入注入）的能力，并非仅限本设备的 FIDO 用途；多用户或不可信进程环境下应改用专用 group 收窄到指定账户（见 README Security） |
 
 ### 2.3 非目标（Non-goals）
 
