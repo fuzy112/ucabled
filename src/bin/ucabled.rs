@@ -128,10 +128,13 @@ async fn daemon_loop(notifier: Notifier, mut cancel_rx: mpsc::UnboundedReceiver<
                                     continue;
                                 }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
+                                let transports_hint =
+                                    ucabled::ctap::request_has_transport_hints(&payload);
                                 tracing::info!(
                                     ?rp,
                                     cmd = %format_args!("{:#04x}", payload.first().copied().unwrap_or(0)),
                                     len = payload.len(),
+                                    transports_hint,
                                     "starting caBLE transaction"
                                 );
                                 // iOS requires rp.name / user.displayName;
