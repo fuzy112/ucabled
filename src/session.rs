@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use p256::SecretKey;
+use std::time::Duration;
 
 use crate::eid;
 use crate::error::TransactionError;
@@ -7,6 +8,12 @@ use crate::handshake::HandshakeInitiator;
 use crate::kdf::{derive, Purpose};
 use crate::phone::{CableLink, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
 use crate::tunnel::{self, decode_tunnel_server_domain};
+
+/// The phone sends the post-handshake message right after the handshake.
+const POST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound for the phone's answer to one CTAP command; the user may still
+/// be confirming on the phone. Firefox gives the whole operation 5 minutes.
+const CTAP_REPLY_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub struct DesktopFlow {
     /// e.g. "wss://cable.ua5v.com" or "ws://127.0.0.1:9000" for tests.
@@ -79,15 +86,25 @@ impl DesktopFlow {
             handshake_hash,
         };
 
-        let post_handshake = recv_raw(&mut link).await.map_err(TransactionError::transport)?;
+        let post_handshake = tokio::time::timeout(POST_HANDSHAKE_TIMEOUT, recv_raw(&mut link))
+            .await
+            .map_err(|_| TransactionError::Timeout)?
+            .map_err(TransactionError::transport)?;
         tracing::info!(len = post_handshake.len(), "received post-handshake message");
 
         link.send_ctap(ctap_command)
             .await
             .map_err(TransactionError::transport)?;
 
+        // A single deadline for the whole reply wait: the tunnel server is not
+        // trusted and must not be able to keep the transaction alive forever
+        // by trickling update messages.
+        let reply_deadline = tokio::time::Instant::now() + CTAP_REPLY_TIMEOUT;
         let ctap_reply = loop {
-            let (ty, payload) = link.recv_message().await.map_err(TransactionError::transport)?;
+            let (ty, payload) = tokio::time::timeout_at(reply_deadline, link.recv_message())
+                .await
+                .map_err(|_| TransactionError::Timeout)?
+                .map_err(TransactionError::transport)?;
             match ty {
                 MSG_CTAP => break payload,
                 MSG_UPDATE => {

@@ -22,6 +22,15 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub const ASSIGNED_TUNNEL_DOMAINS: [&str; 2] = ["cable.ua5v.com", "cable.auth.com"];
 
+/// Upper bound for a single tunnel frame. CTAP payloads are at most
+/// `ctaphid::MAX_PAYLOAD` (7609 B) plus framing, so 64 KiB is already
+/// generous; the tunnel server is not trusted and must not be able to make
+/// the daemon allocate arbitrary amounts of memory.
+pub const MAX_FRAME_SIZE: usize = 64 * 1024;
+
+/// How long to wait for the tunnel websocket handshake (per redirect hop).
+pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     if encoded < 256 {
         return ASSIGNED_TUNNEL_DOMAINS
@@ -76,9 +85,9 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
         request
             .headers_mut()
             .insert("Sec-WebSocket-Protocol", WS_SUBPROTOCOL.parse().unwrap());
-        match connect_async(request).await {
-            Ok(ok) => return Ok(ok),
-            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+        match tokio::time::timeout(DIAL_TIMEOUT, connect_async(request)).await {
+            Ok(Ok(ok)) => return Ok(ok),
+            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
                 let status = response.status();
                 let location = response
                     .headers()
@@ -94,7 +103,8 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
                     _ => return Err(anyhow!("tunnel websocket HTTP error: {status}")),
                 }
             }
-            Err(e) => return Err(anyhow!("tunnel websocket connect failed: {e}")),
+            Ok(Err(e)) => return Err(anyhow!("tunnel websocket connect failed: {e}")),
+            Err(_elapsed) => return Err(anyhow!("tunnel websocket connect timed out")),
         }
     }
     Err(anyhow!("too many tunnel redirects"))
@@ -108,7 +118,12 @@ pub async fn write_binary(ws: &mut Ws, data: Vec<u8>) -> Result<()> {
 pub async fn read_binary(ws: &mut Ws) -> Result<Vec<u8>> {
     loop {
         match ws.next().await {
-            Some(Ok(Message::Binary(data))) => return Ok(data.to_vec()),
+            Some(Ok(Message::Binary(data))) => {
+                if data.len() > MAX_FRAME_SIZE {
+                    bail!("tunnel frame too large: {} bytes", data.len());
+                }
+                return Ok(data.to_vec());
+            }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => bail!("tunnel websocket closed"),
             Some(Ok(other)) => bail!("unexpected websocket frame: {other:?}"),
