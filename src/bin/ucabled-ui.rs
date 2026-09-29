@@ -7,9 +7,10 @@
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use dbus::blocking::Connection;
@@ -20,7 +21,7 @@ use dbus_crossroads::Crossroads;
 use ucabled::prompter::{BUS_NAME, ERR_NOT_AUTHORIZED, PROMPTER_INTERFACE, UI_INTERFACE, UI_PATH};
 
 const PROMPTER_PATH: &str = "/org/ucabled/Prompter";
-const REREGISTER_INTERVAL: Duration = Duration::from_secs(10);
+const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 
 type ChildSlot = Arc<Mutex<Option<Child>>>;
 
@@ -91,18 +92,8 @@ fn main() -> Result<()> {
     });
     crossroads.insert(PROMPTER_PATH, &[iface], ());
 
-    // Register with the daemon, retrying while it is not up yet. The
-    // registration must go over `conn` itself: the daemon calls the prompter
-    // back at the sender's unique name, which dies with the connection.
-    if !register_blocking(&conn) {
-        tracing::info!("registration refused; this session is not the active one");
-        return Ok(());
-    }
-
-    tracing::info!("prompter registered at {PROMPTER_PATH}");
-
-    // Serve the prompter and, on the very same connection, periodically
-    // re-register (the daemon may have restarted) and report cancellations.
+    // Serve the prompter and report cancellations on the very same
+    // connection, so the daemon always sees the sender's unique name.
     conn.start_receive(
         MatchRule::new_method_call(),
         Box::new(move |msg, conn| {
@@ -111,17 +102,38 @@ fn main() -> Result<()> {
         }),
     );
 
-    let mut last_register = Instant::now();
+    // Re-register whenever the daemon (re)appears: a restart clears its
+    // in-memory prompter slot, and only this signal tells us about it.
+    let reregister = Arc::new(AtomicBool::new(false));
+    {
+        let reregister = reregister.clone();
+        conn.add_match(
+            MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged"),
+            move |(name, _old_owner, new_owner): (String, String, String), _conn, _msg| {
+                if name == BUS_NAME && !new_owner.is_empty() {
+                    tracing::info!("daemon appeared on the bus, re-registering");
+                    reregister.store(true, Ordering::SeqCst);
+                }
+                true
+            },
+        )?;
+    }
+
+    // Register with the daemon, retrying while it is not up yet.
+    if !register_blocking(&conn) {
+        tracing::info!("registration refused; this session is not the active one");
+        return Ok(());
+    }
+
+    tracing::info!("prompter registered at {PROMPTER_PATH}");
+
     loop {
         conn.process(Duration::from_millis(200))?;
         while let Ok(tid) = cancel_rx.try_recv() {
             notify_cancelled(&conn, tid);
         }
-        if last_register.elapsed() >= REREGISTER_INTERVAL {
-            last_register = Instant::now();
-            if !register_once(&conn).unwrap_or(false) {
-                child.lock().unwrap().take();
-            }
+        if reregister.swap(false, Ordering::SeqCst) && !register_once(&conn).unwrap_or(false) {
+            child.lock().unwrap().take();
         }
     }
 }

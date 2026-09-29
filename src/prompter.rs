@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::blocking::{Connection, Proxy};
+use dbus::message::MatchRule;
 use dbus::Path;
 use dbus_crossroads::{Crossroads, MethodErr};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -260,6 +261,21 @@ fn service_thread(cancel_tx: UnboundedSender<()>, slot: Arc<Mutex<PrompterSlot>>
     });
     crossroads.insert(UI_PATH, &[iface], ());
 
+    // Drop a stale prompter the moment its connection goes away: the bus
+    // emits NameOwnerChanged(name=":1.x", new_owner="") on disconnect.
+    {
+        let slot = slot.clone();
+        conn.add_match(
+            MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged").with_sender(DBUS_BUS),
+            move |(name, _old_owner, new_owner): (String, String, String), _conn, _msg| {
+                if new_owner.is_empty() {
+                    clear_if_matches(&slot, Some(&name));
+                }
+                true
+            },
+        )?;
+    }
+
     tracing::info!("listening on {BUS_NAME} ({UI_INTERFACE})");
     crossroads.serve(&conn)?;
     Ok(())
@@ -310,10 +326,27 @@ fn dispatch_thread(
         };
         if let Err(e) = result {
             tracing::warn!("prompter call failed: {e}");
-            clear_if_matches(&slot, Some(&prompter.destination));
+            // The NameOwnerChanged watch normally drops a dead prompter
+            // first; this is a fallback in case that signal was missed. Do
+            // not clear on timeouts or other transient failures.
+            if prompter_gone(&e) {
+                clear_if_matches(&slot, Some(&prompter.destination));
+            }
         }
     }
     Ok(())
+}
+
+/// Whether a call error means the prompter's connection is gone for good.
+fn prompter_gone(e: &dbus::Error) -> bool {
+    matches!(
+        e.name(),
+        Some(
+            "org.freedesktop.DBus.Error.NameHasNoOwner"
+                | "org.freedesktop.DBus.Error.ServiceUnknown"
+                | "org.freedesktop.DBus.Error.Disconnected"
+        )
+    )
 }
 
 #[cfg(test)]
@@ -342,5 +375,23 @@ mod tests {
         assert!(client.available());
         clear_if_matches(&slot, Some(":1.7"));
         assert!(!client.available());
+    }
+
+    #[test]
+    fn only_peer_gone_errors_clear_the_prompter() {
+        for name in [
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.Disconnected",
+        ] {
+            assert!(prompter_gone(&dbus::Error::new_custom(name, "gone")));
+        }
+        for name in [
+            "org.freedesktop.DBus.Error.NoReply",
+            "org.freedesktop.DBus.Error.TimedOut",
+            "org.freedesktop.DBus.Error.UnknownMethod",
+        ] {
+            assert!(!prompter_gone(&dbus::Error::new_custom(name, "transient")));
+        }
     }
 }
