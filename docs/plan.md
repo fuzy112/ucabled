@@ -319,3 +319,5 @@ INVALID_OPTION，可接受、可迭代。
 `tunnel_server_client`、v2 handshake）
 - 虚拟设备先例：token2-fido-bridge、tpm-fido、virtual-fido、soft-fido2(passless)
 - 同生态项目：linux-credentials（credentialsd / libwebauthn）
+- 同域实现与可借鉴点：cable-uhid-bridge（同目标的平行实现，已验 iPhone +
+  Android）、passkeyd（本机软件认证器）——见 docs/prior-art.md
