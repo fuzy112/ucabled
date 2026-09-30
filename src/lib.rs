@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod cbor;
 pub mod crypter;
 pub mod ctap;
 pub mod ctaphid;
@@ -21,7 +22,7 @@ pub mod ui;
 #[cfg(feature = "ble")]
 pub mod ble;
 
-pub const NUM_ASSIGNED_TUNNEL_DOMAINS: u8 = 2;
+pub const NUM_ASSIGNED_TUNNEL_DOMAINS: u8 = tunnel::ASSIGNED_TUNNEL_DOMAINS.len() as u8;
 pub const WS_SUBPROTOCOL: &str = "fido.cable";
 pub const CABLE_BLE_UUID: &str = "0000fff9-0000-1000-8000-00805f9b34fb";
 

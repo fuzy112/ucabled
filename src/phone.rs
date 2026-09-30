@@ -4,6 +4,8 @@ use anyhow::{bail, Context, Result};
 use rand::rngs::OsRng;
 use rand::RngCore;
 
+use crate::cbor;
+use crate::ctap;
 use crate::crypter::Crypter;
 use crate::eid;
 use crate::handshake;
@@ -86,7 +88,7 @@ pub async fn phone_setup(
     let components = eid::EidComponents {
         nonce,
         routing_id,
-        tunnel_server_domain: 0,
+        tunnel_server_domain: tunnel::ASSIGNED_DOMAIN_GOOGLE,
     };
     let plaintext_eid = eid::plaintext_from_components(&components);
     let advert = eid::encrypt(&plaintext_eid, &eid_key);
@@ -124,8 +126,10 @@ pub async fn phone_run(
         handshake_hash,
     };
 
-    let mut post = vec![0xa1, 0x01];
-    post.extend(cbor_bytestring(getinfo_reply));
+    let mut post = Vec::new();
+    cbor::map(&mut post, 1);
+    cbor::uint(&mut post, 1);
+    cbor::bytes(&mut post, getinfo_reply);
     // The post-handshake message is not typed; it is sent as a raw encrypted
     // frame whose plaintext is the CBOR map itself.
     send_raw(&mut link, &post).await?;
@@ -157,35 +161,10 @@ async fn send_raw(link: &mut CableLink, plaintext: &[u8]) -> Result<()> {
     tunnel::write_binary(&mut link.ws, ct).await
 }
 
-fn cbor_bytestring(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let len = data.len();
-    if len < 24 {
-        out.push(0x40 | len as u8);
-    } else if len <= 0xff {
-        out.extend_from_slice(&[0x58, len as u8]);
-    } else if len <= 0xffff {
-        out.push(0x59);
-        out.extend_from_slice(&(len as u16).to_be_bytes());
-    } else {
-        out.push(0x5a);
-        out.extend_from_slice(&(len as u32).to_be_bytes());
-    }
-    out.extend_from_slice(data);
-    out
-}
-
 fn canned_ctap_reply(command: &[u8]) -> Vec<u8> {
-    if command.first() == Some(&0x04) {
-        // authenticatorGetInfo: success + minimal map {1: ["FIDO_2_0"], 3: aaguid}
-        let mut reply = vec![0x00, 0xa2, 0x01, 0x81, 0x68];
-        reply.extend_from_slice(b"FIDO_2_0");
-        reply.push(0x03);
-        reply.push(0x50);
-        reply.extend_from_slice(&[0u8; 16]);
-        reply
+    if command.first() == Some(&ctap::CMD_GET_INFO) {
+        ctap::mock_getinfo_response()
     } else {
-        // CTAP2_ERR_INVALID_COMMAND for anything else.
-        vec![0x01]
+        vec![ctap::CTAP1_ERR_INVALID_COMMAND]
     }
 }

@@ -1,51 +1,102 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::cbor;
+
 /// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
 /// identity consistent across daemon restarts; the real attestation AAGUID
 /// still comes from the phone.
 pub const AAGUID: [u8; 16] = *b"ucabled-aaguid01";
 
+// CTAP2 command bytes (CTAP 2.2 §6).
+pub const CMD_MAKE_CREDENTIAL: u8 = 0x01;
+pub const CMD_GET_ASSERTION: u8 = 0x02;
+pub const CMD_GET_INFO: u8 = 0x04;
+
+// CTAP status bytes (CTAP 2.2 §8.2) used on this relay.
+pub const CTAP2_OK: u8 = 0x00;
+pub const CTAP1_ERR_INVALID_COMMAND: u8 = 0x01;
+pub const CTAP1_ERR_TIMEOUT: u8 = 0x05;
+pub const CTAP2_ERR_CBOR_UNEXPECTED_TYPE: u8 = 0x11;
+pub const CTAP2_ERR_INVALID_OPTION: u8 = 0x2c;
+pub const CTAP2_ERR_KEEPALIVE_CANCEL: u8 = 0x2d;
+pub const CTAP2_ERR_NO_CREDENTIALS: u8 = 0x2e;
+pub const CTAP2_ERR_PIN_NOT_SET: u8 = 0x35;
+
+// Map keys of the CTAP2 requests parsed locally (CTAP 2.2 §6.1/§6.2).
+const MC_KEY_RP: u64 = 2;
+const MC_KEY_USER: u64 = 3;
+const GA_KEY_RPID: u64 = 1;
+const GA_KEY_ALLOW_LIST: u64 = 3;
+const GA_KEY_OPTIONS: u64 = 5;
+
+// Map keys of the getInfo response built locally (CTAP 2.2 §6.4).
+const GETINFO_KEY_VERSIONS: u64 = 1;
+const GETINFO_KEY_AAGUID: u64 = 3;
+const GETINFO_KEY_OPTIONS: u64 = 4;
+const GETINFO_KEY_MAX_MSG_SIZE: u64 = 5;
+const GETINFO_KEY_TRANSPORTS: u64 = 9;
+
+// Map keys of the getAssertion response built locally (CTAP 2.2 §6.2).
+const GA_RESP_KEY_CREDENTIAL: u64 = 1;
+const GA_RESP_KEY_AUTH_DATA: u64 = 2;
+const GA_RESP_KEY_SIGNATURE: u64 = 3;
+
+// Synthetic assertion fields (see `fake_silent_assertion`).
+/// authData flags byte: user presence and user verification unset.
+const AUTH_DATA_FLAGS: u8 = 0x00;
+/// Signature counter width in authData.
+const AUTH_DATA_SIGN_COUNTER_LEN: usize = 4;
+/// Placeholder (all-zero) signature length.
+const DUMMY_SIGNATURE_LEN: usize = 8;
+
+/// GetInfo advertises this maxMsgSize (CTAP 2.2 §6.4 default upper bound).
+pub const MAX_MSG_SIZE: u64 = 7609;
+
 /// authenticatorGetInfo response (status byte + canonical CBOR map).
 ///
 /// Advertised per FR-5: FIDO_2_0 only (no U2F_V2), rk/up/uv, no clientPin,
-/// maxMsgSize 7609, transports ["hybrid"].
+/// maxMsgSize [`MAX_MSG_SIZE`], transports ["hybrid"].
 pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
-    let mut out = vec![0x00]; // CTAP2 success status
+    let mut out = vec![CTAP2_OK];
 
-    out.push(0xa5); // map(5)
+    cbor::map(&mut out, 5);
 
-    // 1: versions
-    out.push(0x01);
-    out.push(0x81); // array(1)
-    out.push(0x68);
-    out.extend_from_slice(b"FIDO_2_0");
+    cbor::uint(&mut out, GETINFO_KEY_VERSIONS);
+    cbor::array(&mut out, 1);
+    cbor::text(&mut out, "FIDO_2_0");
 
-    // 3: aaguid
-    out.push(0x03);
-    out.push(0x50);
-    out.extend_from_slice(aaguid);
+    cbor::uint(&mut out, GETINFO_KEY_AAGUID);
+    cbor::bytes(&mut out, aaguid);
 
-    // 4: options {rk, up, uv}
-    out.push(0x04);
-    out.push(0xa3);
-    for key in [b"rk", b"up", b"uv"] {
-        out.push(0x62);
-        out.extend_from_slice(key);
-        out.push(0xf5);
+    cbor::uint(&mut out, GETINFO_KEY_OPTIONS);
+    cbor::map(&mut out, 3);
+    for key in ["rk", "up", "uv"] {
+        cbor::text(&mut out, key);
+        out.push(cbor::TRUE);
     }
 
-    // 5: maxMsgSize = 7609. Must be minimally encoded (0x19 0x1d 0xb9):
-    // Chromium's CBOR reader rejects non-minimal integers, which would
-    // invalidate the whole getInfo response and drop the device.
-    out.push(0x05);
-    encode_uint(&mut out, 7609);
+    // Must be minimally encoded: Chromium's CBOR reader rejects non-minimal
+    // integers and would drop the whole device on a bad getInfo.
+    cbor::uint(&mut out, GETINFO_KEY_MAX_MSG_SIZE);
+    cbor::uint(&mut out, MAX_MSG_SIZE);
 
-    // 9: transports
-    out.push(0x09);
-    out.push(0x81);
-    out.push(0x66);
-    out.extend_from_slice(b"hybrid");
+    cbor::uint(&mut out, GETINFO_KEY_TRANSPORTS);
+    cbor::array(&mut out, 1);
+    cbor::text(&mut out, "hybrid");
 
+    out
+}
+
+/// Minimal getInfo-shaped response ({versions, aaguid}) used only by the mock
+/// phone and local relay tests, not by the real device.
+pub fn mock_getinfo_response() -> Vec<u8> {
+    let mut out = vec![CTAP2_OK];
+    cbor::map(&mut out, 2);
+    cbor::uint(&mut out, GETINFO_KEY_VERSIONS);
+    cbor::array(&mut out, 1);
+    cbor::text(&mut out, "FIDO_2_0");
+    cbor::uint(&mut out, GETINFO_KEY_AAGUID);
+    cbor::bytes(&mut out, &[0u8; 16]);
     out
 }
 
@@ -61,14 +112,14 @@ pub fn extract_rp_id(command: &[u8]) -> Option<String> {
     let pairs = c.map_header()?;
     // makeCredential: key 2 = rp entity map; getAssertion: key 1 = rpId.
     let wanted = match cmd {
-        0x01 => 2,
-        0x02 => 1,
+        CMD_MAKE_CREDENTIAL => MC_KEY_RP,
+        CMD_GET_ASSERTION => GA_KEY_RPID,
         _ => return None,
     };
     let mut rp_id = None;
     for _ in 0..pairs {
         let key = c.uint()?;
-        if key == wanted && cmd == 0x01 {
+        if key == wanted && cmd == CMD_MAKE_CREDENTIAL {
             let inner_pairs = c.map_header()?;
             for _ in 0..inner_pairs {
                 let k = c.text()?;
@@ -78,35 +129,13 @@ pub fn extract_rp_id(command: &[u8]) -> Option<String> {
                     c.skip_value()?;
                 }
             }
-        } else if key == wanted && cmd == 0x02 {
+        } else if key == wanted && cmd == CMD_GET_ASSERTION {
             rp_id = Some(c.text()?);
         } else {
             c.skip_value()?;
         }
     }
     rp_id
-}
-
-fn encode_text(out: &mut Vec<u8>, s: &str) {
-    let len = s.len();
-    if len < 24 {
-        out.push(0x60 | len as u8);
-    } else if len <= 0xff {
-        out.extend_from_slice(&[0x78, len as u8]);
-    } else {
-        out.push(0x79);
-        out.extend_from_slice(&(len as u16).to_be_bytes());
-    }
-    out.extend_from_slice(s.as_bytes());
-}
-
-fn encode_map_header(out: &mut Vec<u8>, n: u64) {
-    if n < 24 {
-        out.push(0xa0 | n as u8);
-    } else {
-        out.push(0xb8);
-        out.push(n as u8);
-    }
 }
 
 /// Rebuild a CBOR map of text keys adding `add_key`/`add_value` if absent,
@@ -137,11 +166,11 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
     entries.sort_by(|a, b| (a.0.len(), &a.0).cmp(&(b.0.len(), &b.0)));
 
     let mut out = Vec::new();
-    encode_map_header(&mut out, entries.len() as u64);
+    cbor::map(&mut out, entries.len() as u64);
     for (k, span) in entries {
-        encode_text(&mut out, &k);
+        cbor::text(&mut out, &k);
         if k == add_key {
-            encode_text(&mut out, add_value);
+            cbor::text(&mut out, add_value);
         } else {
             out.extend_from_slice(&data[span]);
         }
@@ -155,7 +184,7 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
 /// credentials present on this device. A phone cannot answer silently, so
 /// the daemon answers locally with `fake_silent_assertion`.
 pub fn is_silent_probe(command: &[u8]) -> bool {
-    let Some((&0x02, params)) = command.split_first() else {
+    let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
         return false;
     };
     let mut c = CborCursor {
@@ -167,7 +196,7 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
     };
     for _ in 0..pairs {
         let Some(key) = c.uint() else { return false };
-        if key == 5 {
+        if key == GA_KEY_OPTIONS {
             // options map
             let Some(inner) = c.map_header() else {
                 return false;
@@ -176,7 +205,7 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
                 let Some(k) = c.text() else { return false };
                 if k == "up" {
                     let Some(b) = c.byte() else { return false };
-                    return b == 0xf4; // false
+                    return b == cbor::FALSE;
                 }
                 if c.skip_value().is_none() {
                     return false;
@@ -203,7 +232,7 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
 pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
     use sha2::{Digest, Sha256};
 
-    let Some((&0x02, params)) = command.split_first() else {
+    let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
         return None;
     };
     let mut c = CborCursor {
@@ -217,14 +246,14 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
     for _ in 0..pairs {
         let key = c.uint()?;
         match key {
-            1 => rp_id = Some(c.text()?),
-            3 => {
+            GA_KEY_RPID => rp_id = Some(c.text()?),
+            GA_KEY_ALLOW_LIST => {
                 // allowList: array of credential descriptor maps
                 let b = c.byte()?;
-                if b >> 5 != 4 {
+                if b >> 5 != cbor::MAJOR_ARRAY {
                     return None;
                 }
-                let n = c.argument(b & 0x1f)?;
+                let n = c.argument(b & cbor::ARG_MASK)?;
                 if n == 0 {
                     return None;
                 }
@@ -235,10 +264,10 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
                     let k = c.text()?;
                     if k == "id" {
                         let b = c.byte()?;
-                        if b >> 5 != 2 {
+                        if b >> 5 != cbor::MAJOR_BYTES {
                             return None;
                         }
-                        let len = c.argument(b & 0x1f)? as usize;
+                        let len = c.argument(b & cbor::ARG_MASK)? as usize;
                         cred_id = Some(c.take(len)?.to_vec());
                     } else {
                         c.skip_value()?;
@@ -259,38 +288,23 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
 
     // authData = rpIdHash || flags(0) || counter(0)
     let mut auth_data = Sha256::digest(rp_id.as_bytes()).to_vec();
-    auth_data.push(0x00);
-    auth_data.extend_from_slice(&[0, 0, 0, 0]);
+    auth_data.push(AUTH_DATA_FLAGS); // no UP/UV bits
+    auth_data.extend_from_slice(&[0u8; AUTH_DATA_SIGN_COUNTER_LEN]);
 
-    let mut out = vec![0x00]; // CTAP2 success
-    out.push(0xa3); // map(3)
-                    // 1: credential descriptor {"id": cred_id, "type": "public-key"}
-    out.push(0x01);
-    out.push(0xa2);
-    encode_text(&mut out, "id");
-    encode_bstr(&mut out, &cred_id);
-    encode_text(&mut out, "type");
-    encode_text(&mut out, "public-key");
-    // 2: authData
-    out.push(0x02);
-    encode_bstr(&mut out, &auth_data);
-    // 3: signature (dummy)
-    out.push(0x03);
-    encode_bstr(&mut out, &[0u8; 8]);
+    let mut out = vec![CTAP2_OK];
+    cbor::map(&mut out, 3);
+    // credential descriptor {"id": cred_id, "type": "public-key"}
+    cbor::uint(&mut out, GA_RESP_KEY_CREDENTIAL);
+    cbor::map(&mut out, 2);
+    cbor::text(&mut out, "id");
+    cbor::bytes(&mut out, &cred_id);
+    cbor::text(&mut out, "type");
+    cbor::text(&mut out, "public-key");
+    cbor::uint(&mut out, GA_RESP_KEY_AUTH_DATA);
+    cbor::bytes(&mut out, &auth_data);
+    cbor::uint(&mut out, GA_RESP_KEY_SIGNATURE);
+    cbor::bytes(&mut out, &[0u8; DUMMY_SIGNATURE_LEN]);
     Some(out)
-}
-
-fn encode_bstr(out: &mut Vec<u8>, data: &[u8]) {
-    let len = data.len();
-    if len < 24 {
-        out.push(0x40 | len as u8);
-    } else if len <= 0xff {
-        out.extend_from_slice(&[0x58, len as u8]);
-    } else {
-        out.push(0x59);
-        out.extend_from_slice(&(len as u16).to_be_bytes());
-    }
-    out.extend_from_slice(data);
 }
 
 /// Detect Firefox's "make me blink" dummy makeCredential, which Firefox sends
@@ -308,7 +322,7 @@ pub fn is_blink_probe(command: &[u8]) -> bool {
 /// affect cryptographic integrity. Returns the input unchanged if no
 /// patching is needed or the payload doesn't parse.
 pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
-    let Some((&0x01, params)) = command.split_first() else {
+    let Some((&CMD_MAKE_CREDENTIAL, params)) = command.split_first() else {
         return command.to_vec();
     };
 
@@ -319,7 +333,7 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
         };
         let pairs = c.map_header()?;
 
-        let mut out = vec![0x01];
+        let mut out = vec![CMD_MAKE_CREDENTIAL];
         let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
         for _ in 0..pairs {
             let key = c.uint()?;
@@ -329,15 +343,15 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
         }
 
         let mut changed = false;
-        encode_map_header(&mut out, pairs);
+        cbor::map(&mut out, pairs);
         for (key, span) in entries {
             let value = &params[span.clone()];
             let patched = match key {
-                2 => {
+                MC_KEY_RP => {
                     // rp entity: add "name" if missing
                     patch_text_map(value, "name", "").map(|(v, _)| v)
                 }
-                3 => {
+                MC_KEY_USER => {
                     // user entity: add "displayName", falling back to "name"
                     let display = {
                         let mut inner = CborCursor {
@@ -363,7 +377,7 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
                 }
                 _ => None,
             };
-            encode_uint(&mut out, key);
+            cbor::uint(&mut out, key);
             match patched {
                 Some(v) => {
                     changed = true;
@@ -380,20 +394,6 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     })();
 
     result.unwrap_or_else(|| command.to_vec())
-}
-
-fn encode_uint(out: &mut Vec<u8>, v: u64) {
-    if v < 24 {
-        out.push(v as u8);
-    } else if v <= 0xff {
-        out.extend_from_slice(&[0x18, v as u8]);
-    } else if v <= 0xffff {
-        out.push(0x19);
-        out.extend_from_slice(&(v as u16).to_be_bytes());
-    } else {
-        out.push(0x1a);
-        out.extend_from_slice(&(v as u32).to_be_bytes());
-    }
 }
 
 struct CborCursor<'a> {
@@ -420,17 +420,17 @@ impl<'a> CborCursor<'a> {
 
     fn argument(&mut self, info: u8) -> Option<u64> {
         match info {
-            0..=23 => Some(info as u64),
-            24 => Some(self.byte()? as u64),
-            25 => {
+            0..=cbor::ARG_INLINE_MAX => Some(info as u64),
+            cbor::ARG_U8 => Some(self.byte()? as u64),
+            cbor::ARG_U16 => {
                 let b = self.take(2)?;
                 Some(u16::from_be_bytes([b[0], b[1]]) as u64)
             }
-            26 => {
+            cbor::ARG_U32 => {
                 let b = self.take(4)?;
                 Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64)
             }
-            27 => {
+            cbor::ARG_U64 => {
                 let b = self.take(8)?;
                 Some(u64::from_be_bytes([
                     b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
@@ -442,26 +442,26 @@ impl<'a> CborCursor<'a> {
 
     fn uint(&mut self) -> Option<u64> {
         let b = self.byte()?;
-        if b >> 5 != 0 {
+        if b >> 5 != cbor::MAJOR_UINT {
             return None;
         }
-        self.argument(b & 0x1f)
+        self.argument(b & cbor::ARG_MASK)
     }
 
     fn map_header(&mut self) -> Option<u64> {
         let b = self.byte()?;
-        if b >> 5 != 5 {
+        if b >> 5 != cbor::MAJOR_MAP {
             return None;
         }
-        self.argument(b & 0x1f)
+        self.argument(b & cbor::ARG_MASK)
     }
 
     fn text(&mut self) -> Option<String> {
         let b = self.byte()?;
-        if b >> 5 != 3 {
+        if b >> 5 != cbor::MAJOR_TEXT {
             return None;
         }
-        let len = self.argument(b & 0x1f)? as usize;
+        let len = self.argument(b & cbor::ARG_MASK)? as usize;
         String::from_utf8(self.take(len)?.to_vec()).ok()
     }
 
@@ -475,22 +475,22 @@ impl<'a> CborCursor<'a> {
         }
         let b = self.byte()?;
         let major = b >> 5;
-        let info = b & 0x1f;
+        let info = b & cbor::ARG_MASK;
         match major {
-            0 | 1 | 7 => {
+            cbor::MAJOR_UINT | cbor::MAJOR_NEGINT | cbor::MAJOR_SIMPLE => {
                 self.argument(info)?;
             }
-            2 | 3 => {
+            cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
                 let len = self.argument(info)?;
                 self.take(len as usize)?;
             }
-            4 => {
+            cbor::MAJOR_ARRAY => {
                 let n = self.argument(info)?;
                 for _ in 0..n {
                     self.skip_value_at(depth + 1)?;
                 }
             }
-            5 => {
+            cbor::MAJOR_MAP => {
                 let n = self.argument(info)?;
                 for _ in 0..n {
                     self.skip_value_at(depth + 1)?;

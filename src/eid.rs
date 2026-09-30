@@ -11,6 +11,21 @@ pub const EID_PLAINTEXT_SIZE: usize = 16;
 pub const NONCE_SIZE: usize = 10;
 pub const ROUTING_ID_SIZE: usize = 3;
 
+/// EID key layout: AES-256 key followed by an HMAC-SHA256 key.
+const KEY_HALF: usize = EID_KEY_SIZE / 2;
+
+/// AES block size, used for both the EID block and the advert tag input.
+const AES_BLOCK_SIZE: usize = 16;
+/// Truncated HMAC-SHA256 tag appended to the encrypted EID block.
+const ADVERT_TAG_SIZE: usize = 4;
+
+/// Field offsets within the 16-byte EID plaintext: reserved flags, nonce,
+/// routing ID, tunnel server domain (little-endian).
+const FLAGS_OFFSET: usize = 0;
+const NONCE_OFFSET: usize = FLAGS_OFFSET + 1;
+const ROUTING_ID_OFFSET: usize = NONCE_OFFSET + NONCE_SIZE;
+const TUNNEL_DOMAIN_OFFSET: usize = ROUTING_ID_OFFSET + ROUTING_ID_SIZE;
+
 #[derive(Debug, Clone)]
 pub struct EidComponents {
     pub nonce: [u8; NONCE_SIZE],
@@ -20,18 +35,19 @@ pub struct EidComponents {
 
 pub fn plaintext_from_components(c: &EidComponents) -> [u8; EID_PLAINTEXT_SIZE] {
     let mut eid = [0u8; EID_PLAINTEXT_SIZE];
-    eid[1..1 + NONCE_SIZE].copy_from_slice(&c.nonce);
-    eid[11..11 + ROUTING_ID_SIZE].copy_from_slice(&c.routing_id);
-    eid[14..16].copy_from_slice(&c.tunnel_server_domain.to_le_bytes());
+    eid[NONCE_OFFSET..NONCE_OFFSET + NONCE_SIZE].copy_from_slice(&c.nonce);
+    eid[ROUTING_ID_OFFSET..ROUTING_ID_OFFSET + ROUTING_ID_SIZE].copy_from_slice(&c.routing_id);
+    eid[TUNNEL_DOMAIN_OFFSET..].copy_from_slice(&c.tunnel_server_domain.to_le_bytes());
     eid
 }
 
 pub fn to_components(eid: &[u8; EID_PLAINTEXT_SIZE]) -> EidComponents {
     let mut nonce = [0u8; NONCE_SIZE];
-    nonce.copy_from_slice(&eid[1..11]);
+    nonce.copy_from_slice(&eid[NONCE_OFFSET..NONCE_OFFSET + NONCE_SIZE]);
     let mut routing_id = [0u8; ROUTING_ID_SIZE];
-    routing_id.copy_from_slice(&eid[11..14]);
-    let tunnel_server_domain = u16::from_le_bytes([eid[14], eid[15]]);
+    routing_id.copy_from_slice(&eid[ROUTING_ID_OFFSET..ROUTING_ID_OFFSET + ROUTING_ID_SIZE]);
+    let tunnel_server_domain =
+        u16::from_le_bytes(eid[TUNNEL_DOMAIN_OFFSET..TUNNEL_DOMAIN_OFFSET + 2].try_into().unwrap());
     EidComponents {
         nonce,
         routing_id,
@@ -40,18 +56,18 @@ pub fn to_components(eid: &[u8; EID_PLAINTEXT_SIZE]) -> EidComponents {
 }
 
 pub fn encrypt(eid: &[u8; EID_PLAINTEXT_SIZE], key: &[u8; EID_KEY_SIZE]) -> [u8; ADVERT_SIZE] {
-    assert_eq!(eid[0], 0);
-    let cipher = Aes256::new((&key[..32]).into());
+    assert_eq!(eid[FLAGS_OFFSET], 0);
+    let cipher = Aes256::new((&key[..KEY_HALF]).into());
     let mut block = (*eid).into();
     cipher.encrypt_block(&mut block);
 
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key[32..]).unwrap();
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key[KEY_HALF..]).unwrap();
     mac.update(&block);
     let tag = mac.finalize().into_bytes();
 
     let mut ret = [0u8; ADVERT_SIZE];
-    ret[..16].copy_from_slice(&block);
-    ret[16..].copy_from_slice(&tag[..4]);
+    ret[..AES_BLOCK_SIZE].copy_from_slice(&block);
+    ret[AES_BLOCK_SIZE..].copy_from_slice(&tag[..ADVERT_TAG_SIZE]);
     ret
 }
 
@@ -59,19 +75,19 @@ pub fn decrypt(advert: &[u8], key: &[u8; EID_KEY_SIZE]) -> Option<[u8; EID_PLAIN
     if advert.len() != ADVERT_SIZE {
         return None;
     }
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key[32..]).unwrap();
-    mac.update(&advert[..16]);
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key[KEY_HALF..]).unwrap();
+    mac.update(&advert[..AES_BLOCK_SIZE]);
     let tag = mac.finalize().into_bytes();
-    if tag[..4] != advert[16..] {
+    if tag[..ADVERT_TAG_SIZE] != advert[AES_BLOCK_SIZE..] {
         return None;
     }
 
-    let cipher = Aes256::new((&key[..32]).into());
-    let block_bytes: [u8; 16] = advert[..16].try_into().unwrap();
+    let cipher = Aes256::new((&key[..KEY_HALF]).into());
+    let block_bytes: [u8; AES_BLOCK_SIZE] = advert[..AES_BLOCK_SIZE].try_into().unwrap();
     let mut block = aes::Block::from(block_bytes);
     cipher.decrypt_block(&mut block);
     let plaintext: [u8; EID_PLAINTEXT_SIZE] = block.into();
-    if plaintext[0] != 0 {
+    if plaintext[FLAGS_OFFSET] != 0 {
         return None;
     }
     Some(plaintext)

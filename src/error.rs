@@ -2,10 +2,7 @@
 
 use std::fmt;
 
-/// CTAP status bytes used when a caBLE transaction fails.
-pub const CTAP1_ERR_TIMEOUT: u8 = 0x05;
-pub const CTAP2_ERR_KEEPALIVE_CANCEL: u8 = 0x2d;
-pub const CTAP2_ERR_NO_CREDENTIALS: u8 = 0x2e;
+use crate::ctap::{CTAP1_ERR_TIMEOUT, CTAP2_ERR_KEEPALIVE_CANCEL, CTAP2_ERR_NO_CREDENTIALS};
 
 /// Why a caBLE transaction failed, in terms the CTAP host understands.
 #[derive(Debug)]

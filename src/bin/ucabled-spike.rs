@@ -10,6 +10,7 @@ use ucabled::kdf::{derive, Purpose};
 use ucabled::qr::{self, RequestType};
 use ucabled::session::DesktopFlow;
 use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
+use ucabled::ctap::CMD_GET_INFO;
 
 #[derive(Default)]
 struct Args {
@@ -50,9 +51,9 @@ async fn main() -> Result<()> {
 
     let identity = SecretKey::random(&mut OsRng);
     let compressed = identity.public_key().to_encoded_point(true);
-    let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
+    let compressed: &[u8; qr::COMPRESSED_PUBLIC_KEY_SIZE] = compressed.as_bytes().try_into().unwrap();
 
-    let mut qr_secret = [0u8; 16];
+    let mut qr_secret = [0u8; qr::QR_SECRET_SIZE];
     OsRng.fill_bytes(&mut qr_secret);
 
     let request_type = if args.make_credential {
@@ -81,14 +82,14 @@ async fn main() -> Result<()> {
     let mut eid_key = [0u8; eid::EID_KEY_SIZE];
     derive(&qr_secret, &[], Purpose::EidKey, &mut eid_key);
 
-    let plaintext_eid: [u8; 16] = if let Some(advert_hex) = &args.advert_hex {
+    let plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE] = if let Some(advert_hex) = &args.advert_hex {
         let advert = hex::decode(advert_hex.trim()).context("bad --advert-hex")?;
         eid::decrypt(&advert, &eid_key).context("advert failed trial decrypt")?
     } else {
         #[cfg(feature = "ble")]
         {
             println!("Scanning for BLE advert...");
-            ucabled::ble::await_advert(&eid_key, std::time::Duration::from_secs(300)).await?
+            ucabled::ble::await_advert(&eid_key, ucabled::relay::BLE_ADVERT_TIMEOUT).await?
         }
         #[cfg(not(feature = "ble"))]
         {
@@ -104,7 +105,7 @@ async fn main() -> Result<()> {
 
     let cmd = match &args.cmd_hex {
         Some(h) => hex::decode(h.trim())?,
-        None => vec![0x04], // authenticatorGetInfo
+        None => vec![CMD_GET_INFO],
     };
 
     let flow = DesktopFlow {

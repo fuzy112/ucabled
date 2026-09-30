@@ -2,6 +2,11 @@
 
 use std::collections::HashMap;
 
+use crate::ctap::{
+    CMD_GET_ASSERTION, CMD_GET_INFO, CMD_MAKE_CREDENTIAL, CTAP1_ERR_INVALID_COMMAND,
+    CTAP2_ERR_CBOR_UNEXPECTED_TYPE, CTAP2_ERR_KEEPALIVE_CANCEL,
+};
+
 pub const REPORT_SIZE: usize = 64;
 pub const MAX_PAYLOAD: usize = 7609;
 
@@ -22,6 +27,34 @@ pub const ERR_CHANNEL_BUSY: u8 = 0x06;
 pub const ERR_INVALID_CHANNEL: u8 = 0x0b;
 
 pub const BROADCAST_CID: u32 = 0xffff_ffff;
+
+// Report layout (U2FHID §4.2/§4.3): CID (4 bytes), then either an INIT packet
+// (command byte with the init flag, a 2-byte length at 5, data at 7) or a
+// continuation packet (sequence number at 4, data at 5).
+const CID_LEN: usize = 4;
+const INIT_CMD_OFFSET: usize = 4;
+const INIT_LEN_OFFSET: usize = 5;
+const INIT_DATA_OFFSET: usize = 7;
+const CONT_SEQ_OFFSET: usize = 4;
+const CONT_DATA_OFFSET: usize = 5;
+const INIT_DATA_SIZE: usize = REPORT_SIZE - INIT_DATA_OFFSET;
+const CONT_DATA_SIZE: usize = REPORT_SIZE - CONT_DATA_OFFSET;
+/// Set in byte 4 of an INIT packet; continuation sequence numbers are < 0x80.
+const INIT_FLAG: u8 = 0x80;
+
+// CTAPHID_INIT response fields (U2FHID §4.4.1): nonce echo, allocated CID,
+// protocol version, device version, capability flags.
+const INIT_NONCE_LEN: usize = 8;
+const INIT_RESPONSE_LEN: usize = INIT_NONCE_LEN + CID_LEN + 4 + 1;
+const U2FHID_PROTOCOL_VERSION: u8 = 0x02;
+const DEVICE_VERSION_MAJOR: u8 = 0x01;
+const DEVICE_VERSION_MINOR: u8 = 0x00;
+const DEVICE_VERSION_BUILD: u8 = 0x00;
+
+/// First channel ID handed out by [`Transport::new`].
+const INITIAL_CID: u32 = 0x0001_0001;
+/// CTAPHID_KEEPALIVE status: waiting for user presence.
+const KEEPALIVE_STATUS_UPNEEDED: u8 = 0x02;
 
 const CAP_WINK: u8 = 0x01;
 const CAP_CBOR: u8 = 0x04;
@@ -54,7 +87,7 @@ pub struct Transport {
 impl Transport {
     pub fn new(aaguid: [u8; 16]) -> Self {
         Self {
-            next_cid: 0x0001_0001,
+            next_cid: INITIAL_CID,
             aaguid,
             busy: None,
             assembly: None,
@@ -74,14 +107,15 @@ impl Transport {
         if report.len() != REPORT_SIZE {
             return (vec![], None);
         }
-        let cid = u32::from_be_bytes(report[0..4].try_into().unwrap());
-        let b4 = report[4];
+        let cid = u32::from_be_bytes(report[0..CID_LEN].try_into().unwrap());
+        let b4 = report[INIT_CMD_OFFSET];
 
-        if b4 & 0x80 != 0 {
+        if b4 & INIT_FLAG != 0 {
             // INIT frame
             let cmd = b4;
-            let len = u16::from_be_bytes([report[5], report[6]]) as usize;
-            let payload = &report[7..];
+            let len = u16::from_be_bytes([report[INIT_LEN_OFFSET], report[INIT_LEN_OFFSET + 1]])
+                as usize;
+            let payload = &report[INIT_DATA_OFFSET..];
             if len > MAX_PAYLOAD {
                 return (error_response(cid, ERR_INVALID_LEN), None);
             }
@@ -117,8 +151,10 @@ impl Transport {
             }
             assembly.next_seq += 1;
             let remaining = assembly.total_len - assembly.buf.len();
-            let take = remaining.min(REPORT_SIZE - 5);
-            assembly.buf.extend_from_slice(&report[5..5 + take]);
+            let take = remaining.min(CONT_DATA_SIZE);
+            assembly
+                .buf
+                .extend_from_slice(&report[CONT_DATA_OFFSET..CONT_DATA_OFFSET + take]);
             if assembly.buf.len() >= assembly.total_len {
                 let assembly = self.assembly.take().unwrap();
                 self.busy = None;
@@ -137,7 +173,7 @@ impl Transport {
     ) -> (Vec<Vec<u8>>, Option<CtapAction>) {
         match cmd {
             CMD_INIT => {
-                if payload.len() != 8 {
+                if payload.len() != INIT_NONCE_LEN {
                     return (error_response(cid, ERR_INVALID_LEN), None);
                 }
                 let new_cid = if cid == BROADCAST_CID {
@@ -146,13 +182,13 @@ impl Transport {
                     cid
                 };
                 self.channels.insert(new_cid, ());
-                let mut resp = Vec::with_capacity(17);
+                let mut resp = Vec::with_capacity(INIT_RESPONSE_LEN);
                 resp.extend_from_slice(payload); // nonce echo
                 resp.extend_from_slice(&new_cid.to_be_bytes());
-                resp.push(0x02); // U2FHID protocol version
-                resp.push(0x01); // device version major
-                resp.push(0x00); // minor
-                resp.push(0x00); // build
+                resp.push(U2FHID_PROTOCOL_VERSION);
+                resp.push(DEVICE_VERSION_MAJOR);
+                resp.push(DEVICE_VERSION_MINOR);
+                resp.push(DEVICE_VERSION_BUILD);
                 resp.push(CAP_WINK | CAP_CBOR);
                 (build_response(cid, CMD_INIT, &resp), None)
             }
@@ -167,7 +203,7 @@ impl Transport {
                     self.busy = None;
                     self.assembly = None;
                     (
-                        build_response(cid, CMD_CBOR, &[0x2d]),
+                        build_response(cid, CMD_CBOR, &[CTAP2_ERR_KEEPALIVE_CANCEL]),
                         Some(CtapAction::CancelRelay),
                     )
                 } else {
@@ -187,18 +223,22 @@ impl Transport {
             return (error_response(cid, ERR_CHANNEL_BUSY), None);
         }
         let Some(&subcmd) = payload.first() else {
-            return (build_response(cid, CMD_CBOR, &[0x11]), None); // INVALID_LENGTH
+            // Unexpected empty CBOR request.
+            return (build_response(cid, CMD_CBOR, &[CTAP2_ERR_CBOR_UNEXPECTED_TYPE]), None);
         };
         match subcmd {
-            0x04 => {
+            CMD_GET_INFO => {
                 let resp = crate::ctap::getinfo_response(&self.aaguid);
                 (build_response(cid, CMD_CBOR, &resp), None)
             }
-            0x01 | 0x02 => {
+            CMD_MAKE_CREDENTIAL | CMD_GET_ASSERTION => {
                 self.busy = Some(cid);
                 (vec![], Some(CtapAction::Relay(payload.to_vec())))
             }
-            _ => (build_response(cid, CMD_CBOR, &[0x01]), None), // INVALID_COMMAND
+            _ => (
+                build_response(cid, CMD_CBOR, &[CTAP1_ERR_INVALID_COMMAND]),
+                None,
+            ),
         }
     }
 
@@ -211,13 +251,11 @@ impl Transport {
 
     pub fn cancel_relay(&mut self, cid: u32) -> Vec<Vec<u8>> {
         self.busy = None;
-        // 0x2d = CTAP2_ERR_KEEPALIVE_CANCEL
-        build_response(cid, CMD_CBOR, &[0x2d])
+        build_response(cid, CMD_CBOR, &[CTAP2_ERR_KEEPALIVE_CANCEL])
     }
 
     pub fn keepalive(&self, cid: u32) -> Vec<Vec<u8>> {
-        // 0x02 = STATUS_UPNEEDED
-        build_response(cid, CMD_KEEPALIVE, &[0x02])
+        build_response(cid, CMD_KEEPALIVE, &[KEEPALIVE_STATUS_UPNEEDED])
     }
 
     pub fn busy_channel(&self) -> Option<u32> {
@@ -228,22 +266,24 @@ impl Transport {
 pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
     let mut reports = Vec::new();
     let mut first = vec![0u8; REPORT_SIZE];
-    first[0..4].copy_from_slice(&cid.to_be_bytes());
-    first[4] = cmd;
-    first[5..7].copy_from_slice(&(payload.len() as u16).to_be_bytes());
-    let first_take = payload.len().min(REPORT_SIZE - 7);
-    first[7..7 + first_take].copy_from_slice(&payload[..first_take]);
+    first[0..CID_LEN].copy_from_slice(&cid.to_be_bytes());
+    first[INIT_CMD_OFFSET] = cmd;
+    first[INIT_LEN_OFFSET..INIT_LEN_OFFSET + 2]
+        .copy_from_slice(&(payload.len() as u16).to_be_bytes());
+    let first_take = payload.len().min(INIT_DATA_SIZE);
+    first[INIT_DATA_OFFSET..INIT_DATA_OFFSET + first_take].copy_from_slice(&payload[..first_take]);
     reports.push(first);
 
     let mut offset = first_take;
     let mut seq = 0u8;
     while offset < payload.len() {
         let mut cont = vec![0u8; REPORT_SIZE];
-        cont[0..4].copy_from_slice(&cid.to_be_bytes());
-        cont[4] = seq;
+        cont[0..CID_LEN].copy_from_slice(&cid.to_be_bytes());
+        cont[CONT_SEQ_OFFSET] = seq;
         seq += 1;
-        let take = (payload.len() - offset).min(REPORT_SIZE - 5);
-        cont[5..5 + take].copy_from_slice(&payload[offset..offset + take]);
+        let take = (payload.len() - offset).min(CONT_DATA_SIZE);
+        cont[CONT_DATA_OFFSET..CONT_DATA_OFFSET + take]
+            .copy_from_slice(&payload[offset..offset + take]);
         reports.push(cont);
         offset += take;
     }

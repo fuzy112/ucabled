@@ -70,14 +70,7 @@ async fn main() -> Result<()> {
     println!("plaintext EID: {}", hex::encode(outcome.plaintext_eid));
     println!("Tunnel created; waiting for desktop handshake...");
 
-    let getinfo_reply = {
-        let mut v = vec![0xa2, 0x01, 0x81, 0x68];
-        v.extend_from_slice(b"FIDO_2_0");
-        v.push(0x03);
-        v.push(0x50);
-        v.extend_from_slice(&[0u8; 16]);
-        v
-    };
+    let getinfo_reply = ucabled::ctap::mock_getinfo_response();
     phone::phone_run(ws, &psk, &peer_identity, &getinfo_reply).await?;
     Ok(())
 }

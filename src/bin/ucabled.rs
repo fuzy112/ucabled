@@ -6,12 +6,25 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use ucabled::ctap::{
+    CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_PIN_NOT_SET,
+    CMD_MAKE_CREDENTIAL,
+};
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
 use ucabled::uhid_dev::{UhidDevice, UhidEvent, FIDO_REPORT_DESCRIPTOR};
 use ucabled::ui::Notifier;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);
+
+/// Delay before retrying a transient uhid read error.
+const UHID_READ_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// Log every Nth consecutive write failure (the first is always logged).
+const WRITE_FAILURE_LOG_EVERY: u32 = 100;
+
+/// Bytes of an input report needed to log its CID and command (cid + cmd).
+const HID_REPORT_LOG_PREFIX: usize = 5;
 
 /// Consecutive uhid read failures tolerated before giving up (and letting
 /// systemd restart the service and recreate the device).
@@ -105,13 +118,13 @@ async fn daemon_loop(
                             return Err(e.into());
                         }
                         tracing::warn!("uhid read error ({read_failures}/{MAX_UHID_READ_FAILURES}): {e}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        tokio::time::sleep(UHID_READ_RETRY_DELAY).await;
                         continue;
                     }
                 };
                 match event {
                     UhidEvent::Output(report) => {
-                        if report.len() >= 5 {
+                        if report.len() >= HID_REPORT_LOG_PREFIX {
                             tracing::debug!(
                                 cid = %hex::encode(&report[0..4]),
                                 cmd = %format_args!("{:#04x}", report[4]),
@@ -135,7 +148,7 @@ async fn daemon_loop(
                                 // drop the device from the transaction entirely.)
                                 if ucabled::ctap::is_silent_probe(&payload) {
                                     let response = ucabled::ctap::fake_silent_assertion(&payload)
-                                        .unwrap_or_else(|| vec![0x2e]);
+                                        .unwrap_or_else(|| vec![CTAP2_ERR_NO_CREDENTIALS]);
                                     tracing::info!("silent probe (up=false), answering locally");
                                     let reports = transport.complete_relay(cid, &response);
                                     write_all(&device, reports, &mut write_failures).await;
@@ -157,7 +170,7 @@ async fn daemon_loop(
                                         });
                                     } else {
                                         tracing::info!("blink probe, no UI available, declining");
-                                        let reports = transport.complete_relay(cid, &[0x2c]);
+                                        let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
                                         write_all(&device, reports, &mut write_failures).await;
                                     }
                                     continue;
@@ -167,7 +180,7 @@ async fn daemon_loop(
                                         "no UI agent registered; refusing the transaction"
                                     );
                                     let reports = transport
-                                        .complete_relay(cid, &[ucabled::error::CTAP1_ERR_TIMEOUT]);
+                                        .complete_relay(cid, &[CTAP1_ERR_TIMEOUT]);
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
@@ -181,7 +194,7 @@ async fn daemon_loop(
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);
-                                let request_type = if payload.first() == Some(&0x01) {
+                                let request_type = if payload.first() == Some(&CMD_MAKE_CREDENTIAL) {
                                     RequestType::MakeCredential
                                 } else {
                                     RequestType::GetAssertion
@@ -264,10 +277,10 @@ async fn daemon_loop(
                     if *cid as u64 == tid {
                         let cid = *cid;
                         pending = None;
-                        // 0x35 = CTAP2_ERR_PIN_NOT_SET: on the blink probe a
-                        // Pin* status tells authenticator-rs that this device
-                        // was selected, so Firefox proceeds with the phone flow.
-                        let status = if use_phone { 0x35 } else { 0x2c };
+                        // CTAP2_ERR_PIN_NOT_SET: on the blink probe a Pin*
+                        // status tells authenticator-rs that this device was
+                        // selected, so Firefox proceeds with the phone flow.
+                        let status = if use_phone { CTAP2_ERR_PIN_NOT_SET } else { CTAP2_ERR_INVALID_OPTION };
                         let reports = transport.complete_relay(cid, &[status]);
                         write_all(&device, reports, &mut write_failures).await;
                         tracing::info!(use_phone, "device selection answered");
@@ -293,7 +306,7 @@ async fn daemon_loop(
                 );
                 if timed_out {
                     pending = None;
-                    let reports = transport.complete_relay(cid, &[0x2c]);
+                    let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
                     write_all(&device, reports, &mut write_failures).await;
                     tracing::warn!("device selection timed out, declining");
                 } else {
@@ -314,7 +327,7 @@ async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u3
             Ok(()) => *failures = 0,
             Err(e) => {
                 *failures += 1;
-                if *failures == 1 || failures.is_multiple_of(100) {
+                if *failures == 1 || failures.is_multiple_of(WRITE_FAILURE_LOG_EVERY) {
                     tracing::warn!("uhid write failed ({failures} times): {e}");
                 }
             }

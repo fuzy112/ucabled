@@ -17,6 +17,34 @@ const UHID_INPUT2: u32 = 12;
 
 const UHID_EVENT_SIZE: usize = 4380;
 
+// Offsets within the UHID_CREATE2 payload (linux/uhid.h's struct
+// uhid_create2_req), relative to the start of the event payload.
+const CREATE2_NAME_OFFSET: usize = 0;
+const CREATE2_NAME_MAX: usize = 127;
+const CREATE2_RD_SIZE_OFFSET: usize = 256;
+const CREATE2_BUS_OFFSET: usize = 258;
+const CREATE2_VENDOR_OFFSET: usize = 260;
+const CREATE2_PRODUCT_OFFSET: usize = 264;
+const CREATE2_VERSION_OFFSET: usize = 268;
+const CREATE2_RD_DATA_OFFSET: usize = 276;
+/// Bus type reported for the virtual device (linux/input.h BUS_USB).
+const BUS_USB: u16 = 0x03;
+/// pid.codes community vendor/product IDs for this project.
+const VENDOR_ID: u32 = 0x1209;
+const PRODUCT_ID: u32 = 0x5042;
+const DEVICE_VERSION: u32 = 1;
+
+/// UHID_OUTPUT carries the report in a fixed 4096-byte buffer.
+const OUTPUT_DATA_SIZE: usize = 4096;
+/// hidraw reports include a leading report-ID byte that UHID does not.
+const REPORT_ID_LEN: usize = 1;
+/// Data bytes in the FIDO HID report descriptor below.
+const FIDO_REPORT_SIZE: usize = 64;
+
+// Offsets within a UHID_INPUT2 event: a little-endian u16 length, then data.
+const INPUT2_SIZE_OFFSET: usize = 4;
+const INPUT2_DATA_OFFSET: usize = 6;
+
 /// FIDO U2FHID report descriptor (U2FHID spec 4.3): usage page 0xF1D0,
 /// 64-byte input and output reports.
 pub const FIDO_REPORT_DESCRIPTOR: [u8; 34] = [
@@ -59,19 +87,21 @@ impl UhidDevice {
 
         let u = &mut event[4..];
         let name_bytes = name.as_bytes();
-        let name_len = name_bytes.len().min(127);
-        u[..name_len].copy_from_slice(&name_bytes[..name_len]);
+        let name_len = name_bytes.len().min(CREATE2_NAME_MAX);
+        u[CREATE2_NAME_OFFSET..CREATE2_NAME_OFFSET + name_len]
+            .copy_from_slice(&name_bytes[..name_len]);
 
         let rd_size = report_descriptor.len() as u16;
-        u[256..258].copy_from_slice(&rd_size.to_le_bytes());
-        // bus = BUS_USB (0x03)
-        u[258..260].copy_from_slice(&3u16.to_le_bytes());
-        // vendor/product: pid.codes community space
-        u[260..264].copy_from_slice(&0x1209u32.to_le_bytes());
-        u[264..268].copy_from_slice(&0x5042u32.to_le_bytes());
-        u[268..272].copy_from_slice(&1u32.to_le_bytes());
-        // rd_data starts at offset 276 within create2 payload
-        u[276..276 + report_descriptor.len()].copy_from_slice(report_descriptor);
+        u[CREATE2_RD_SIZE_OFFSET..CREATE2_RD_SIZE_OFFSET + 2].copy_from_slice(&rd_size.to_le_bytes());
+        u[CREATE2_BUS_OFFSET..CREATE2_BUS_OFFSET + 2].copy_from_slice(&BUS_USB.to_le_bytes());
+        u[CREATE2_VENDOR_OFFSET..CREATE2_VENDOR_OFFSET + 4]
+            .copy_from_slice(&VENDOR_ID.to_le_bytes());
+        u[CREATE2_PRODUCT_OFFSET..CREATE2_PRODUCT_OFFSET + 4]
+            .copy_from_slice(&PRODUCT_ID.to_le_bytes());
+        u[CREATE2_VERSION_OFFSET..CREATE2_VERSION_OFFSET + 4]
+            .copy_from_slice(&DEVICE_VERSION.to_le_bytes());
+        u[CREATE2_RD_DATA_OFFSET..CREATE2_RD_DATA_OFFSET + report_descriptor.len()]
+            .copy_from_slice(report_descriptor);
 
         write_all_blocking(self.fd.get_ref(), &event)
     }
@@ -107,14 +137,17 @@ impl UhidDevice {
                 UHID_OPEN => UhidEvent::Open,
                 UHID_CLOSE => UhidEvent::Close,
                 UHID_OUTPUT => {
-                    // uhid_output_req: `data[4096]` followed by a little-endian
-                    // u16 size. Read both bytes; a single byte would truncate
-                    // reports larger than 255.
-                    let size = u16::from_le_bytes([buf[4 + 4096], buf[4 + 4096 + 1]]) as usize;
-                    let mut data = buf[4..4 + size.min(4096)].to_vec();
+                    // uhid_output_req: `data[OUTPUT_DATA_SIZE]` followed by a
+                    // little-endian u16 size. Read both bytes; a single byte
+                    // would truncate reports larger than 255.
+                    let size = u16::from_le_bytes([
+                        buf[4 + OUTPUT_DATA_SIZE],
+                        buf[4 + OUTPUT_DATA_SIZE + 1],
+                    ]) as usize;
+                    let mut data = buf[4..4 + size.min(OUTPUT_DATA_SIZE)].to_vec();
                     // hidraw writes carry a leading report-ID byte (0 when the
                     // descriptor defines no report IDs); strip it.
-                    if data.len() == 65 && data[0] == 0 {
+                    if data.len() == FIDO_REPORT_SIZE + REPORT_ID_LEN && data[0] == 0 {
                         data.remove(0);
                     }
                     UhidEvent::Output(data)
@@ -125,13 +158,14 @@ impl UhidDevice {
     }
 
     pub async fn write_input(&self, report: &[u8]) -> io::Result<()> {
-        // The kernel consumes the first byte as the report ID even for
-        // descriptors without numbered reports, so prepend 0.
+        // `uhid_input2_req`: a little-endian u16 size followed by the report
+        // data. The kernel consumes the first data byte as the report ID even
+        // for descriptors without numbered reports, so it is counted here.
         let mut event = [0u8; UHID_EVENT_SIZE];
         event[..4].copy_from_slice(&UHID_INPUT2.to_le_bytes());
-        event[4] = (report.len() + 1) as u8;
-        event[5] = 0;
-        event[6..6 + report.len()].copy_from_slice(report);
+        let size = (report.len() + REPORT_ID_LEN) as u16;
+        event[INPUT2_SIZE_OFFSET..INPUT2_SIZE_OFFSET + 2].copy_from_slice(&size.to_le_bytes());
+        event[INPUT2_DATA_OFFSET..INPUT2_DATA_OFFSET + report.len()].copy_from_slice(report);
 
         let mut guard = self.fd.writable().await?;
         match guard.try_io(|inner| write_all_blocking(inner.get_ref(), &event)) {

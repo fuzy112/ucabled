@@ -24,6 +24,24 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub const ASSIGNED_TUNNEL_DOMAINS: [&str; 2] = ["cable.ua5v.com", "cable.auth.com"];
 
+/// Assigned-domain IDs (CTAP 2.2 §11.5.1): indexes into
+/// [`ASSIGNED_TUNNEL_DOMAINS`].
+pub const ASSIGNED_DOMAIN_GOOGLE: u16 = 0;
+pub const ASSIGNED_DOMAIN_APPLE: u16 = 1;
+
+/// Domain IDs below this are assigned; at or above they name a hashed domain.
+const ASSIGNED_DOMAIN_LIMIT: u16 = 256;
+const HASHED_DOMAIN_PREFIX: &str = "cable.";
+const BASE32_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+const HASHED_TLDS: [&str; 4] = ["com", "org", "net", "info"];
+/// The hashed domain input is NUL-terminated (CTAP 2.2 §11.5.1).
+const HASHED_DOMAIN_TERMINATOR: u8 = 0;
+
+/// Maximum number of HTTP redirect hops when dialling the tunnel.
+const MAX_REDIRECTS: usize = 5;
+/// HTTP statuses that trigger following a tunnel redirect.
+const REDIRECT_STATUSES: [u16; 5] = [301, 302, 303, 307, 308];
+
 /// Upper bound for a single tunnel frame. CTAP payloads are at most
 /// `ctaphid::MAX_PAYLOAD` (7609 B) plus framing, so 64 KiB is already
 /// generous; the tunnel server is not trusted and must not be able to make
@@ -34,7 +52,7 @@ pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
-    if encoded < 256 {
+    if encoded < ASSIGNED_DOMAIN_LIMIT {
         return ASSIGNED_TUNNEL_DOMAINS
             .get(encoded as usize)
             .map(|s| s.to_string());
@@ -44,21 +62,21 @@ pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     let mut hasher = Sha256::new();
     hasher.update(b"caBLEv2 tunnel server domain");
     hasher.update(encoded.to_le_bytes());
-    hasher.update([0u8]);
+    hasher.update([HASHED_DOMAIN_TERMINATOR]);
     let digest = hasher.finalize();
 
     let mut v = u64::from_le_bytes(digest[..8].try_into().unwrap());
-    let tld_index = (v & 3) as usize;
-    v >>= 2;
+    let tld_bits = (HASHED_TLDS.len() as u64).trailing_zeros();
+    let tld_index = (v & ((1 << tld_bits) - 1)) as usize;
+    v >>= tld_bits;
 
-    const BASE32: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
-    let mut ret = String::from("cable.");
+    let mut ret = String::from(HASHED_DOMAIN_PREFIX);
     while v != 0 {
-        ret.push(BASE32[(v & 31) as usize] as char);
+        ret.push(BASE32_ALPHABET[(v & 31) as usize] as char);
         v >>= 5;
     }
     ret.push('.');
-    ret.push_str(["com", "org", "net", "info"][tld_index]);
+    ret.push_str(HASHED_TLDS[tld_index]);
     Some(ret)
 }
 
@@ -79,7 +97,7 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
     // The spec requires following HTTP redirects; tokio-tungstenite does not,
     // so do it manually.
     let mut url = url.to_string();
-    for _ in 0..5 {
+    for _ in 0..MAX_REDIRECTS {
         let mut request = url
             .as_str()
             .into_client_request()
@@ -97,7 +115,7 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
                 match (status.as_u16(), location) {
-                    (301 | 302 | 303 | 307 | 308, Some(loc)) => {
+                    (code, Some(loc)) if REDIRECT_STATUSES.contains(&code) => {
                         tracing::info!(%status, redirect = %loc, "following tunnel redirect");
                         url = loc;
                         continue;
