@@ -47,8 +47,7 @@ fn main() -> Result<()> {
     let nonce = [0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04];
     let mut frame = vec![0u8; WRITE_FRAME_LEN];
     frame[REQUEST_REPORT_ID_OFFSET] = 0;
-    frame[REQUEST_CID_OFFSET..REQUEST_CID_OFFSET + 4]
-        .copy_from_slice(&BROADCAST_CID.to_be_bytes());
+    frame[REQUEST_CID_OFFSET..REQUEST_CID_OFFSET + 4].copy_from_slice(&BROADCAST_CID.to_be_bytes());
     frame[REQUEST_CMD_OFFSET] = CMD_INIT;
     frame[REQUEST_LEN_OFFSET..REQUEST_LEN_OFFSET + 2]
         .copy_from_slice(&(nonce.len() as u16).to_be_bytes());

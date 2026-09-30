@@ -5,8 +5,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::cbor;
-use crate::ctap;
 use crate::crypter::Crypter;
+use crate::ctap;
 use crate::eid;
 use crate::handshake;
 use crate::kdf::{derive, Purpose};

@@ -64,7 +64,13 @@ mod tests {
     fn status_mapping() {
         assert_eq!(TransactionError::Cancelled.ctap_status(), 0x2d);
         assert_eq!(TransactionError::Timeout.ctap_status(), 0x05);
-        assert_eq!(TransactionError::transport(anyhow::anyhow!("x")).ctap_status(), 0x05);
-        assert_eq!(TransactionError::failed(anyhow::anyhow!("x")).ctap_status(), 0x2e);
+        assert_eq!(
+            TransactionError::transport(anyhow::anyhow!("x")).ctap_status(),
+            0x05
+        );
+        assert_eq!(
+            TransactionError::failed(anyhow::anyhow!("x")).ctap_status(),
+            0x2e
+        );
     }
 }

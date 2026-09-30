@@ -102,7 +102,11 @@ pub fn encode_qr_contents(
     cbor::uint(&mut out, now);
 
     cbor::uint(&mut out, QR_KEY_SUPPORTS_LINKING as u64);
-    out.push(if supports_linking { cbor::TRUE } else { cbor::FALSE });
+    out.push(if supports_linking {
+        cbor::TRUE
+    } else {
+        cbor::FALSE
+    });
 
     cbor::uint(&mut out, QR_KEY_REQUEST_TYPE as u64);
     cbor::text(&mut out, request_type.as_str());
@@ -214,7 +218,8 @@ fn parse_qr_cbor(data: &[u8]) -> Option<ParsedQr> {
             cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
                 let len = read_len(&mut pos, info)?;
                 let bytes = read_bytes(&mut pos, len)?;
-                if major == cbor::MAJOR_BYTES && key == QR_KEY_PUBLIC_KEY as u64
+                if major == cbor::MAJOR_BYTES
+                    && key == QR_KEY_PUBLIC_KEY as u64
                     && len == COMPRESSED_PUBLIC_KEY_SIZE
                 {
                     public_key = Some(bytes.try_into().ok()?);

@@ -6,11 +6,11 @@ use p256::SecretKey;
 use rand::rngs::OsRng;
 use rand::RngCore;
 
+use ucabled::ctap::CMD_GET_INFO;
 use ucabled::kdf::{derive, Purpose};
 use ucabled::qr::{self, RequestType};
 use ucabled::session::DesktopFlow;
 use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
-use ucabled::ctap::CMD_GET_INFO;
 
 #[derive(Default)]
 struct Args {
@@ -51,7 +51,8 @@ async fn main() -> Result<()> {
 
     let identity = SecretKey::random(&mut OsRng);
     let compressed = identity.public_key().to_encoded_point(true);
-    let compressed: &[u8; qr::COMPRESSED_PUBLIC_KEY_SIZE] = compressed.as_bytes().try_into().unwrap();
+    let compressed: &[u8; qr::COMPRESSED_PUBLIC_KEY_SIZE] =
+        compressed.as_bytes().try_into().unwrap();
 
     let mut qr_secret = [0u8; qr::QR_SECRET_SIZE];
     OsRng.fill_bytes(&mut qr_secret);
@@ -130,7 +131,10 @@ async fn main() -> Result<()> {
         result.ctap_reply.len(),
         hex::encode(&result.ctap_reply)
     );
-    println!("update messages received after shutdown: {}", result.updates.len());
+    println!(
+        "update messages received after shutdown: {}",
+        result.updates.len()
+    );
     for (i, u) in result.updates.iter().enumerate() {
         println!("  update[{i}] ({} bytes): {}", u.len(), hex::encode(u));
     }

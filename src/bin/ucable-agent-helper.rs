@@ -88,7 +88,10 @@ impl eframe::App for QrWindow {
                 ui.label(format!("Code expires in {}s", remaining.as_secs()));
             }
             ui.add_space(6.0);
-            if ui.button(if expired { "Close" } else { "Cancel" }).clicked() {
+            if ui
+                .button(if expired { "Close" } else { "Cancel" })
+                .clicked()
+            {
                 close = true;
             }
         });

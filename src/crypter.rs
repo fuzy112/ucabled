@@ -80,7 +80,10 @@ mod tests {
 
     /// (a, b) where a writes with key 1 and b reads with key 1, and vice versa.
     fn pair() -> (Crypter, Crypter) {
-        (Crypter::new([2u8; 32], [1u8; 32]), Crypter::new([1u8; 32], [2u8; 32]))
+        (
+            Crypter::new([2u8; 32], [1u8; 32]),
+            Crypter::new([1u8; 32], [2u8; 32]),
+        )
     }
 
     #[test]

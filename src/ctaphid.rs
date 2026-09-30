@@ -113,8 +113,8 @@ impl Transport {
         if b4 & INIT_FLAG != 0 {
             // INIT frame
             let cmd = b4;
-            let len = u16::from_be_bytes([report[INIT_LEN_OFFSET], report[INIT_LEN_OFFSET + 1]])
-                as usize;
+            let len =
+                u16::from_be_bytes([report[INIT_LEN_OFFSET], report[INIT_LEN_OFFSET + 1]]) as usize;
             let payload = &report[INIT_DATA_OFFSET..];
             if len > MAX_PAYLOAD {
                 return (error_response(cid, ERR_INVALID_LEN), None);
@@ -224,7 +224,10 @@ impl Transport {
         }
         let Some(&subcmd) = payload.first() else {
             // Unexpected empty CBOR request.
-            return (build_response(cid, CMD_CBOR, &[CTAP2_ERR_CBOR_UNEXPECTED_TYPE]), None);
+            return (
+                build_response(cid, CMD_CBOR, &[CTAP2_ERR_CBOR_UNEXPECTED_TYPE]),
+                None,
+            );
         };
         match subcmd {
             CMD_GET_INFO => {

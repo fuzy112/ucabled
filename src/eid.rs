@@ -46,8 +46,11 @@ pub fn to_components(eid: &[u8; EID_PLAINTEXT_SIZE]) -> EidComponents {
     nonce.copy_from_slice(&eid[NONCE_OFFSET..NONCE_OFFSET + NONCE_SIZE]);
     let mut routing_id = [0u8; ROUTING_ID_SIZE];
     routing_id.copy_from_slice(&eid[ROUTING_ID_OFFSET..ROUTING_ID_OFFSET + ROUTING_ID_SIZE]);
-    let tunnel_server_domain =
-        u16::from_le_bytes(eid[TUNNEL_DOMAIN_OFFSET..TUNNEL_DOMAIN_OFFSET + 2].try_into().unwrap());
+    let tunnel_server_domain = u16::from_le_bytes(
+        eid[TUNNEL_DOMAIN_OFFSET..TUNNEL_DOMAIN_OFFSET + 2]
+            .try_into()
+            .unwrap(),
+    );
     EidComponents {
         nonce,
         routing_id,

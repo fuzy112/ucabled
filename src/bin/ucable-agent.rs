@@ -82,7 +82,13 @@ async fn main() -> Result<()> {
         .context("match NameOwnerChanged")?;
     let (_method_match, methods) = method.msg_stream();
     let (_signal_match, signals) = signal.msg_stream();
-    tokio::spawn(route_messages(conn.clone(), crossroads, methods, signals, daemon_tx));
+    tokio::spawn(route_messages(
+        conn.clone(),
+        crossroads,
+        methods,
+        signals,
+        daemon_tx,
+    ));
 
     // Register with the daemon, retrying while it is not up yet.
     loop {
@@ -325,9 +331,14 @@ fn show_window(
         .stdin(Stdio::piped());
     // The URL carries the transaction secret, so it goes over the pipe.
     let cancel_tx = cancel_tx.clone();
-    open_window(state, &mut command, Some(format!("{url}\n")), move |_status| {
-        let _ = cancel_tx.send(tid);
-    });
+    open_window(
+        state,
+        &mut command,
+        Some(format!("{url}\n")),
+        move |_status| {
+            let _ = cancel_tx.send(tid);
+        },
+    );
 }
 
 /// Show the "another security key is present, use the phone instead?" window

@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use ucabled::ctap::{
-    CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_PIN_NOT_SET,
-    CMD_MAKE_CREDENTIAL,
+    CMD_MAKE_CREDENTIAL, CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS,
+    CTAP2_ERR_PIN_NOT_SET,
 };
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;

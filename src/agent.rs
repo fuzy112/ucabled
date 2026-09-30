@@ -221,9 +221,7 @@ type MatchStream = (MsgMatch, MessageReceiver<Message>);
 
 /// Request the bus name and install the method-call and NameOwnerChanged
 /// matches, returning the guards (dropping them stops matching) and streams.
-async fn register_on_bus(
-    conn: &Arc<SyncConnection>,
-) -> Result<(MatchStream, MatchStream)> {
+async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<(MatchStream, MatchStream)> {
     conn.request_name(BUS_NAME, false, false, false)
         .await
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
@@ -390,13 +388,15 @@ async fn dispatch_commands(
                 url,
                 rp,
                 timeout_secs,
-            } => proxy
-                .method_call(
-                    AGENT_INTERFACE,
-                    "Prompt",
-                    (tid, url, rp.unwrap_or_default(), timeout_secs),
-                )
-                .await,
+            } => {
+                proxy
+                    .method_call(
+                        AGENT_INTERFACE,
+                        "Prompt",
+                        (tid, url, rp.unwrap_or_default(), timeout_secs),
+                    )
+                    .await
+            }
             AgentCommand::Select { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Select", (tid,)).await
             }

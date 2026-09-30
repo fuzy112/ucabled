@@ -92,7 +92,8 @@ impl UhidDevice {
             .copy_from_slice(&name_bytes[..name_len]);
 
         let rd_size = report_descriptor.len() as u16;
-        u[CREATE2_RD_SIZE_OFFSET..CREATE2_RD_SIZE_OFFSET + 2].copy_from_slice(&rd_size.to_le_bytes());
+        u[CREATE2_RD_SIZE_OFFSET..CREATE2_RD_SIZE_OFFSET + 2]
+            .copy_from_slice(&rd_size.to_le_bytes());
         u[CREATE2_BUS_OFFSET..CREATE2_BUS_OFFSET + 2].copy_from_slice(&BUS_USB.to_le_bytes());
         u[CREATE2_VENDOR_OFFSET..CREATE2_VENDOR_OFFSET + 4]
             .copy_from_slice(&VENDOR_ID.to_le_bytes());

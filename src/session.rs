@@ -46,8 +46,10 @@ impl DesktopFlow {
     /// post-handshake message, send one CTAP command, return its reply.
     pub async fn run(mut self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
         let components = eid::to_components(&self.plaintext_eid);
-        let domain = decode_tunnel_server_domain(components.tunnel_server_domain)
-            .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain")))?;
+        let domain =
+            decode_tunnel_server_domain(components.tunnel_server_domain).ok_or_else(|| {
+                TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain"))
+            })?;
 
         let tunnel_base = self
             .tunnel_base
@@ -96,7 +98,10 @@ impl DesktopFlow {
             .await
             .map_err(|_| TransactionError::Timeout)?
             .map_err(TransactionError::transport)?;
-        tracing::info!(len = post_handshake.len(), "received post-handshake message");
+        tracing::info!(
+            len = post_handshake.len(),
+            "received post-handshake message"
+        );
 
         link.send_ctap(ctap_command)
             .await

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod agent;
 pub mod cbor;
 pub mod crypter;
 pub mod ctap;
@@ -10,7 +11,6 @@ pub mod handshake;
 pub mod kdf;
 pub mod noise;
 pub mod phone;
-pub mod agent;
 pub mod qr;
 #[cfg(feature = "ble")]
 pub mod relay;
