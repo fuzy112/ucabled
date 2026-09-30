@@ -1,5 +1,10 @@
 [Unit]
 Description=Phone Passkey Bridge UI agent
+# Graphical-session-bound, not default.target: linger starts default.target
+# with no login (and no DISPLAY/WAYLAND_DISPLAY). The compositor starts
+# graphical-session.target after importing its environment.
+PartOf=graphical-session.target
+After=graphical-session.target
 
 [Service]
 ExecStart=/usr/local/bin/ucable-agent
@@ -7,4 +12,4 @@ Restart=on-failure
 NoNewPrivileges=true
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

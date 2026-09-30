@@ -147,10 +147,16 @@ in
     };
 
     # Per-user UI agent, enabled for every user; polkit decides who may
-    # actually register (the active local session only).
+    # actually register (the active local session only). Bind it to
+    # graphical-session.target, not default.target: the latter is started by
+    # lingering even with no login, where DISPLAY/WAYLAND_DISPLAY are unset.
+    # The compositor starts graphical-session.target only after importing its
+    # environment, so the agent sees the display and dies with the session.
     systemd.user.services.ucable-agent = {
       description = "Phone Passkey Bridge UI agent";
-      wantedBy = [ "default.target" ];
+      wantedBy = [ "graphical-session.target" ];
+      partOf = [ "graphical-session.target" ];
+      after = [ "graphical-session.target" ];
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/ucable-agent";
         Restart = "on-failure";

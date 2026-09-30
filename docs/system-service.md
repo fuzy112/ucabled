@@ -226,7 +226,10 @@ NixOS module（`nix/module.nix`）：
   不改节点组；取代 `uaccess`）。
 - `systemd.services.ucabled`（system unit，含第 6 节的 sandbox）。
 - `systemd.user.services.ucable-agent`：作为全局 user unit 对所有用户启用
-  （`wantedBy = default.target`）；不必按用户配置，能否弹窗由 polkit 判定。
+  （`wantedBy = graphical-session.target`，`PartOf`/`After` 同一 target）；
+  不必按用户配置，能否弹窗由 polkit 判定。**不绑 `default.target`**：开了
+  linger 时后者会在无人登录时启动，此时 `DISPLAY`/`WAYLAND_DISPLAY` 尚未
+  导入；绑到 `graphical-session.target` 则随图形会话启动/停止，环境已就绪。
 - system D-Bus policy（`org.ucabled`）：允许 `ucabled` 拥有该名字并回调
   agent，允许本机用户发往 `org.ucabled`。
 - polkit action（第 5 节）+ 可选 JS 规则。
