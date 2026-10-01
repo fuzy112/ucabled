@@ -143,6 +143,7 @@ in
         # leave it off.
         UMask = "0077";
         LimitCORE = 0;
+        MemorySwapMax = 0;
       };
     };
 
@@ -161,6 +162,8 @@ in
         ExecStart = "${cfg.package}/bin/ucable-agent";
         Restart = "on-failure";
         NoNewPrivileges = true;
+        LimitCORE = 0;
+        MemorySwapMax = 0;
       };
     };
   };

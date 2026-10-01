@@ -35,6 +35,7 @@ CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK
 UMask=0077
 LimitCORE=0
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target

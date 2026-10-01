@@ -10,6 +10,8 @@ After=graphical-session.target
 ExecStart=/usr/local/bin/ucable-agent
 Restart=on-failure
 NoNewPrivileges=true
+LimitCORE=0
+MemorySwapMax=0
 
 [Install]
 WantedBy=graphical-session.target
