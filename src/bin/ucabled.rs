@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use ucabled::ctap::{
-    CMD_MAKE_CREDENTIAL, CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS,
-    CTAP2_ERR_PIN_NOT_SET,
+    CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION,
+    CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_PIN_NOT_SET,
 };
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
@@ -96,6 +96,10 @@ async fn daemon_loop(
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
     let mut pending: Option<Pending> = None;
+    // Credentials still to serve via `authenticatorGetNextAssertion` after a
+    // faked preflight response that reported more than one credential. Kept as
+    // (rpId, remaining credential ids).
+    let mut fake_assertions: Option<(String, std::collections::VecDeque<Vec<u8>>)> = None;
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     let mut read_failures = 0u32;
     let mut write_failures = 0u32;
@@ -139,6 +143,23 @@ async fn daemon_loop(
                                 if pending.is_some() {
                                     continue;
                                 }
+                                // Follow-up to a faked preflight response that
+                                // reported several credentials: serve the next
+                                // one so Firefox keeps the whole allowList.
+                                if payload == [CMD_GET_NEXT_ASSERTION] {
+                                    let response = match fake_assertions.as_mut() {
+                                        Some((rp, rest)) => match rest.pop_front() {
+                                            Some(cred) => {
+                                                ucabled::ctap::fake_next_assertion(rp, &cred)
+                                            }
+                                            None => vec![CTAP2_ERR_NOT_ALLOWED],
+                                        },
+                                        None => vec![CTAP2_ERR_NOT_ALLOWED],
+                                    };
+                                    let reports = transport.complete_relay(cid, &response);
+                                    write_all(&device, reports, &mut write_failures).await;
+                                    continue;
+                                }
                                 // Firefox probes with getAssertion up=false to
                                 // filter the allowList to credentials present on
                                 // this device. Answer locally with a fake success
@@ -146,10 +167,25 @@ async fn daemon_loop(
                                 // to the real interactive request without a
                                 // pointless QR scan. (Error answers make Firefox
                                 // drop the device from the transaction entirely.)
+                                // Report *all* credentials and stash the rest for
+                                // `getNextAssertion`: claiming only the first
+                                // would narrow the real allowList to it.
                                 if ucabled::ctap::is_silent_probe(&payload) {
-                                    let response = ucabled::ctap::fake_silent_assertion(&payload)
-                                        .unwrap_or_else(|| vec![CTAP2_ERR_NO_CREDENTIALS]);
-                                    tracing::info!("silent probe (up=false), answering locally");
+                                    fake_assertions = None;
+                                    let (response, rest) =
+                                        match ucabled::ctap::fake_silent_assertion(&payload) {
+                                            Some((response, rest)) => (response, rest),
+                                            None => (vec![CTAP2_ERR_NO_CREDENTIALS], Vec::new()),
+                                        };
+                                    tracing::info!(
+                                        credentials = rest.len() + 1,
+                                        "silent probe (up=false), answering locally"
+                                    );
+                                    if !rest.is_empty() {
+                                        let rp = ucabled::ctap::extract_rp_id(&payload)
+                                            .unwrap_or_default();
+                                        fake_assertions = Some((rp, rest.into()));
+                                    }
                                     let reports = transport.complete_relay(cid, &response);
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
@@ -175,6 +211,9 @@ async fn daemon_loop(
                                     }
                                     continue;
                                 }
+                                // Any preflight state is done with once the real
+                                // request starts.
+                                fake_assertions = None;
                                 if !notifier.available() {
                                     tracing::warn!(
                                         "no UI agent registered; refusing the transaction"

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::ctap::{
-    CMD_GET_ASSERTION, CMD_GET_INFO, CMD_MAKE_CREDENTIAL, CTAP1_ERR_INVALID_COMMAND,
-    CTAP2_ERR_CBOR_UNEXPECTED_TYPE, CTAP2_ERR_KEEPALIVE_CANCEL,
+    CMD_GET_ASSERTION, CMD_GET_INFO, CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL,
+    CTAP1_ERR_INVALID_COMMAND, CTAP2_ERR_CBOR_UNEXPECTED_TYPE, CTAP2_ERR_KEEPALIVE_CANCEL,
 };
 
 pub const REPORT_SIZE: usize = 64;
@@ -234,7 +234,7 @@ impl Transport {
                 let resp = crate::ctap::getinfo_response(&self.aaguid);
                 (build_response(cid, CMD_CBOR, &resp), None)
             }
-            CMD_MAKE_CREDENTIAL | CMD_GET_ASSERTION => {
+            CMD_MAKE_CREDENTIAL | CMD_GET_ASSERTION | CMD_GET_NEXT_ASSERTION => {
                 self.busy = Some(cid);
                 (vec![], Some(CtapAction::Relay(payload.to_vec())))
             }

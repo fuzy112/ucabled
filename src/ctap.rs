@@ -11,6 +11,7 @@ pub const AAGUID: [u8; 16] = *b"ucabled-aaguid01";
 pub const CMD_MAKE_CREDENTIAL: u8 = 0x01;
 pub const CMD_GET_ASSERTION: u8 = 0x02;
 pub const CMD_GET_INFO: u8 = 0x04;
+pub const CMD_GET_NEXT_ASSERTION: u8 = 0x08;
 
 // CTAP status bytes (CTAP 2.2 §8.2) used on this relay.
 pub const CTAP2_OK: u8 = 0x00;
@@ -20,6 +21,7 @@ pub const CTAP2_ERR_CBOR_UNEXPECTED_TYPE: u8 = 0x11;
 pub const CTAP2_ERR_INVALID_OPTION: u8 = 0x2c;
 pub const CTAP2_ERR_KEEPALIVE_CANCEL: u8 = 0x2d;
 pub const CTAP2_ERR_NO_CREDENTIALS: u8 = 0x2e;
+pub const CTAP2_ERR_NOT_ALLOWED: u8 = 0x32;
 pub const CTAP2_ERR_PIN_NOT_SET: u8 = 0x35;
 
 // Map keys of the CTAP2 requests parsed locally (CTAP 2.2 §6.1/§6.2).
@@ -35,12 +37,15 @@ const GETINFO_KEY_VERSIONS: u64 = 1;
 const GETINFO_KEY_AAGUID: u64 = 3;
 const GETINFO_KEY_OPTIONS: u64 = 4;
 const GETINFO_KEY_MAX_MSG_SIZE: u64 = 5;
+const GETINFO_KEY_MAX_CRED_COUNT_IN_LIST: u64 = 7;
+const GETINFO_KEY_MAX_CRED_ID_LENGTH: u64 = 8;
 const GETINFO_KEY_TRANSPORTS: u64 = 9;
 
 // Map keys of the getAssertion response built locally (CTAP 2.2 §6.2).
 const GA_RESP_KEY_CREDENTIAL: u64 = 1;
 const GA_RESP_KEY_AUTH_DATA: u64 = 2;
 const GA_RESP_KEY_SIGNATURE: u64 = 3;
+const GA_RESP_KEY_NUMBER_OF_CREDENTIALS: u64 = 5;
 
 // Synthetic assertion fields (see `fake_silent_assertion`).
 /// authData flags byte: user presence and user verification unset.
@@ -53,14 +58,28 @@ const DUMMY_SIGNATURE_LEN: usize = 8;
 /// GetInfo advertises this maxMsgSize (CTAP 2.2 §6.4 default upper bound).
 pub const MAX_MSG_SIZE: u64 = 7609;
 
+/// Advertised `maxCredentialCountInList`. Firefox/Chromium use this to decide
+/// how many credential descriptors to put in one preflight `getAssertion` (and
+/// to chunk the allowList). Relaying means there is no real per-authenticator
+/// limit, so advertise a value large enough to keep a typical RP's whole
+/// allowList in one request: chunking would let Firefox keep only the first
+/// chunk (see `fake_silent_assertion`).
+pub const MAX_CREDENTIAL_COUNT_IN_LIST: u64 = 64;
+
+/// Advertised `maxCredentialIdLength`: Firefox drops allowList entries longer
+/// than this before the preflight, so keep it generous.
+pub const MAX_CREDENTIAL_ID_LENGTH: u64 = 1024;
+
 /// authenticatorGetInfo response (status byte + canonical CBOR map).
 ///
 /// Advertised per FR-5: FIDO_2_0 only (no U2F_V2), rk/up/uv, no clientPin,
-/// maxMsgSize [`MAX_MSG_SIZE`], transports ["hybrid"].
+/// maxMsgSize [`MAX_MSG_SIZE`], the credential-list limits
+/// ([`MAX_CREDENTIAL_COUNT_IN_LIST`], [`MAX_CREDENTIAL_ID_LENGTH`]) and
+/// transports ["hybrid"].
 pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
     let mut out = vec![CTAP2_OK];
 
-    cbor::map(&mut out, 5);
+    cbor::map(&mut out, 7);
 
     cbor::uint(&mut out, GETINFO_KEY_VERSIONS);
     cbor::array(&mut out, 1);
@@ -80,6 +99,14 @@ pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
     // integers and would drop the whole device on a bad getInfo.
     cbor::uint(&mut out, GETINFO_KEY_MAX_MSG_SIZE);
     cbor::uint(&mut out, MAX_MSG_SIZE);
+
+    // Without these, Firefox/Chromium preflight the allowList one credential at
+    // a time; because the faked silent answer below always reports success,
+    // only the first credential would survive into the real getAssertion.
+    cbor::uint(&mut out, GETINFO_KEY_MAX_CRED_COUNT_IN_LIST);
+    cbor::uint(&mut out, MAX_CREDENTIAL_COUNT_IN_LIST);
+    cbor::uint(&mut out, GETINFO_KEY_MAX_CRED_ID_LENGTH);
+    cbor::uint(&mut out, MAX_CREDENTIAL_ID_LENGTH);
 
     cbor::uint(&mut out, GETINFO_KEY_TRANSPORTS);
     cbor::array(&mut out, 1);
@@ -221,19 +248,11 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
     false
 }
 
-/// Build a structurally valid getAssertion "success" response that echoes the
-/// first allowList credential, for answering Firefox's silent preflight probe
-/// (up=false) without bothering the phone. Firefox only extracts the
-/// credential descriptor from it; the real interactive request still goes to
-/// the phone with the allowList intact. The fake signature never leaves the
-/// browser's local filtering code.
-///
-/// Returns None (caller should fall back to relaying) if the request doesn't
-/// parse or has no allowList.
-pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
-    use sha2::{Digest, Sha256};
-
-    let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
+/// Parse a getAssertion request into `(rpId, credential ids)`, collecting
+/// *every* allowList credential (not just the first). Returns None on any
+/// parse irregularity or if there is no allowList.
+fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
+    let (&CMD_GET_ASSERTION, params) = command.split_first()? else {
         return None;
     };
     let mut c = CborCursor {
@@ -243,7 +262,7 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
     let pairs = c.map_header()?;
 
     let mut rp_id: Option<String> = None;
-    let mut first_cred: Option<Vec<u8>> = None;
+    let mut creds: Vec<Vec<u8>> = Vec::new();
     for _ in 0..pairs {
         let key = c.uint()?;
         match key {
@@ -255,37 +274,42 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
                     return None;
                 }
                 let n = c.argument(b & cbor::ARG_MASK)?;
-                if n == 0 {
-                    return None;
-                }
-                // First entry: map with "id" bytestring.
-                let entries = c.map_header()?;
-                let mut cred_id = None;
-                for _ in 0..entries {
-                    let k = c.text()?;
-                    if k == "id" {
-                        let b = c.byte()?;
-                        if b >> 5 != cbor::MAJOR_BYTES {
-                            return None;
+                for _ in 0..n {
+                    let entries = c.map_header()?;
+                    let mut cred_id = None;
+                    for _ in 0..entries {
+                        let k = c.text()?;
+                        if k == "id" {
+                            let b = c.byte()?;
+                            if b >> 5 != cbor::MAJOR_BYTES {
+                                return None;
+                            }
+                            let len = c.argument(b & cbor::ARG_MASK)? as usize;
+                            cred_id = Some(c.take(len)?.to_vec());
+                        } else {
+                            c.skip_value()?;
                         }
-                        let len = c.argument(b & cbor::ARG_MASK)? as usize;
-                        cred_id = Some(c.take(len)?.to_vec());
-                    } else {
-                        c.skip_value()?;
                     }
-                }
-                first_cred = cred_id;
-                // Skip remaining allowList entries.
-                for _ in 1..n {
-                    c.skip_value()?;
+                    creds.push(cred_id?);
                 }
             }
             _ => c.skip_value()?,
         }
     }
 
-    let rp_id = rp_id?;
-    let cred_id = first_cred?;
+    Some((rp_id?, creds))
+}
+
+/// Build one structurally valid getAssertion "success" response echoing
+/// `cred_id`, for answering Firefox's silent preflight probe (up=false) without
+/// bothering the phone. When `total > 1`, the `numberOfCredentials` field is
+/// set so the client fetches the rest with `authenticatorGetNextAssertion`;
+/// the daemon serves those from [`fake_next_assertion`]. Firefox only extracts
+/// the credential descriptors from these; the real interactive request still
+/// goes to the phone with the whole allowList intact. The fake signatures never
+/// leave the browser's local filtering code.
+fn fake_assertion_response(rp_id: &str, cred_id: &[u8], total: usize) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
 
     // authData = rpIdHash || flags(0) || counter(0)
     let mut auth_data = Sha256::digest(rp_id.as_bytes()).to_vec();
@@ -293,19 +317,41 @@ pub fn fake_silent_assertion(command: &[u8]) -> Option<Vec<u8>> {
     auth_data.extend_from_slice(&[0u8; AUTH_DATA_SIGN_COUNTER_LEN]);
 
     let mut out = vec![CTAP2_OK];
-    cbor::map(&mut out, 3);
+    cbor::map(&mut out, if total > 1 { 4 } else { 3 });
     // credential descriptor {"id": cred_id, "type": "public-key"}
     cbor::uint(&mut out, GA_RESP_KEY_CREDENTIAL);
     cbor::map(&mut out, 2);
     cbor::text(&mut out, "id");
-    cbor::bytes(&mut out, &cred_id);
+    cbor::bytes(&mut out, cred_id);
     cbor::text(&mut out, "type");
     cbor::text(&mut out, "public-key");
     cbor::uint(&mut out, GA_RESP_KEY_AUTH_DATA);
     cbor::bytes(&mut out, &auth_data);
     cbor::uint(&mut out, GA_RESP_KEY_SIGNATURE);
     cbor::bytes(&mut out, &[0u8; DUMMY_SIGNATURE_LEN]);
-    Some(out)
+    if total > 1 {
+        cbor::uint(&mut out, GA_RESP_KEY_NUMBER_OF_CREDENTIALS);
+        cbor::uint(&mut out, total as u64);
+    }
+    out
+}
+
+/// Build the first faked response for a silent preflight probe, plus the
+/// remaining credential ids to serve from `getNextAssertion` responses.
+///
+/// Returns None (caller answers with `NO_CREDENTIALS`) if the request doesn't
+/// parse or has no allowList.
+pub fn fake_silent_assertion(command: &[u8]) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
+    let (rp_id, creds) = parse_assertion_targets(command)?;
+    let (first, rest) = creds.split_first()?;
+    let response = fake_assertion_response(&rp_id, first, creds.len());
+    Some((response, rest.to_vec()))
+}
+
+/// Build the faked response for one `authenticatorGetNextAssertion` follow-up
+/// to [`fake_silent_assertion`].
+pub fn fake_next_assertion(rp_id: &str, cred_id: &[u8]) -> Vec<u8> {
+    fake_assertion_response(rp_id, cred_id, 1)
 }
 
 /// Detect Firefox's "make me blink" dummy makeCredential, which Firefox sends
@@ -720,6 +766,10 @@ mod tests {
         // otherwise strict parsers (Chromium) reject the whole response.
         assert!(r.windows(3).any(|w| w == [0x19, 0x1d, 0xb9]));
         assert!(!r.windows(5).any(|w| w == [0x1a, 0x00, 0x00, 0x1d, 0xb9]));
+        // Advertise the list limits so the browser does not preflight the
+        // allowList one credential at a time (key 7 -> 64, key 8 -> 1024).
+        assert!(r.windows(3).any(|w| w == [0x07, 0x18, 0x40]));
+        assert!(r.windows(4).any(|w| w == [0x08, 0x19, 0x04, 0x00]));
     }
 
     #[test]
@@ -882,15 +932,45 @@ mod tests {
     #[test]
     fn fake_silent_assertion_echoes_credential() {
         let probe = hex::decode("02a4016b776562617574686e2e696f025820e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a1627570f4").unwrap();
-        let resp = fake_silent_assertion(&probe).unwrap();
+        let (resp, rest) = fake_silent_assertion(&probe).unwrap();
+        assert!(rest.is_empty());
         assert_eq!(resp[0], 0x00);
         // echoes the credential id 56ebb4bab2368cd5c71e173c5213c85203e25119
         let cred = hex::decode("56ebb4bab2368cd5c71e173c5213c85203e25119").unwrap();
         assert!(resp.windows(cred.len()).any(|w| w == cred.as_slice()));
         assert!(resp.windows(10).any(|w| w == b"public-key"));
+        // single credential: no numberOfCredentials field
+        assert!(!resp.ends_with(&[0x05, 0x01]));
         // getAssertion without allowList cannot be faked
         let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         assert!(fake_silent_assertion(&plain).is_none());
+    }
+
+    #[test]
+    fn fake_silent_assertion_reports_all_credentials() {
+        // {1: "example.com", 2: h'aa'x32, 3: [{"id": h'0102'}, {"id": h'0304'}]}
+        let mut two = hex::decode("02a4016b6578616d706c652e636f6d025820").unwrap();
+        two.extend_from_slice(&[0xaa; 32]);
+        two.extend_from_slice(&hex::decode("0382").unwrap());
+        two.extend_from_slice(
+            &hex::decode("a262696442010264747970656a7075626c69632d6b6579").unwrap(),
+        );
+        two.extend_from_slice(
+            &hex::decode("a262696442030464747970656a7075626c69632d6b6579").unwrap(),
+        );
+        two.extend_from_slice(&hex::decode("05a1627570f5").unwrap());
+
+        let (resp, rest) = fake_silent_assertion(&two).unwrap();
+        assert_eq!(resp[0], 0x00);
+        // numberOfCredentials = 2 (key 5) so the client asks for the rest
+        assert_eq!(&resp[resp.len() - 2..], &[0x05, 0x02]);
+        assert_eq!(rest, vec![vec![0x03, 0x04]]);
+
+        // the follow-up echoes the second credential without a count field
+        let next = fake_next_assertion("example.com", &[0x03, 0x04]);
+        assert_eq!(next[0], 0x00);
+        assert!(next.windows(2).any(|w| w == [0x03, 0x04]));
+        assert!(!next.windows(2).any(|w| w == [0x05, 0x01]));
     }
 
     #[test]

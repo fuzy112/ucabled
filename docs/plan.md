@@ -193,6 +193,17 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 「找不到通行密钥」）。`ucabled::ctap::strip_transport_hints` 在转发前只从每个
 描述符里删除这个 advisory 字段，保留 id/type 及原有顺序，其余字节不动；解析
 失败则原样返回。该字段不参与任何签名，删除是安全的。
+- **多凭证 RP 的 preflight 不能只认第一个**：Firefox 在 getAssertion 前会用
+  `up=false` 静默探测把 `allowList` 过滤成「本设备确实持有」的凭证，再用过滤后
+  的列表发真实请求。过滤按 `getInfo.maxCredentialCountInList` 分块，块大小缺省
+  为 1，且在**第一个成功块后即停止**。daemon 无法真答静默探测，若只伪造第一个
+  凭证，真实请求就只剩第一个；当 RP（如 Codeberg/Forgejo 2FA）注册了多个密钥、
+  而手机持有的是后面的那个时，手机报「找不到通行密钥」。修法：`getInfo` 广告键
+  7/8（`maxCredentialCountInList=64`、`maxCredentialIdLength=1024`）避免分块，
+  `fake_silent_assertion` 回带 `numberOfCredentials` 与全部凭证，并对随后的
+  `authenticatorGetNextAssertion`（0x08）逐个补齐，从而让真实请求保留完整
+  `allowList`。伪造响应只在本地、只回显浏览器自己给的公开凭证 id，不含任何密钥
+  材料；真实断言仍由手机签名。
 
 ### 5.4 模块与选型
 
