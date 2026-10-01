@@ -25,6 +25,7 @@ pub const CTAP2_ERR_PIN_NOT_SET: u8 = 0x35;
 // Map keys of the CTAP2 requests parsed locally (CTAP 2.2 §6.1/§6.2).
 const MC_KEY_RP: u64 = 2;
 const MC_KEY_USER: u64 = 3;
+const MC_KEY_EXCLUDE_LIST: u64 = 5;
 const GA_KEY_RPID: u64 = 1;
 const GA_KEY_ALLOW_LIST: u64 = 3;
 const GA_KEY_OPTIONS: u64 = 5;
@@ -396,6 +397,206 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     result.unwrap_or_else(|| command.to_vec())
 }
 
+/// Remove the advisory `transports` hint from every credential descriptor in a
+/// getAssertion `allowList` (key 3) or makeCredential `excludeList` (key 5).
+///
+/// Firefox tags credentials it learned over USB-HID with
+/// `transports: ["usb"]`. Forwarded untouched over caBLE, some phone
+/// authenticators reject the credential as incompatible with the hybrid
+/// transport ("no passkeys found"). The hint is advisory and covered by no
+/// signature, so dropping it is safe. Descriptor order and every other field
+/// are preserved byte-for-byte. Returns the input unchanged if nothing needed
+/// stripping or the payload doesn't parse.
+pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
+    let Some((&cmd, params)) = command.split_first() else {
+        return command.to_vec();
+    };
+    // CTAP2 parameter numbering: getAssertion.allowList = 3,
+    // makeCredential.excludeList = 5 (4 is pubKeyCredParams).
+    let list_key = match cmd {
+        CMD_MAKE_CREDENTIAL => MC_KEY_EXCLUDE_LIST,
+        CMD_GET_ASSERTION => GA_KEY_ALLOW_LIST,
+        _ => return command.to_vec(),
+    };
+
+    let result = (|| -> Option<Vec<u8>> {
+        let mut c = CborCursor {
+            data: params,
+            pos: 0,
+        };
+        let pairs = c.map_header()?;
+
+        let mut out = vec![cmd];
+        let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
+        for _ in 0..pairs {
+            let key = c.uint()?;
+            let start = c.pos;
+            c.skip_value()?;
+            entries.push((key, start..c.pos));
+        }
+
+        let mut changed = false;
+        cbor::map(&mut out, pairs);
+        for (key, span) in entries {
+            cbor::uint(&mut out, key);
+            let value = &params[span.clone()];
+            if key == list_key {
+                if let Some((stripped, true)) = strip_transports_from_array(value) {
+                    changed = true;
+                    out.extend_from_slice(&stripped);
+                    continue;
+                }
+            }
+            out.extend_from_slice(value);
+        }
+        changed.then_some(out)
+    })();
+
+    match result {
+        Some(out) => {
+            tracing::debug!("stripped transports hint(s) from CTAP request");
+            out
+        }
+        None => command.to_vec(),
+    }
+}
+
+/// Drop a descriptor's `transports` entry while keeping the remaining pairs in
+/// order. Returns `(rebuilt, removed)`; `None` when `data` is not a text-keyed
+/// map or lacks an `id`, so callers can fail safe and keep the original.
+fn strip_transports_from_descriptor(data: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let mut c = CborCursor { data, pos: 0 };
+    let pairs = c.map_header()?;
+
+    let mut kept: Vec<(std::ops::Range<usize>, std::ops::Range<usize>)> = Vec::new();
+    let mut removed = false;
+    let mut has_id = false;
+    for _ in 0..pairs {
+        let key_start = c.pos;
+        let key = c.text()?;
+        let key_end = c.pos;
+        let val_start = c.pos;
+        c.skip_value()?;
+        let val_end = c.pos;
+        if key == "transports" {
+            removed = true;
+        } else {
+            has_id |= key == "id";
+            kept.push((key_start..key_end, val_start..val_end));
+        }
+    }
+    if !has_id {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    cbor::map(&mut out, kept.len() as u64);
+    for (k, v) in kept {
+        out.extend_from_slice(&data[k]);
+        out.extend_from_slice(&data[v]);
+    }
+    Some((out, removed))
+}
+
+/// Strip transport hints from every descriptor in an array. Returns
+/// `(rebuilt, removed)`; `None` when `data` is not an array.
+fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let mut c = CborCursor { data, pos: 0 };
+    let b = c.byte()?;
+    if b >> 5 != cbor::MAJOR_ARRAY {
+        return None;
+    }
+    let n = c.argument(b & cbor::ARG_MASK)?;
+
+    let mut out = Vec::new();
+    cbor::array(&mut out, n);
+    let mut removed = false;
+    for _ in 0..n {
+        let start = c.pos;
+        c.skip_value()?;
+        let elem = &data[start..c.pos];
+        match strip_transports_from_descriptor(elem) {
+            Some((stripped, true)) => {
+                removed = true;
+                out.extend_from_slice(&stripped);
+            }
+            _ => out.extend_from_slice(elem),
+        }
+    }
+    Some((out, removed))
+}
+
+/// Diagnostic: whether the request carries any `transports` hint in its
+/// getAssertion `allowList` (key 3) or makeCredential `excludeList` (key 5)
+/// descriptors. Read-only, never fails (returns false on any irregularity).
+/// Logged by the daemon so we can tell whether Firefox ever sends the hint.
+pub fn request_has_transport_hints(command: &[u8]) -> bool {
+    let Some((&cmd, params)) = command.split_first() else {
+        return false;
+    };
+    let list_key = match cmd {
+        CMD_MAKE_CREDENTIAL => MC_KEY_EXCLUDE_LIST,
+        CMD_GET_ASSERTION => GA_KEY_ALLOW_LIST,
+        _ => return false,
+    };
+
+    let result = (|| -> Option<bool> {
+        let mut c = CborCursor {
+            data: params,
+            pos: 0,
+        };
+        let pairs = c.map_header()?;
+        for _ in 0..pairs {
+            let key = c.uint()?;
+            if key == list_key {
+                return Some(array_has_transport_hint(&mut c));
+            }
+            c.skip_value()?;
+        }
+        Some(false)
+    })();
+
+    result.unwrap_or(false)
+}
+
+fn array_has_transport_hint(c: &mut CborCursor) -> bool {
+    let Some(b) = c.byte() else { return false };
+    if b >> 5 != cbor::MAJOR_ARRAY {
+        return false;
+    }
+    let Some(n) = c.argument(b & cbor::ARG_MASK) else {
+        return false;
+    };
+    for _ in 0..n {
+        let start = c.pos;
+        if c.skip_value().is_none() {
+            return false;
+        }
+        let elem = &c.data[start..c.pos];
+        if descriptor_has_transport_hint(elem) {
+            return true;
+        }
+    }
+    false
+}
+
+fn descriptor_has_transport_hint(data: &[u8]) -> bool {
+    let mut c = CborCursor { data, pos: 0 };
+    let Some(pairs) = c.map_header() else {
+        return false;
+    };
+    for _ in 0..pairs {
+        let Some(key) = c.text() else { return false };
+        if key == "transports" {
+            return true;
+        }
+        if c.skip_value().is_none() {
+            return false;
+        }
+    }
+    false
+}
+
 struct CborCursor<'a> {
     data: &'a [u8],
     pos: usize,
@@ -580,6 +781,81 @@ mod tests {
     fn patch_is_idempotent_and_untouched_when_complete() {
         let cmd = hex::decode("01a5015820cc1f4afda7a13ed02de520a7b2c8d5cce2b1e6d8dbe392f022a0cf88ee456fcb02a26269646b776562617574686e2e696f646e616d656b776562617574686e2e696f03a36269644d776562617574686e696f2d7172646e616d656271726b646973706c61794e616d656271720483a263616c672764747970656a7075626c69632d6b6579a263616c672664747970656a7075626c69632d6b6579a263616c6739010064747970656a7075626c69632d6b657907a162726bf5").unwrap();
         assert_eq!(patch_makecredential(&cmd), cmd);
+    }
+
+    /// `{"id": h'0102', "type": "public-key", "transports": ["usb"]}`
+    const DESC_WITH_TRANSPORTS: &str =
+        "a362696442010264747970656a7075626c69632d6b65796a7472616e73706f7274738163757362";
+
+    /// The same descriptor without the transports hint.
+    const DESC_NO_TRANSPORTS: &str = "a262696442010264747970656a7075626c69632d6b6579";
+
+    fn get_assertion_with(descriptor_hex: &str) -> Vec<u8> {
+        let mut cmd = hex::decode("02a2016b6578616d706c652e636f6d0381").unwrap();
+        cmd.extend_from_slice(&hex::decode(descriptor_hex).unwrap());
+        cmd
+    }
+
+    fn get_assertion_with_transport_hint() -> Vec<u8> {
+        get_assertion_with(DESC_WITH_TRANSPORTS)
+    }
+
+    #[test]
+    fn strip_transport_hints_get_assertion() {
+        let cmd = get_assertion_with_transport_hint();
+        let out = strip_transport_hints(&cmd);
+
+        assert_ne!(out, cmd);
+        assert!(!String::from_utf8_lossy(&out).contains("transports"));
+        // the credential id (bstr 42 01 02) survives
+        assert!(hex::encode(&out).contains("420102"));
+        // the rest of the request is untouched
+        assert_eq!(extract_rp_id(&out).as_deref(), Some("example.com"));
+        // idempotent
+        assert_eq!(strip_transport_hints(&out), out);
+    }
+
+    #[test]
+    fn strip_transport_hints_make_credential_exclude_list() {
+        // {1: h'aa'x32, 2: {"id": "example.com"}, 5: [descriptor-with-transports]}
+        let mut cmd = hex::decode("01a3015820").unwrap();
+        cmd.extend_from_slice(&[0xaa; 32]);
+        cmd.extend_from_slice(&hex::decode("02a16269646b6578616d706c652e636f6d0581").unwrap());
+        cmd.extend_from_slice(&hex::decode(DESC_WITH_TRANSPORTS).unwrap());
+
+        let out = strip_transport_hints(&cmd);
+        assert_ne!(out, cmd);
+        assert!(!String::from_utf8_lossy(&out).contains("transports"));
+        assert!(hex::encode(&out).contains("420102"));
+        assert_eq!(strip_transport_hints(&out), out);
+    }
+
+    #[test]
+    fn strip_transport_hints_noop_without_hint() {
+        // Interactive getAssertion with an allowList but no transports.
+        let cmd = get_assertion_with(DESC_NO_TRANSPORTS);
+        assert_eq!(strip_transport_hints(&cmd), cmd);
+        // Unrelated command byte is left alone.
+        assert_eq!(strip_transport_hints(&[0x06, 0x00]), vec![0x06, 0x00]);
+    }
+
+    #[test]
+    fn request_has_transport_hints_detects_and_defaults_false() {
+        assert!(request_has_transport_hints(
+            &get_assertion_with_transport_hint()
+        ));
+        assert!(!request_has_transport_hints(&get_assertion_with(
+            DESC_NO_TRANSPORTS
+        )));
+        // makeCredential excludeList (key 5)
+        let mut mc = hex::decode("01a3015820").unwrap();
+        mc.extend_from_slice(&[0xaa; 32]);
+        mc.extend_from_slice(&hex::decode("02a16269646b6578616d706c652e636f6d0581").unwrap());
+        mc.extend_from_slice(&hex::decode(DESC_WITH_TRANSPORTS).unwrap());
+        assert!(request_has_transport_hints(&mc));
+        // unrelated / empty
+        assert!(!request_has_transport_hints(&[0x06, 0x00]));
+        assert!(!request_has_transport_hints(&[]));
     }
 
     #[test]

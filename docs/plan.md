@@ -187,6 +187,12 @@ softtoken + platform attachment 时返回 `"internal"`。因此即使我们在
 （凭证本身仍被识别为 synced passkey / iCloud Keychain，因为那来自 attestation
 的 AAGUID 与 backup 标志）。纯属标签问题，不影响注册与登录；仅影响 RP 对
 transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hint。
+- **请求侧的 transports hint 会被剥离**：Firefox 会把 USB 凭证的
+`allowList`/`excludeList` 描述符带上 `transports: ["usb"]`。原样转发时，部分
+手机认证器会以「与 hybrid transport 不兼容」为由拒绝该凭证（表现为
+「找不到通行密钥」）。`ucabled::ctap::strip_transport_hints` 在转发前只从每个
+描述符里删除这个 advisory 字段，保留 id/type 及原有顺序，其余字节不动；解析
+失败则原样返回。该字段不参与任何签名，删除是安全的。
 
 ### 5.4 模块与选型
 

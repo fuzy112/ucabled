@@ -173,7 +173,10 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
   of scope.
 - With Firefox, RPs always see `transports: ["usb"]`: that is a hardcode in
   Firefox's Linux CTAP backend (see `docs/plan.md` §5.3). It is cosmetic and
-  does not affect usage.
+  does not affect usage. The reverse — us forwarding that hint to the phone — is
+  stripped: the daemon drops the advisory `transports` field from
+  `allowList`/`excludeList` descriptors before relaying, so phones that reject a
+  hybrid credential whose hint does not mention hybrid still find it.
 - No local PIN/UV and no attestation trust decisions — the phone does all of
   that.
 - With another authenticator (e.g. a physical security key) plugged in,

@@ -185,15 +185,21 @@ async fn daemon_loop(
                                     continue;
                                 }
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
+                                let transports_hint =
+                                    ucabled::ctap::request_has_transport_hints(&payload);
                                 tracing::info!(
                                     ?rp,
                                     cmd = %format_args!("{:#04x}", payload.first().copied().unwrap_or(0)),
                                     len = payload.len(),
+                                    transports_hint,
                                     "starting caBLE transaction"
                                 );
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);
+                                // Firefox tags USB credentials with a
+                                // transports hint that some phones reject.
+                                let payload = ucabled::ctap::strip_transport_hints(&payload);
                                 let request_type = if payload.first() == Some(&CMD_MAKE_CREDENTIAL) {
                                     RequestType::MakeCredential
                                 } else {
