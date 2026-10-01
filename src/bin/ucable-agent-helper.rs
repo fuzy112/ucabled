@@ -26,6 +26,9 @@ impl eframe::App for SelectWindow {
         if ctx.input(|i| i.viewport().close_requested()) {
             std::process::exit(EXIT_DECLINE);
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            std::process::exit(EXIT_DECLINE);
+        }
         if self.start.elapsed() >= self.timeout {
             std::process::exit(EXIT_DECLINE);
         }
@@ -60,6 +63,9 @@ impl eframe::App for QrWindow {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if ctx.input(|i| i.viewport().close_requested()) {
+            std::process::exit(0);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             std::process::exit(0);
         }
 
