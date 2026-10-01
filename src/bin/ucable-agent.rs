@@ -22,7 +22,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use ucabled::agent::{
-    AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, EXIT_SCANNED, MANAGER_INTERFACE, MANAGER_PATH,
+    AGENT_INTERFACE, BUS_NAME, ERR_NOT_AUTHORIZED, MANAGER_INTERFACE, MANAGER_PATH,
 };
 
 const AGENT_PATH: &str = "/org/ucabled/Agent";
@@ -335,12 +335,8 @@ fn show_window(
         state,
         &mut command,
         Some(format!("{url}\n")),
-        move |status| {
-            // A helper that exits because the phone scanned the QR must not
-            // cancel the transaction; every other exit does.
-            if status.code() != Some(EXIT_SCANNED) {
-                let _ = cancel_tx.send(tid);
-            }
+        move |_status| {
+            let _ = cancel_tx.send(tid);
         },
     );
 }

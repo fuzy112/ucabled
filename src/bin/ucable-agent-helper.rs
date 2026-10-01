@@ -7,8 +7,6 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use ucabled::agent::EXIT_SCANNED;
-
 /// Exit codes for `--select`: the agent maps them to the user's choice.
 const EXIT_USE_PHONE: i32 = 0;
 const EXIT_DECLINE: i32 = 1;
@@ -71,14 +69,9 @@ impl eframe::App for QrWindow {
             std::process::exit(0);
         }
 
-        // The phone has scanned the QR, so the secret is no longer needed on
-        // screen: close the window without cancelling the transaction.
-        if self.phone_found.load(Ordering::Relaxed) {
-            std::process::exit(EXIT_SCANNED);
-        }
-
+        let found = self.phone_found.load(Ordering::Relaxed);
         let remaining = self.timeout.saturating_sub(self.start.elapsed());
-        let expired = remaining.is_zero();
+        let expired = !found && remaining.is_zero();
 
         let mut close = false;
         ui.vertical_centered(|ui| {
@@ -88,7 +81,9 @@ impl eframe::App for QrWindow {
                 ui.label(format!("Site: {rp}"));
             }
             ui.add_space(6.0);
-            if expired {
+            if found {
+                ui.label("Phone detected — confirm on your phone");
+            } else if expired {
                 ui.label("Code expired. Close this window and start again.");
             } else {
                 ui.image(egui::load::SizedTexture::new(
@@ -111,7 +106,7 @@ impl eframe::App for QrWindow {
         }
 
         // Keep the countdown ticking while the code is still valid.
-        if !expired {
+        if !found && !expired {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
