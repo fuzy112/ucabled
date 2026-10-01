@@ -37,6 +37,9 @@ pub const POLKIT_ACTION: &str = "org.ucabled.register-agent";
 /// Returned to an agent whose user is not the active local session user; the
 /// agent treats this as final and exits instead of retrying.
 pub const ERR_NOT_AUTHORIZED: &str = "org.ucabled.NotAuthorized";
+/// Exit code of `ucable-agent-helper` meaning "the phone scanned the QR": the
+/// window must disappear but the transaction must *not* be cancelled.
+pub const EXIT_SCANNED: i32 = 2;
 
 const POLKIT_BUS: &str = "org.freedesktop.PolicyKit1";
 const POLKIT_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
