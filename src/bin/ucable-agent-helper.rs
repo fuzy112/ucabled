@@ -54,6 +54,9 @@ impl eframe::App for SelectWindow {
 struct QrWindow {
     rp: Option<String>,
     texture: egui::TextureHandle,
+    /// A heavily downscaled copy, drawn scaled up so the code is illegible
+    /// once the phone has scanned it.
+    blurred: egui::TextureHandle,
     phone_found: Arc<AtomicBool>,
     start: Instant,
     timeout: Duration,
@@ -82,6 +85,10 @@ impl eframe::App for QrWindow {
             }
             ui.add_space(6.0);
             if found {
+                ui.image(egui::load::SizedTexture::new(
+                    self.blurred.id(),
+                    egui::vec2(300.0, 300.0),
+                ));
                 ui.label("Phone detected — confirm on your phone");
             } else if expired {
                 ui.label("Code expired. Close this window and start again.");
@@ -112,7 +119,10 @@ impl eframe::App for QrWindow {
     }
 }
 
-fn make_qr_texture(ctx: &egui::Context, url: &str) -> egui::TextureHandle {
+/// Build the crisp QR texture plus a heavily downscaled copy. The downscaled
+/// copy is drawn scaled back up with linear filtering, which smears the module
+/// pattern beyond recognition while still reading as "the code".
+fn make_qr_textures(ctx: &egui::Context, url: &str) -> (egui::TextureHandle, egui::TextureHandle) {
     let code = qrcode::QrCode::new(url.as_bytes()).expect("invalid QR contents");
     let qr_width = code.width();
     let border = 4;
@@ -125,7 +135,46 @@ fn make_qr_texture(ctx: &egui::Context, url: &str) -> egui::TextureHandle {
             }
         }
     }
-    ctx.load_texture("qr", img, egui::TextureOptions::NEAREST)
+    let crisp = ctx.load_texture("qr", img.clone(), egui::TextureOptions::NEAREST);
+
+    // Averaging the image down to a handful of pixels destroys the module
+    // pattern; upscaling that with linear filtering blurs it out.
+    const BLUR_SIZE: usize = 6;
+    let blurred = ctx.load_texture(
+        "qr-blurred",
+        downscale(&img, BLUR_SIZE),
+        egui::TextureOptions::LINEAR,
+    );
+    (crisp, blurred)
+}
+
+/// Box-filter `img` down to `target` x `target` pixels.
+fn downscale(img: &egui::ColorImage, target: usize) -> egui::ColorImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = egui::ColorImage::new(
+        [target, target],
+        vec![egui::Color32::WHITE; target * target],
+    );
+    for ty in 0..target {
+        for tx in 0..target {
+            let x0 = tx * w / target;
+            let x1 = ((tx + 1) * w / target).max(x0 + 1);
+            let y0 = ty * h / target;
+            let y1 = ((ty + 1) * h / target).max(y0 + 1);
+            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = img[(x, y)];
+                    r += p.r() as u32;
+                    g += p.g() as u32;
+                    b += p.b() as u32;
+                    n += 1;
+                }
+            }
+            out[(tx, ty)] = egui::Color32::from_rgb((r / n) as u8, (g / n) as u8, (b / n) as u8);
+        }
+    }
+    out
 }
 
 /// Read the first non-empty line from stdin as the QR URL.
@@ -209,9 +258,11 @@ fn main() -> eframe::Result<()> {
         "Phone Passkey Bridge",
         options,
         Box::new(move |cc| {
+            let (texture, blurred) = make_qr_textures(&cc.egui_ctx, &url);
             Ok(Box::new(QrWindow {
                 rp,
-                texture: make_qr_texture(&cc.egui_ctx, &url),
+                texture,
+                blurred,
                 phone_found,
                 start: Instant::now(),
                 timeout,
