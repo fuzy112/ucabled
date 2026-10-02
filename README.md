@@ -146,6 +146,22 @@ the window or click Cancel to abort.
 - Cancel/timeout/disconnect are mapped back to Firefox as the proper CTAP
   error codes.
 
+### SSH security keys
+
+OpenSSH's FIDO `sk` key types work as well, without a browser: `ssh` and
+`ssh-keygen` talk to the virtual device directly, so a `ssh-keygen -t ecdsa-sk`
+or `ssh-keygen -Y sign` in the active session pops the same QR window, and the
+phone asks for its passcode/biometric (user verification) before answering.
+
+- Use `ecdsa-sk`. `ed25519-sk` is **not** supported: phone passkey providers
+  only sign ES256, so the phone closes the session when asked for an Ed25519
+  credential.
+- Resident keys (`ssh-keygen -t ecdsa-sk -O resident`) work; the credential is
+  stored as a discoverable passkey on the phone and can be re-enrolled
+  (overwritten) as usual.
+- The SSH client must run on this machine in the active local session; the token
+  cannot be used from a remote session, and there is no `ssh-agent` integration.
+
 ## Security
 
 - The host keeps no key material: the private key and every FIDO operation
@@ -193,6 +209,8 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
   stripped: the daemon drops the advisory `transports` field from
   `allowList`/`excludeList` descriptors before relaying, so phones that reject a
   hybrid credential whose hint does not mention hybrid still find it.
+- Of OpenSSH's FIDO key types only `ecdsa-sk` works; `ed25519-sk` is rejected
+  because phone passkey providers do not implement the Ed25519 algorithm.
 - No local PIN/UV and no attestation trust decisions — the phone does all of
   that.
 - With another authenticator (e.g. a physical security key) plugged in,
