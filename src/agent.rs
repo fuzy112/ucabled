@@ -19,7 +19,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use dbus::arg::{PropMap, RefArg, Variant};
-use dbus::blocking::Connection;
 use dbus::message::{MatchRule, Message};
 use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
 use dbus::Path;
@@ -44,6 +43,13 @@ const POLKIT_INTERFACE: &str = "org.freedesktop.PolicyKit1.Authority";
 const DBUS_BUS: &str = "org.freedesktop.DBus";
 const DBUS_PATH: &str = "/org/freedesktop/DBus";
 const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
+
+/// polkit check timeout when an agent registers.  Generous: registration is
+/// rare, and a slow polkit must not spuriously deny a valid agent.
+const REGISTER_TIMEOUT: Duration = Duration::from_secs(25);
+/// polkit check timeout for the per-Prompt re-check.  Short and fail-closed,
+/// so a hung polkit cannot stall a transaction for long.
+const RECHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A registered UI agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +201,7 @@ pub fn start(
         tracing::error!("system bus connection lost: {err}");
     });
 
-    let crossroads = build_crossroads(&slot, cancel_tx.clone(), select_tx);
+    let crossroads = build_crossroads(&slot, cancel_tx.clone(), select_tx, conn.clone());
     let streams = handle.block_on(register_on_bus(&conn))?;
 
     handle.spawn(route_messages(
@@ -214,20 +220,22 @@ pub fn start(
     })
 }
 
-/// Check whether `sender` may register an agent, returning its uid.
+/// Check whether `sender` may act as the UI agent, returning its uid.
 ///
-/// Opens its own blocking bus connection: this runs inside the message
-/// routing task and only on registration (a rare, locally answered call),
-/// so briefly parking the task there is acceptable.
-fn authorize(sender: &str) -> Result<Option<u32>> {
-    let conn = Connection::new_system().context("connect system bus")?;
-
+/// Runs on the daemon's existing bus connection over the async API, so it
+/// neither opens a new connection nor blocks a worker thread; the caller
+/// awaits it.  Only the machine-local polkit round trip is on the path.
+async fn authorize(
+    conn: &Arc<SyncConnection>,
+    sender: &str,
+    timeout: Duration,
+) -> Result<Option<u32>> {
     let mut details: PropMap = PropMap::new();
     let value: Box<dyn RefArg + 'static> = Box::new(sender.to_string());
     details.insert("name".to_string(), Variant(value));
     let subject = ("system-bus-name".to_string(), details);
 
-    let proxy = conn.with_proxy(POLKIT_BUS, POLKIT_PATH, Duration::from_secs(25));
+    let proxy = Proxy::new(POLKIT_BUS, POLKIT_PATH, timeout, conn.clone());
     // The result is a single struct argument `(b b a{ss})`, so it must be
     // read as a one-element tuple wrapping the struct.
     let ((authorized, _challenge, _details),): ((bool, bool, HashMap<String, String>),) = proxy
@@ -242,15 +250,17 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
                 "",
             ),
         )
+        .await
         .context("polkit CheckAuthorization")?;
 
     if !authorized {
         return Ok(None);
     }
 
-    let dbus = conn.with_proxy(DBUS_BUS, DBUS_PATH, Duration::from_secs(5));
+    let dbus = Proxy::new(DBUS_BUS, DBUS_PATH, Duration::from_secs(5), conn.clone());
     let (uid,): (u32,) = dbus
         .method_call(DBUS_INTERFACE, "GetConnectionUnixUser", (sender,))
+        .await
         .unwrap_or((u32::MAX,));
     Ok(Some(uid))
 }
@@ -289,43 +299,60 @@ fn build_crossroads(
     slot: &Arc<Mutex<AgentSlot>>,
     cancel_tx: mpsc::Sender<CancelRequest>,
     select_tx: mpsc::Sender<(u64, bool)>,
+    conn: Arc<SyncConnection>,
 ) -> Crossroads {
     let mut crossroads = Crossroads::new();
+    // Registration authorizes through polkit over the async bus API, so the
+    // crossroads must be able to spawn the method's future.
+    crossroads.set_async_support(Some((
+        conn.clone(),
+        Box::new(|fut| {
+            tokio::spawn(fut);
+        }),
+    )));
     let iface = crossroads.register(MANAGER_INTERFACE, {
         let slot = slot.clone();
         move |builder| {
             let register_slot = slot.clone();
-            builder.method(
+            let register_conn = conn.clone();
+            builder.method_with_cr_async(
                 "RegisterAgent",
                 ("path",),
                 (),
-                move |ctx, _: &mut (), (path,): (Path<'static>,)| {
-                    let sender = ctx
-                        .message()
-                        .sender()
-                        .ok_or_else(|| MethodErr::failed(&"missing sender"))?
-                        .to_string();
-                    let authorized = authorize(&sender).map_err(|e| {
-                        tracing::warn!("polkit check failed: {e:#}");
-                        MethodErr::failed(&"authorization check failed")
-                    })?;
-                    let Some(uid) = authorized else {
-                        tracing::warn!(%sender, "agent registration denied by polkit");
-                        return Err(MethodErr::from((
-                            ERR_NOT_AUTHORIZED,
-                            "only the active local session may register an agent",
-                        )));
-                    };
-                    let mut guard = register_slot.lock().unwrap();
-                    guard.generation += 1;
-                    let generation = guard.generation;
-                    guard.current = Some(Agent {
-                        destination: sender.clone(),
-                        path: path.to_string(),
-                        uid,
-                    });
-                    tracing::info!(%sender, %path, uid, generation, "agent registered");
-                    Ok(())
+                move |mut ctx, _cr, (path,): (Path<'static>,)| {
+                    let slot = register_slot.clone();
+                    let conn = register_conn.clone();
+                    async move {
+                        let Some(sender) = ctx.message().sender().map(|s| s.to_string()) else {
+                            return ctx.reply(Err(MethodErr::failed(&"missing sender")));
+                        };
+                        let authorized = match authorize(&conn, &sender, REGISTER_TIMEOUT).await {
+                            Ok(authorized) => authorized,
+                            Err(e) => {
+                                tracing::warn!("polkit check failed: {e:#}");
+                                return ctx.reply(Err(MethodErr::failed(
+                                    &"authorization check failed",
+                                )));
+                            }
+                        };
+                        let Some(uid) = authorized else {
+                            tracing::warn!(%sender, "agent registration denied by polkit");
+                            return ctx.reply(Err(MethodErr::from((
+                                ERR_NOT_AUTHORIZED,
+                                "only the active local session may register an agent",
+                            ))));
+                        };
+                        let mut guard = slot.lock().unwrap();
+                        guard.generation += 1;
+                        let generation = guard.generation;
+                        guard.current = Some(Agent {
+                            destination: sender.clone(),
+                            path: path.to_string(),
+                            uid,
+                        });
+                        tracing::info!(%sender, %path, uid, generation, "agent registered");
+                        ctx.reply(Ok(()))
+                    }
                 },
             );
 
@@ -449,6 +476,35 @@ async fn dispatch_commands(
             tracing::debug!("no agent registered, dropping UI command");
             continue;
         };
+        // A Prompt carries the QR transaction secret, and allow_active is a
+        // property of the session, not of the agent: after a fast user switch
+        // a previous session's agent can linger with its registration intact.
+        // Re-check with polkit before delivering the secret, as the design
+        // doc requires.  Registration was already authorized, so this only
+        // guards the case where the session's activity changed since.
+        if let AgentCommand::Prompt { tid, .. } = &command {
+            let tid = *tid;
+            match recheck(&authorize(&conn, &agent.destination, RECHECK_TIMEOUT).await) {
+                Recheck::Authorized => {}
+                Recheck::Denied => {
+                    tracing::warn!(
+                        destination = %agent.destination,
+                        "agent's session is no longer active, dropping the prompt"
+                    );
+                    if let Some(generation) = clear_if_matches(&slot, Some(&agent.destination)) {
+                        let _ = cancel_tx.send(CancelRequest::AgentGone(generation)).await;
+                    }
+                    continue;
+                }
+                Recheck::Inconclusive => {
+                    tracing::warn!("polkit re-check failed, cancelling the transaction");
+                    // Keep the agent: a transient bus or polkit failure must
+                    // not deregister a healthy agent for later transactions.
+                    let _ = cancel_tx.send(CancelRequest::Transaction(tid)).await;
+                    continue;
+                }
+            }
+        }
         let proxy = Proxy::new(
             agent.destination.as_str(),
             agent.path.as_str(),
@@ -567,6 +623,27 @@ fn failed_call(is_gone: bool, prompt_tid: Option<u64>) -> FailedCall {
     }
 }
 
+/// Outcome of the polkit re-check run before a Prompt is delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recheck {
+    /// Still authorized: deliver the prompt.
+    Authorized,
+    /// The agent's session is no longer the active one: drop the agent and
+    /// abort the transaction.
+    Denied,
+    /// The check could not be completed (bus or polkit failure): abort this
+    /// transaction but keep the agent, which may still be valid.
+    Inconclusive,
+}
+
+fn recheck(result: &Result<Option<u32>>) -> Recheck {
+    match result {
+        Ok(Some(_)) => Recheck::Authorized,
+        Ok(None) => Recheck::Denied,
+        Err(_) => Recheck::Inconclusive,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,5 +702,16 @@ mod tests {
         assert_eq!(failed_call(false, Some(7)), CancelTransaction(7));
         // A transient failure on a command with no transaction is ignored.
         assert_eq!(failed_call(false, None), Nothing);
+    }
+
+    #[test]
+    fn recheck_distinguishes_denial_from_failure() {
+        use Recheck::*;
+        assert_eq!(recheck(&Ok(Some(1000))), Authorized);
+        // A definite denial means the session is no longer active.
+        assert_eq!(recheck(&Ok(None)), Denied);
+        // An inconclusive check (bus/polkit failure) must not be treated as
+        // a denial, or a hiccup would deregister a healthy agent.
+        assert_eq!(recheck(&Err(anyhow::anyhow!("polkit unreachable"))), Inconclusive);
     }
 }
