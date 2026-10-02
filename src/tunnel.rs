@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::Response;
+use tokio_tungstenite::tungstenite::http::{Response, Uri};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
@@ -51,6 +51,50 @@ pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 /// How long to wait for the tunnel websocket handshake (per redirect hop).
 pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// The (scheme, host, port) of a tunnel URL.
+///
+/// The tunnel server is not trusted, so redirects must stay on the authority
+/// the EID selected: an unchecked `Location` would let the server steer the
+/// daemon's outbound connections at arbitrary hosts (blind SSRF) or downgrade
+/// the transport to cleartext `ws://`.  Plain `ws` is accepted for the
+/// initial URL only so the local test relay keeps working; the production
+/// URLs built by [`new_tunnel_url`]/[`connect_url`] are always `wss`.
+fn tunnel_authority(url: &str) -> Result<(String, String, u16)> {
+    let uri = url
+        .parse::<Uri>()
+        .with_context(|| format!("invalid tunnel url {url}"))?;
+    let scheme = uri.scheme_str().unwrap_or_default();
+    if scheme != "wss" && scheme != "ws" {
+        bail!("tunnel url must use ws(s)://");
+    }
+    let authority = uri
+        .authority()
+        .ok_or_else(|| anyhow!("tunnel url has no authority"))?;
+    if authority.as_str().contains('@') {
+        bail!("tunnel url must not carry userinfo");
+    }
+    let host = authority.host().to_lowercase();
+    let port = authority
+        .port_u16()
+        .unwrap_or(if scheme == "wss" { 443 } else { 80 });
+    Ok((scheme.to_string(), host, port))
+}
+
+/// Follow a redirect only when it stays on the expected scheme and authority.
+fn validate_redirect(expected: &(String, String, u16), location: &str) -> Result<String> {
+    let got = tunnel_authority(location)
+        .with_context(|| format!("invalid redirect Location {location}"))?;
+    if &got != expected {
+        bail!(
+            "tunnel redirect to a different authority ({}://{}:{}), refusing",
+            got.0,
+            got.1,
+            got.2
+        );
+    }
+    Ok(location.to_string())
+}
+
 pub fn decode_tunnel_server_domain(encoded: u16) -> Option<String> {
     if encoded < ASSIGNED_DOMAIN_LIMIT {
         return ASSIGNED_TUNNEL_DOMAINS
@@ -95,7 +139,9 @@ pub fn connect_url(domain: &str, routing_id: &[u8; 3], tunnel_id: &[u8; 16]) -> 
 pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
     ensure_crypto_provider();
     // The spec requires following HTTP redirects; tokio-tungstenite does not,
-    // so do it manually.
+    // so do it manually. The redirect target must stay on the EID-selected
+    // authority; the tunnel server is not trusted to pick our connections.
+    let expected = tunnel_authority(url)?;
     let mut url = url.to_string();
     for _ in 0..MAX_REDIRECTS {
         let mut request = url
@@ -116,9 +162,23 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
                     .map(|s| s.to_string());
                 match (status.as_u16(), location) {
                     (code, Some(loc)) if REDIRECT_STATUSES.contains(&code) => {
-                        tracing::info!(%status, redirect = %loc, "following tunnel redirect");
-                        url = loc;
-                        continue;
+                        match validate_redirect(&expected, &loc) {
+                            Ok(next) => {
+                                tracing::info!(%status, redirect = %next, "following tunnel redirect");
+                                url = next;
+                                continue;
+                            }
+                            // The known tunnel servers do not redirect across
+                            // authorities; if that ever changes this log line
+                            // is where the failed transactions come from.
+                            Err(e) => {
+                                tracing::warn!(
+                                    %status, redirect = %loc,
+                                    "refusing tunnel redirect: {e:#}"
+                                );
+                                return Err(e);
+                            }
+                        }
                     }
                     _ => return Err(anyhow!("tunnel websocket HTTP error: {status}")),
                 }
@@ -191,5 +251,43 @@ mod tests {
             connect_url("d.example", &[0x01, 0x02, 0x03], &[0x0f; 16]),
             format!("wss://d.example/cable/connect/010203/{}", "0f".repeat(16))
         );
+    }
+
+    #[test]
+    fn redirect_to_same_authority_is_followed() {
+        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        let loc = "wss://cable.ua5v.com/cable/connect/010203/ff";
+        assert_eq!(validate_redirect(&expected, loc).unwrap(), loc);
+        // Explicit default port and host case differences still match.
+        assert!(validate_redirect(&expected, "wss://CABLE.ua5v.com:443/x").is_ok());
+        // The local test relay dials plain ws; same-scheme same-host is fine.
+        let local = tunnel_authority("ws://127.0.0.1:8080/cable/connect/010203/00").unwrap();
+        assert!(validate_redirect(&local, "ws://127.0.0.1:8080/other").is_ok());
+        assert!(validate_redirect(&local, "ws://127.0.0.1:9090/other").is_err());
+    }
+
+    #[test]
+    fn redirect_to_another_authority_is_rejected() {
+        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        for loc in [
+            "wss://cable.auth.com/cable/connect/010203/ff",
+            "wss://cable.ua5v.com:444/cable/connect/010203/ff",
+            "wss://127.0.0.1/internal/admin",
+        ] {
+            assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
+        }
+    }
+
+    #[test]
+    fn redirect_downgrade_and_userinfo_are_rejected() {
+        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        for loc in [
+            "ws://cable.ua5v.com/cable/connect/010203/ff",
+            "wss://user@cable.ua5v.com/cable/connect/010203/ff",
+            "/cable/connect/010203/ff",
+            "https://cable.ua5v.com/cable/connect/010203/ff",
+        ] {
+            assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
+        }
     }
 }
