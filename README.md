@@ -142,7 +142,9 @@ the window or click Cancel to abort.
   `/dev/uhid` lets a process create arbitrary virtual HID devices (including a
   keyboard), so it is not given to the human user; Firefox only needs the
   resulting hidraw node, which still gets uaccess from systemd's FIDO rules.
-  The daemon runs unprivileged in a systemd sandbox.
+  The daemon runs unprivileged in a systemd sandbox. If the node is nonetheless
+  writable by another account (e.g. a stale udev `uaccess` tag), the daemon
+  logs a prominent warning at startup instead of changing permissions itself.
 - **Only the active local session may show the QR window.** The session agent
   registers as a D-Bus agent, and the daemon authorizes the registration
   through polkit (`allow_active=yes`), re-checking on every prompt. SSH and

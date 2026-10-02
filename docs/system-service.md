@@ -226,7 +226,10 @@ NixOS module（`nix/module.nix`）：
 
 - `users.users.ucabled` / `users.groups.ucabled`（`isSystemUser`）。
 - udev：`KERNEL=="uhid", RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`（ACL 授予，
-  不改节点组；取代 `uaccess`）。
+  不改节点组；取代 `uaccess`）。守护进程启动时检查该节点，若除 `ucabled`
+  外仍有可写者（例如旧规则遗留、被 logind 在 seat 切换时反复重授的
+  `uaccess` 标签），**只告警、不自行收紧**；修法是重启或对
+  `/sys/class/misc/uhid` 做 `udevadm trigger`（见 `src/uhid_perm.rs`）。
 - `systemd.services.ucabled`（system unit，含第 6 节的 sandbox）。
 - `systemd.user.services.ucable-agent`：作为全局 user unit 对所有用户启用
   （`wantedBy = graphical-session.target`，`PartOf`/`After` 同一 target）；
