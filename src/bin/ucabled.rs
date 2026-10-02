@@ -128,6 +128,16 @@ fn main() -> Result<()> {
     rt.block_on(daemon_loop(notifier, cancel_rx, select_rx))
 }
 
+/// Build the keepalive timer.  The missed-tick policy is `Delay`, not the
+/// default `Burst`: a keepalive's job is a steady cadence, and bursting the
+/// backlog of an idle interval would flood the host with thousands of
+/// reports the moment a transaction starts.
+fn keepalive_interval() -> tokio::time::Interval {
+    let mut interval = tokio::time::interval(KEEPALIVE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    interval
+}
+
 async fn daemon_loop(
     notifier: Notifier,
     mut cancel_rx: mpsc::Receiver<CancelRequest>,
@@ -156,7 +166,7 @@ async fn daemon_loop(
     // faked preflight response that reported more than one credential. Kept as
     // (rpId, remaining credential ids).
     let mut fake_assertions: Option<(String, std::collections::VecDeque<Vec<u8>>)> = None;
-    let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+    let mut keepalive = keepalive_interval();
     let mut read_failures = 0u32;
     let mut write_failures = 0u32;
     // Number of processes holding the hidraw node open (several clients may
@@ -548,5 +558,16 @@ mod tests {
         // applies.
         let p = select_pending(7, None);
         assert!(!cancel_aborts(&CancelRequest::AgentGone(1), Some(&p)));
+    }
+
+    // The timer needs a Tokio time context to be constructed.
+    #[tokio::test]
+    async fn keepalives_use_delay_not_burst() {
+        // Burst would replay every tick missed during an idle interval at
+        // once, flooding the host with keepalive reports.
+        assert_eq!(
+            keepalive_interval().missed_tick_behavior(),
+            tokio::time::MissedTickBehavior::Delay
+        );
     }
 }
