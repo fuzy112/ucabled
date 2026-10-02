@@ -83,7 +83,21 @@ The module configures everything:
 Run `nixos-rebuild switch`, then log out and back in (or run
 `systemctl --user start ucable-agent`) so the agent registers.
 
-## Install (other distros, manual)
+## Install (other distros)
+
+On a systemd distribution, build and run the installer:
+
+```bash
+cargo build --release
+sudo ./install.sh            # --prefix DIR to install elsewhere
+```
+
+It installs the three binaries, creates the `ucabled` service account, and
+places the udev, D-Bus, polkit and systemd files, then enables the daemon and
+the session agent. `sudo ./install.sh --uninstall` reverses it. Run
+`./install.sh --help` for the overridable paths.
+
+The equivalent manual steps, if you prefer:
 
 ```bash
 cargo build --release
