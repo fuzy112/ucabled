@@ -204,7 +204,6 @@ Helper tools in the repo (not shipped in the package):
 - `src/bin/hidraw-probe.rs`: kernel HID path diagnostics
 - `src/bin/cable-advert-probe.rs`: show a caBLE QR offering the BLE data
   channel and report whether the phone advertised an L2CAP PSM
-- `examples/qrgen.rs`: generate a QR code only
 
 Requirements and design: `docs/plan.md`; system service / UI agent design:
 `docs/system-service.md`; D-Bus async design: `docs/async-dbus.md`; tunnel
