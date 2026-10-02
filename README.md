@@ -153,6 +153,27 @@ OpenSSH's FIDO `sk` key types work as well, without a browser: `ssh` and
 or `ssh-keygen -Y sign` in the active session pops the same QR window, and the
 phone asks for its passcode/biometric (user verification) before answering.
 
+```bash
+# Non-resident key (the default): the key handle lives in the .pub file.
+ssh-keygen -t ecdsa-sk -f ~/.ssh/id_ecdsa_sk
+
+# Resident (discoverable) key: stored as a passkey on the phone.
+ssh-keygen -t ecdsa-sk -O resident -f ~/.ssh/id_ecdsa_resident
+ssh-keygen -K                      # later: reload resident keys
+
+# Install the public key on a server and log in.
+ssh-copy-id -i ~/.ssh/id_ecdsa_sk.pub you@example.com
+ssh -i ~/.ssh/id_ecdsa_sk you@example.com
+
+# Sign and verify a file (no SSH server involved).
+ssh-keygen -Y sign -f ~/.ssh/id_ecdsa_sk -n file ./file    # writes ./file.sig
+printf '%s %s\n' "$USER" "$(cat ~/.ssh/id_ecdsa_sk.pub)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./file
+```
+
+Each of these opens the QR window; run it in the active session. Adding a
+resident key that already exists on the phone asks before overwriting it.
+
 - Use `ecdsa-sk`. `ed25519-sk` is **not** supported: phone passkey providers
   only sign ES256, so the phone closes the session when asked for an Ed25519
   credential.
