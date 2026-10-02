@@ -159,7 +159,6 @@ ssh-keygen -t ecdsa-sk -f ~/.ssh/id_ecdsa_sk
 
 # Resident (discoverable) key: stored as a passkey on the phone.
 ssh-keygen -t ecdsa-sk -O resident -f ~/.ssh/id_ecdsa_resident
-ssh-keygen -K                      # later: reload resident keys
 
 # Install the public key on a server and log in.
 ssh-copy-id -i ~/.ssh/id_ecdsa_sk.pub you@example.com
@@ -180,6 +179,9 @@ resident key that already exists on the phone asks before overwriting it.
 - Resident keys (`ssh-keygen -t ecdsa-sk -O resident`) work; the credential is
   stored as a discoverable passkey on the phone and can be re-enrolled
   (overwritten) as usual.
+- Downloading resident keys with `ssh-keygen -K` is **not** supported: it uses
+  the CTAP credential-management commands, which phone passkey providers do not
+  expose. Keep the private key file written at enrollment (or enroll again).
 - The SSH client must run on this machine in the active local session; the token
   cannot be used from a remote session, and there is no `ssh-agent` integration.
 
