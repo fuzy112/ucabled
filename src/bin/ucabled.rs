@@ -35,6 +35,14 @@ const MAX_UHID_READ_FAILURES: u32 = 10;
 /// declining. The helper has its own, slightly shorter, timeout.
 const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
 
+/// User-facing notice when a tunnel redirect is refused.  Static text only:
+/// nothing the tunnel server sent may cross into the user's session, where
+/// the notification service may render markup.
+const REDIRECT_REFUSED_SUMMARY: &str = "Passkey sign-in stopped";
+const REDIRECT_REFUSED_BODY: &str = "The phone tunnel server sent an unexpected \
+redirect, so the transaction was refused.  If this repeats, please report it; \
+details are in the system journal (journalctl -u ucabled).";
+
 /// Bound on queued UI cancellations.  Cancellations are only acted on when
 /// they match the in-flight transaction, so a full queue can only ever mean
 /// a misbehaving agent; excess ones are dropped in the D-Bus layer.
@@ -385,6 +393,15 @@ async fn daemon_loop(
                             }
                             Err(e) => {
                                 tracing::warn!("caBLE transaction failed: {e}");
+                                // A refused redirect means the tunnel server
+                                // misbehaved — not a routine failure — so
+                                // surface it to the user.
+                                if e.is_redirect_refused() {
+                                    notifier.notify(
+                                        REDIRECT_REFUSED_SUMMARY,
+                                        REDIRECT_REFUSED_BODY,
+                                    );
+                                }
                                 vec![e.ctap_status()]
                             }
                         };

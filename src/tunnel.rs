@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::fmt;
+
 use anyhow::{anyhow, bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -80,17 +82,33 @@ fn tunnel_authority(url: &str) -> Result<(String, String, u16)> {
     Ok((scheme.to_string(), host, port))
 }
 
+/// The tunnel server answered with a redirect that failed re-validation
+/// (different scheme/authority, userinfo, unparsable Location).  Unlike a
+/// timeout this points at a misbehaving or hostile server, so the daemon
+/// recognises it by type to warn the user.
+#[derive(Debug)]
+pub struct RedirectRefused(pub(crate) String);
+
+impl fmt::Display for RedirectRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tunnel redirect refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for RedirectRefused {}
+
 /// Follow a redirect only when it stays on the expected scheme and authority.
-fn validate_redirect(expected: &(String, String, u16), location: &str) -> Result<String> {
+fn validate_redirect(
+    expected: &(String, String, u16),
+    location: &str,
+) -> std::result::Result<String, RedirectRefused> {
     let got = tunnel_authority(location)
-        .with_context(|| format!("invalid redirect Location {location}"))?;
+        .map_err(|e| RedirectRefused(format!("unparsable Location {location:?}: {e:#}")))?;
     if &got != expected {
-        bail!(
-            "tunnel redirect to a different authority ({}://{}:{}), refusing",
-            got.0,
-            got.1,
-            got.2
-        );
+        return Err(RedirectRefused(format!(
+            "different authority {}://{}:{}",
+            got.0, got.1, got.2
+        )));
     }
     Ok(location.to_string())
 }
@@ -172,11 +190,8 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
                             // authorities; if that ever changes this log line
                             // is where the failed transactions come from.
                             Err(e) => {
-                                tracing::warn!(
-                                    %status, redirect = %loc,
-                                    "refusing tunnel redirect: {e:#}"
-                                );
-                                return Err(e);
+                                tracing::warn!(%status, redirect = %loc, "{e}");
+                                return Err(e.into());
                             }
                         }
                     }
@@ -289,5 +304,15 @@ mod tests {
         ] {
             assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
         }
+    }
+
+    #[test]
+    fn refused_redirect_is_a_typed_error() {
+        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        let err = validate_redirect(&expected, "wss://cable.auth.com/x").unwrap_err();
+        // The daemon detects this through the anyhow chain, so the type
+        // must survive the conversion.
+        let any = anyhow::Error::new(err);
+        assert!(any.chain().any(|c| c.is::<RedirectRefused>()));
     }
 }

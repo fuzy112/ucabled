@@ -7,11 +7,13 @@
 //! to register is decided by the daemon through polkit, so an agent belonging
 //! to a background (non-active) session is refused and exits.
 
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use dbus::arg::{RefArg, Variant};
 use dbus::message::{MatchRule, Message};
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_crossroads::Crossroads;
@@ -184,6 +186,16 @@ fn build_crossroads(
                 move |_ctx, _: &mut (), (_tid,): (u64,)| {
                     close_window(&close_qr);
                     close_window(&close_select);
+                    Ok(())
+                },
+            );
+
+            builder.method(
+                "Notify",
+                ("summary", "body"),
+                (),
+                move |_ctx, _: &mut (), (summary, body): (String, String)| {
+                    tokio::spawn(desktop_notify(summary, body));
                     Ok(())
                 },
             );
@@ -365,6 +377,41 @@ fn show_select_window(state: &WindowSlot, result_tx: &UnboundedSender<(u64, bool
     });
     if !opened {
         let _ = decline_tx.send((tid, false));
+    }
+}
+
+/// Show a desktop notification through the session bus.  Best-effort: a
+/// missing session bus or notification service only costs a log line.
+/// A fresh connection per call — notifications are rare (currently only a
+/// refused tunnel redirect).
+async fn desktop_notify(summary: String, body: String) {
+    let (resource, conn) = match dbus_tokio::connection::new_session_sync() {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!("cannot reach the session bus for a notification: {e}");
+            return;
+        }
+    };
+    tokio::spawn(async move {
+        let err = resource.await;
+        tracing::warn!("session bus connection lost: {err}");
+    });
+    let proxy = Proxy::new(
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        Duration::from_secs(5),
+        conn,
+    );
+    let hints: HashMap<String, Variant<Box<dyn RefArg>>> = HashMap::new();
+    let result: std::result::Result<(u32,), dbus::Error> = proxy
+        .method_call(
+            "org.freedesktop.Notifications",
+            "Notify",
+            ("ucabled", 0u32, "", summary, body, Vec::<String>::new(), hints, -1i32),
+        )
+        .await;
+    if let Err(e) = result {
+        tracing::warn!("desktop notification failed: {e}");
     }
 }
 

@@ -34,6 +34,18 @@ impl TransactionError {
             Self::Failed(_) => CTAP2_ERR_NO_CREDENTIALS,
         }
     }
+
+    /// Whether the failure was a refused tunnel redirect.  Unlike timeouts
+    /// and user cancels — routine outcomes — this points at a misbehaving
+    /// or hostile tunnel server, so the daemon surfaces it to the user.
+    pub fn is_redirect_refused(&self) -> bool {
+        match self {
+            Self::Transport(e) | Self::Failed(e) => e
+                .chain()
+                .any(|cause| cause.is::<crate::tunnel::RedirectRefused>()),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for TransactionError {
@@ -72,5 +84,15 @@ mod tests {
             TransactionError::failed(anyhow::anyhow!("x")).ctap_status(),
             0x2e
         );
+    }
+
+    #[test]
+    fn redirect_refused_detection() {
+        let refused =
+            TransactionError::transport(crate::tunnel::RedirectRefused("test".to_string()));
+        assert!(refused.is_redirect_refused());
+        assert!(!TransactionError::Timeout.is_redirect_refused());
+        assert!(!TransactionError::Cancelled.is_redirect_refused());
+        assert!(!TransactionError::transport(anyhow::anyhow!("x")).is_redirect_refused());
     }
 }

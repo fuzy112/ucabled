@@ -101,6 +101,12 @@ pub enum AgentCommand {
     Close {
         tid: u64,
     },
+    /// Show a user-facing notice (desktop notification).  Content is
+    /// static daemon text — nothing attacker-controlled crosses over.
+    Notify {
+        summary: String,
+        body: String,
+    },
 }
 
 /// Daemon-side handle to the UI bridge. Cheap to clone and safe to use from
@@ -152,6 +158,16 @@ impl AgentClient {
     pub fn close(&self) {
         let tid = self.active_tid.load(Ordering::SeqCst);
         let _ = self.tx.send(AgentCommand::Close { tid });
+    }
+
+    /// Show a user-facing notice.  Only static daemon text may be passed:
+    /// it crosses into the user's session and is rendered by the desktop's
+    /// notification service.
+    pub fn notify(&self, summary: &str, body: &str) {
+        let _ = self.tx.send(AgentCommand::Notify {
+            summary: summary.to_string(),
+            body: body.to_string(),
+        });
     }
 }
 
@@ -462,6 +478,11 @@ async fn dispatch_commands(
             }
             AgentCommand::Close { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Close", (tid,)).await
+            }
+            AgentCommand::Notify { summary, body } => {
+                proxy
+                    .method_call(AGENT_INTERFACE, "Notify", (summary, body))
+                    .await
             }
         };
         if let Err(e) = result {

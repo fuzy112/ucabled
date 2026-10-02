@@ -78,6 +78,8 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
   `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
 - 收到 `Select(tid)` 时 spawn `ucable-agent-helper --select`，按退出码
   （0=用手机，其余=放弃）回 `SelectionResult(tid, use_phone)`。
+- 收到 `Notify(summary, body)` 时经会话总线 `org.freedesktop.Notifications`
+  弹桌面通知（仅静态文案，如隧道重定向被拒）。
 - 无图形会话（无 `WAYLAND_DISPLAY`/`DISPLAY`）时**不注册**。
 - agent 掉线（D-Bus 名消失）时，守护进程注销该 agent 并把在途事务按
   取消失败处理。
@@ -126,6 +128,7 @@ interface org.ucabled.Agent1
   Select(t tid)                    # 弹设备选择窗口
   Found(t tid)
   Close(t tid)
+  Notify(s summary, s body)        # 桌面通知（仅守护进程静态文案）
 ```
 
 - `tid` 复用 HID channel `cid`，便于与在途事务关联。

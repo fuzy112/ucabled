@@ -87,6 +87,15 @@ impl Notifier {
             Notifier::Agent(client) => client.close(),
         }
     }
+
+    /// Show a user-facing notice (desktop notification, or the controlling
+    /// terminal).  Only static daemon text may be passed.
+    pub fn notify(&self, summary: &str, body: &str) {
+        match self {
+            Notifier::Terminal => print_notice(summary, body),
+            Notifier::Agent(client) => client.notify(summary, body),
+        }
+    }
 }
 
 pub fn qr_unicode(url: &str) -> String {
@@ -98,6 +107,18 @@ pub fn qr_unicode(url: &str) -> String {
             .build(),
         // Never embed the URL: it contains the transaction secret.
         Err(e) => format!("QR render failed: {e}"),
+    }
+}
+
+fn print_notice(summary: &str, body: &str) {
+    // Nothing secret here, but stdout may be the journal; prefer the
+    // controlling terminal as with the QR code.
+    use std::io::IsTerminal;
+    let text = format!("\n=== {summary} ===\n{body}\n\n");
+    if std::io::stdout().is_terminal() {
+        print!("{text}");
+    } else if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+        let _ = tty.write_all(text.as_bytes());
     }
 }
 
