@@ -34,6 +34,7 @@ const GA_KEY_OPTIONS: u64 = 5;
 
 // Map keys of the getInfo response built locally (CTAP 2.2 §6.4).
 const GETINFO_KEY_VERSIONS: u64 = 1;
+const GETINFO_KEY_EXTENSIONS: u64 = 2;
 const GETINFO_KEY_AAGUID: u64 = 3;
 const GETINFO_KEY_OPTIONS: u64 = 4;
 const GETINFO_KEY_MAX_MSG_SIZE: u64 = 5;
@@ -72,18 +73,27 @@ pub const MAX_CREDENTIAL_ID_LENGTH: u64 = 1024;
 
 /// authenticatorGetInfo response (status byte + canonical CBOR map).
 ///
-/// Advertised per FR-5: FIDO_2_0 only (no U2F_V2), rk/up/uv, no clientPin,
-/// maxMsgSize [`MAX_MSG_SIZE`], the credential-list limits
-/// ([`MAX_CREDENTIAL_COUNT_IN_LIST`], [`MAX_CREDENTIAL_ID_LENGTH`]) and
-/// transports ["hybrid"].
+/// Advertised per FR-5: FIDO_2_0 only (no U2F_V2), the `credProtect`
+/// extension, rk/up/uv, no clientPin, maxMsgSize [`MAX_MSG_SIZE`], the
+/// credential-list limits ([`MAX_CREDENTIAL_COUNT_IN_LIST`],
+/// [`MAX_CREDENTIAL_ID_LENGTH`]) and transports ["hybrid"].
+///
+/// `credProtect` is advertised because OpenSSH refuses to create resident or
+/// verify-required `sk` keys unless the authenticator reports it; the actual
+/// credential (and its protection) is created by the phone, which receives
+/// the extension in the relayed makeCredential.
 pub fn getinfo_response(aaguid: &[u8; 16]) -> Vec<u8> {
     let mut out = vec![CTAP2_OK];
 
-    cbor::map(&mut out, 7);
+    cbor::map(&mut out, 8);
 
     cbor::uint(&mut out, GETINFO_KEY_VERSIONS);
     cbor::array(&mut out, 1);
     cbor::text(&mut out, "FIDO_2_0");
+
+    cbor::uint(&mut out, GETINFO_KEY_EXTENSIONS);
+    cbor::array(&mut out, 1);
+    cbor::text(&mut out, "credProtect");
 
     cbor::uint(&mut out, GETINFO_KEY_AAGUID);
     cbor::bytes(&mut out, aaguid);
@@ -785,6 +795,8 @@ mod tests {
         let s = String::from_utf8_lossy(&r);
         assert!(s.contains("FIDO_2_0"));
         assert!(s.contains("hybrid"));
+        // credProtect is required for OpenSSH resident / verify-required keys.
+        assert!(s.contains("credProtect"));
         // maxMsgSize must use the minimal two-byte encoding (canonical CBOR),
         // otherwise strict parsers (Chromium) reject the whole response.
         assert!(r.windows(3).any(|w| w == [0x19, 0x1d, 0xb9]));
