@@ -24,7 +24,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   postInstall = ''
     # Only ship the daemon and its QR helper; spike/mock/probe are dev tools.
-    rm -f $out/bin/ucabled-spike $out/bin/mock-phone $out/bin/hidraw-probe
+    rm -f $out/bin/ucabled-spike $out/bin/mock-phone $out/bin/hidraw-probe $out/bin/cable-advert-probe
     wrapProgram $out/bin/ucable-agent-helper \
       --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib:${
         lib.makeLibraryPath [

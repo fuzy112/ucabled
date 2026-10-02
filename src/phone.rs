@@ -16,8 +16,37 @@ pub const MSG_SHUTDOWN: u8 = 0;
 pub const MSG_CTAP: u8 = 1;
 pub const MSG_UPDATE: u8 = 2;
 
+/// The byte transport carrying caBLE messages: the default WebSocket tunnel or
+/// the CTAP 2.3 optional BLE L2CAP CoC channel.
+pub enum CableTransport {
+    Websocket(Box<Ws>),
+    #[cfg(feature = "l2cap")]
+    L2cap(bluer::l2cap::SeqPacket),
+}
+
+impl CableTransport {
+    /// Send one message. The WebSocket transport keeps binary frame
+    /// boundaries; the L2CAP transport sends one SDU per message.
+    pub async fn send(&mut self, data: Vec<u8>) -> Result<()> {
+        match self {
+            Self::Websocket(ws) => tunnel::write_binary(ws, data).await,
+            #[cfg(feature = "l2cap")]
+            Self::L2cap(stream) => crate::l2cap::send(stream, &data).await,
+        }
+    }
+
+    /// Receive one message.
+    pub async fn recv(&mut self) -> Result<Vec<u8>> {
+        match self {
+            Self::Websocket(ws) => tunnel::read_binary(ws).await,
+            #[cfg(feature = "l2cap")]
+            Self::L2cap(stream) => crate::l2cap::recv(stream).await,
+        }
+    }
+}
+
 pub struct CableLink {
-    pub ws: Ws,
+    pub transport: CableTransport,
     pub crypter: Crypter,
     pub handshake_hash: [u8; 32],
 }
@@ -27,11 +56,11 @@ impl CableLink {
         let mut msg = vec![msg_type];
         msg.extend_from_slice(payload);
         let ct = self.crypter.encrypt(&msg).context("encrypt failed")?;
-        tunnel::write_binary(&mut self.ws, ct).await
+        self.transport.send(ct).await
     }
 
     pub async fn recv_message(&mut self) -> Result<(u8, Vec<u8>)> {
-        let ct = tunnel::read_binary(&mut self.ws).await?;
+        let ct = self.transport.recv().await?;
         let pt = self.crypter.decrypt(&ct).context("decrypt failed")?;
         if pt.is_empty() {
             bail!("empty cable message");
@@ -121,7 +150,7 @@ pub async fn phone_run(
     tunnel::write_binary(&mut ws, response).await?;
 
     let mut link = CableLink {
-        ws,
+        transport: CableTransport::Websocket(Box::new(ws)),
         crypter,
         handshake_hash,
     };
@@ -158,7 +187,7 @@ pub async fn phone_run(
 
 async fn send_raw(link: &mut CableLink, plaintext: &[u8]) -> Result<()> {
     let ct = link.crypter.encrypt(plaintext).context("encrypt failed")?;
-    tunnel::write_binary(&mut link.ws, ct).await
+    link.transport.send(ct).await
 }
 
 fn canned_ctap_reply(command: &[u8]) -> Vec<u8> {

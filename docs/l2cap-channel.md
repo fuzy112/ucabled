@@ -1,8 +1,10 @@
-# BLE L2CAP 数据通道（CTAP 2.3 hybrid）：可行性调查
+# BLE L2CAP 数据通道（CTAP 2.3 hybrid）
 
-> 状态：调研完成，尚未实现。桌面侧技术上可行（BlueZ/bluer 支持 LE L2CAP
-> CoC），但有若干待真机验证的互通点。手机侧 Android 已实现；iOS 未确认。
-> 它是 WebSocket 隧道服务器的**可选替代**，面向离线与隐私场景。
+> 状态：桌面侧已实现（实验性，Cargo feature `l2cap`，运行时
+> `UCABLED_BLE_CHANNEL=1`，默认仍走 WebSocket）。**2026-10-02 用 iPhone 实测：
+> 即使 QR 提供 `Key 6=[0,1]`，iPhone 的 caBLE advert 仍只有 20 字节、无
+> advertisement suffix/PSM**，即 iOS 不支持该 BLE/L2CAP 通道。故该特性目前只对
+> （据 Chromium/Google 已实现的）Android 有意义；iOS 若日后支持则无需改协议。
 
 ## 1. 结论
 
@@ -14,8 +16,9 @@
 3. 桌面侧是在现有 caBLE 代码上的**增量**：Noise 握手、消息加解密
    （`handshake.rs` / `crypter.rs`）可原样复用，只需替换承载链路。`bluer`
    的 `l2cap` feature 直接提供 LE CoC 客户端，运行时不依赖 `bluetoothd`。
-4. 最大的不确定性不在桌面 API，而在：advertisement suffix 能否经 BlueZ
-   拿到、CoC 模式（LEB vs ECFC）与手机的互通、以及消息分帧约定。
+4. 最大的不确定性不在桌面 API，而在：advertisement suffix 能否经 BlueZ 拿到
+   （iPhone 不发 suffix，此项仍未验证，需 Android）、CoC 模式（LEB vs ECFC）
+   与手机的互通、以及消息分帧约定。
 
 ## 2. 协议机制（§11.5.1.1 与 §11.5.1.1.2）
 
@@ -36,41 +39,47 @@
    消息首字节为类型：`0` shutdown、`1` CTAP、`2` update、`3` JSON（与
    WebSocket 通道完全相同的消息层）。
 
-## 3. 桌面侧改动面
+## 3. 桌面侧实现
 
-- **bluer**：当前只开 `bluetoothd` feature；需增加 `l2cap`。`bluer::l2cap`
-  提供 `Stream` / `SeqPacket` / `StreamListener` 与
-  `SocketAddr { addr, addr_type, psm }`，官方示例
-  `Stream::connect(SocketAddr::new(addr, AddressType::LePublic, psm))` 即 LE
-  客户端连 PSM；走内核 socket，运行时不依赖 `bluetoothd`。
-- **`ble.rs`**：`await_advert` 现在只回传 16 字节明文，丢弃了设备地址、地址
-  类型与后续 suffix。需要改为回传 `(address, addr_type, plaintext, suffix)`，
-  并解析 `serviceData[20:]` 的 `{1: psm}`。`device.service_data()` 已取得整段
-  payload，改动局限在返回类型与解析。
-- **链路抽象**：`phone.rs::CableLink` 直接持有 `ws` 并调用
-  `隧道::write_binary/read_binary`；`session.rs::DesktopFlow` 握手前后也直接用
-  `ws`。需引入一个字节/消息双向流 trait，让 WebSocket 与 L2CAP 两种实现可换。
-- **复用**：`handshake.rs`（Noise）与 `crypter.rs`（消息加解密）无需改动。
+- **feature**：Cargo `l2cap`（启用 `bluer/l2cap`），默认关闭；运行时
+  `UCABLED_BLE_CHANNEL=1` 才在 QR 里带上 BLE，默认仍走 WebSocket。
+- **`advert.rs`**：解析 advertisement suffix 的 CBOR map，取
+  `transport_channel_identifier = 1` 对应的 PSM（`parse_psm`）。
+- **`ble.rs`**：新增 `await_advert_full`，回传
+  `AdvertObservation { plaintext_eid, address, address_type, psm }`；trial-decrypt
+  只喂前 20 字节（修掉了带 suffix 时按整段 20 字节校验会失败的问题）。
+- **`qr.rs`**：新增 `Key 6` 编码（`TRANSPORT_WEBSOCKET` / `TRANSPORT_BLE`），
+  解析器可跳过数组值。
+- **链路抽象**：`phone::CableTransport`（WebSocket 或 L2CAP），`CableLink`
+  改持 `transport`；`session::Channel` 决定走哪条。
+- **`l2cap.rs`**：LE CoC 客户端 `connect` / `send` / `recv`，用
+  `SOCK_SEQPACKET`（LE Credit Based，约定一 SDU = 一条 caBLE 消息）；连上后把
+  安全等级设为 Sdp（insecure）、recv MTU 开到最大。
+- **`relay.rs`**：advert 带 PSM 且已启用时选 L2CAP，否则 WebSocket。
+- **复用**：`handshake.rs`（Noise）与 `crypter.rs`（消息加解密）未改。
+- **测试**：suffix/PSM 与 QR `Key 6` 有单测；`tests/l2cap.rs` 有自环回 L2CAP
+  测试（需蓝牙适配器，默认 `#[ignore]`）。
 
 ## 4. 未决问题（按风险排序）
 
 | # | 问题 | 说明 |
 | --- | --- | --- |
-| 1 | **CoC 模式互通** | LE Credit Based Flow Control（包边界，Linux `SOCK_SEQPACKET`）还是 Enhanced Credit Based（字节流，`SOCK_STREAM`）。Fast Pair 明说用 "LE credit based flow control"；bluer 两种都提供，需实测与 Android/iOS 哪种互操作。 |
+| 1 | **CoC 模式互通** | LE Credit Based Flow Control（包边界，Linux `SOCK_SEQPACKET`）还是 Enhanced Credit Based（字节流，`SOCK_STREAM`）。Fast Pair 明说用 "LE credit based flow control"，故实现选了 LEB；若手机实际用 ECFC，需把 `l2cap.rs` 换成 `Stream` 并定长度前缀。 |
 | 2 | **extended advertising 后缀** | 后缀要求 LE 扩展广播。BlueZ 会解析扩展广播报告，理论上会进 `Device1.ServiceData`，但必须真机确认 `payload.len() > 20`。这是 go/no-go 点。 |
-| 3 | **消息分帧** | 规范示例把通道当消息导向用（`WriteMessage(BinaryMessage)`）。若一 SDU = 一条 caBLE 消息则无需前缀，否则要自定义长度前缀。Chromium 尚未落地、Android 闭源，需对拷验证。 |
+| 3 | **消息分帧** | 实现按「一 SDU = 一条 caBLE 消息」假设（规范示例用 `WriteMessage(BinaryMessage)`）；若对拷不符，需要自定义长度前缀。Chromium 尚未落地、Android 闭源，需真机对拷验证。 |
 | 4 | **insecure CoC 免配对** | 规范明说 insecure，需确认内核允许不 bonding、安全等级可低，以及随机地址轮换下的连通性（Chromium 作者早提过未配对时 L2CAP 在 MAC 轮换下不稳定）。 |
-| 5 | **手机支持面** | Android 已实现（见 Chromium issue `493286564`，动机含离线与 EU DC API 隐私要求）；iOS 有 `CBL2CAPChannel` 但 iCloud Keychain authenticator 是否实现未确认；Chromium 桌面端仍在开发中。 |
+| 5 | **手机支持面** | **iPhone 实测（2026-10-02）不支持**：QR 带 `Key 6=[0,1]` 时其 advert 仍是 20 字节、无 suffix/PSM（用 `cargo run --bin cable-advert-probe` 观测，trial-decrypt 成功）。Android 据 Chromium issue `493286564` 已实现、待实测；Chromium 桌面端仍在开发中。 |
 
-## 5. 建议的 spike（可先在本地做，不需要手机）
+## 5. 已做的验证与剩余
 
-1. 扩 `ble.rs`：回传 `(address, addr_type, plaintext, suffix)`，解析 PSM 仅打
-   日志；先验证真机是否出现 `payload.len() > 20`。
-2. 本地 mock：用 `bluer` 起一个带 suffix 的 advertiser + `l2cap`
-   `StreamListener`（LE CoC），跑通「连 PSM → Noise → getInfo」，验证 Linux
-   客户端路径与分帧假设。
-3. 真机：QR 的 `Key 6` 置 `[0,1]`，对已支持 BLE 通道的 Android 验证后缀与 PSM
-   是否出现，并完成一次完整往返。
+已做：iPhone（2026-10-02）用 `cargo run --bin cable-advert-probe` 观测——QR 提供
+`Key 6=[0,1]` 时 advert 仍为 20 字节、无 PSM，trial-decrypt 成功，即 iOS 不支持。
+
+剩余（需 Android 或未来 iOS）：
+
+1. 对 Android 确认 advert 出现 `payload.len() > 20` 且 PSM 解析正确。
+2. 完成一次完整往返；若握手后收不到消息，多半是 CoC 模式（LEB/ECFC）或分帧
+   假设不符，按 §4 调整 `l2cap.rs`。
 
 ## 6. 参考
 

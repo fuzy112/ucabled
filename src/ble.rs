@@ -47,12 +47,34 @@ impl From<bluer::Error> for BleError {
     }
 }
 
+/// A matching caBLE advertisement: the decrypted EID plus what the CTAP 2.3
+/// BLE data channel needs (the peer address and, if present, the L2CAP PSM).
+pub struct AdvertObservation {
+    pub plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE],
+    pub address: bluer::Address,
+    pub address_type: bluer::AddressType,
+    /// Full service data as seen by BlueZ (20-byte EID plus any suffix); kept
+    /// for diagnostics.
+    pub service_data: Vec<u8>,
+    /// L2CAP server PSM from the advertisement suffix, if the phone offered
+    /// the BLE data channel.
+    pub psm: Option<u16>,
+}
+
 /// Scan BLE advertisements until one trial-decrypts with `eid_key`.
 /// Returns the 16-byte plaintext EID.
 pub async fn await_advert(
     eid_key: &[u8; eid::EID_KEY_SIZE],
     timeout: Duration,
 ) -> Result<[u8; eid::EID_PLAINTEXT_SIZE], BleError> {
+    Ok(await_advert_full(eid_key, timeout).await?.plaintext_eid)
+}
+
+/// Like [`await_advert`], but also reports the peer address and advertised PSM.
+pub async fn await_advert_full(
+    eid_key: &[u8; eid::EID_KEY_SIZE],
+    timeout: Duration,
+) -> Result<AdvertObservation, BleError> {
     let session = bluer::Session::new()
         .await
         .context("D-Bus session failed")?;
@@ -87,7 +109,7 @@ async fn scan(
     uuid: &bluer::Uuid,
     eid_key: &[u8; eid::EID_KEY_SIZE],
     timeout: Duration,
-) -> Result<[u8; eid::EID_PLAINTEXT_SIZE], BleError> {
+) -> Result<AdvertObservation, BleError> {
     // `with_changes` re-emits DeviceAdded whenever a device's properties
     // change; service data typically arrives after the initial DeviceAdded.
     //
@@ -116,13 +138,26 @@ async fn scan(
             _ => continue,
         };
         for (data_uuid, payload) in service_data {
-            if data_uuid != *uuid {
+            if data_uuid != *uuid || payload.len() < eid::ADVERT_SIZE {
                 continue;
             }
             tracing::debug!(%address, len = payload.len(), "saw fff9 service data");
-            if let Some(plaintext) = eid::decrypt(&payload, eid_key) {
-                tracing::info!(%address, "caBLE advert trial decrypt succeeded");
-                return Ok(plaintext);
+            // Only the first 20 bytes are the encrypted EID; any remainder is
+            // the CTAP 2.3 advertisement suffix (e.g. the L2CAP PSM).
+            if let Some(plaintext) = eid::decrypt(&payload[..eid::ADVERT_SIZE], eid_key) {
+                let psm = crate::advert::parse_psm(&payload[eid::ADVERT_SIZE..]);
+                let address_type = device
+                    .address_type()
+                    .await
+                    .unwrap_or(bluer::AddressType::LePublic);
+                tracing::info!(%address, psm, len = payload.len(), "caBLE advert trial decrypt succeeded");
+                return Ok(AdvertObservation {
+                    plaintext_eid: plaintext,
+                    address,
+                    address_type,
+                    service_data: payload,
+                    psm,
+                });
             }
             tracing::debug!(%address, "trial decrypt failed (advert for another QR)");
         }

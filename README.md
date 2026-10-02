@@ -200,13 +200,19 @@ Helper tools in the repo (not shipped in the package):
   (`--advert-hex` skips the BLE scan)
 - `src/bin/mock-phone.rs`, `tests/e2e.rs`: mock phone and local tunnel relay
 - `src/bin/hidraw-probe.rs`: kernel HID path diagnostics
+- `src/bin/cable-advert-probe.rs`: show a caBLE QR offering the BLE data
+  channel and report whether the phone advertised an L2CAP PSM
 - `examples/qrgen.rs`: generate a QR code only
 
 Requirements and design: `docs/plan.md`; system service / UI agent design:
 `docs/system-service.md`; D-Bus async design: `docs/async-dbus.md`; tunnel
-server rationale: `docs/tunnel-server.md`; BLE data channel (GATT vs L2CAP):
-`docs/gatt-data-channel.md` and L2CAP feasibility: `docs/l2cap-channel.md`;
-related projects: `docs/prior-art.md`; linking design: `docs/linking.md`.
+server rationale: `docs/tunnel-server.md`; BLE data channel: `docs/gatt-data-channel.md`
+and `docs/l2cap-channel.md`; related projects: `docs/prior-art.md`; linking
+design: `docs/linking.md`.
+
+The optional CTAP 2.3 BLE data channel (L2CAP CoC) is experimental and off by
+default: build with `--features l2cap` and set `UCABLED_BLE_CHANNEL=1`. iPhones
+do not offer it (verified); it targets Android.
 
 ## License
 

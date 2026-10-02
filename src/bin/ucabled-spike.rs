@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
         NUM_ASSIGNED_TUNNEL_DOMAINS,
         true, // supports_linking (L0: verify whether phones send linking data)
         request_type,
+        &[qr::TRANSPORT_WEBSOCKET],
     );
 
     println!("caBLE QR URL: {qr_url}");
@@ -111,6 +112,7 @@ async fn main() -> Result<()> {
 
     let flow = DesktopFlow {
         tunnel_base: args.tunnel_base,
+        channel: ucabled::session::Channel::Websocket,
         qr_secret,
         identity,
         plaintext_eid,

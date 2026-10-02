@@ -106,7 +106,14 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
     let mut qr_secret = [0u8; 16];
     OsRng.fill_bytes(&mut qr_secret);
 
-    let qr_url = qr::encode_qr_url(compressed, &qr_secret, 2, false, RequestType::GetAssertion);
+    let qr_url = qr::encode_qr_url(
+        compressed,
+        &qr_secret,
+        2,
+        false,
+        RequestType::GetAssertion,
+        &[qr::TRANSPORT_WEBSOCKET],
+    );
     let parsed = qr::parse_qr_url(&qr_url).unwrap();
     assert_eq!(&parsed.compressed_public_key, compressed);
     assert_eq!(parsed.secret, qr_secret);
@@ -137,6 +144,7 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
 
     let flow = DesktopFlow {
         tunnel_base: Some(base),
+        channel: ucabled::session::Channel::Websocket,
         qr_secret,
         identity,
         plaintext_eid,
@@ -170,7 +178,14 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
     let mut qr_secret = [0u8; 16];
     OsRng.fill_bytes(&mut qr_secret);
 
-    let qr_url = qr::encode_qr_url(compressed, &qr_secret, 2, false, RequestType::GetAssertion);
+    let qr_url = qr::encode_qr_url(
+        compressed,
+        &qr_secret,
+        2,
+        false,
+        RequestType::GetAssertion,
+        &[qr::TRANSPORT_WEBSOCKET],
+    );
     let parsed = qr::parse_qr_url(&qr_url).unwrap();
     let peer_public = p256::PublicKey::from_sec1_bytes(&parsed.compressed_public_key).unwrap();
     let peer_identity = peer_public.to_encoded_point(false).as_bytes().to_vec();
@@ -192,7 +207,7 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
             ucabled::tunnel::write_binary(&mut ws, response).await?;
 
             let mut link = phone::CableLink {
-                ws,
+                transport: phone::CableTransport::Websocket(Box::new(ws)),
                 crypter,
                 handshake_hash,
             };
@@ -202,7 +217,7 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
                 .crypter
                 .encrypt(&post)
                 .ok_or_else(|| anyhow::anyhow!("encrypt failed"))?;
-            ucabled::tunnel::write_binary(&mut link.ws, ct).await?;
+            link.transport.send(ct).await?;
 
             loop {
                 match link.recv_message().await {
@@ -230,6 +245,7 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
     let plaintext_eid = eid_rx.await?;
     let flow = DesktopFlow {
         tunnel_base: Some(base),
+        channel: ucabled::session::Channel::Websocket,
         qr_secret,
         identity,
         plaintext_eid,

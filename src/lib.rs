@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod advert;
 pub mod agent;
 pub mod cbor;
 pub mod crypter;
@@ -21,6 +22,9 @@ pub mod ui;
 
 #[cfg(feature = "ble")]
 pub mod ble;
+
+#[cfg(feature = "l2cap")]
+pub mod l2cap;
 
 pub const NUM_ASSIGNED_TUNNEL_DOMAINS: u8 = tunnel::ASSIGNED_TUNNEL_DOMAINS.len() as u8;
 pub const WS_SUBPROTOCOL: &str = "fido.cable";

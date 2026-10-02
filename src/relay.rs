@@ -7,19 +7,35 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use std::time::Duration;
 
-use crate::ble::BleError;
+use crate::ble::{AdvertObservation, BleError};
 use crate::error::TransactionError;
 use crate::kdf::{derive, Purpose};
 use crate::qr::{self, RequestType};
-use crate::session::DesktopFlow;
+use crate::session::{Channel, DesktopFlow};
 use crate::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
 
 /// How long the QR code stays valid while waiting for the phone's BLE advert.
 pub const BLE_ADVERT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Whether to offer the CTAP 2.3 BLE data channel in the QR code.
+///
+/// Experimental: the L2CAP framing has not been verified against real phones,
+/// so it is off by default. It also requires a build with the `l2cap` feature;
+/// opt in with `UCABLED_BLE_CHANNEL=1`.
+fn ble_channel_enabled() -> bool {
+    #[cfg(feature = "l2cap")]
+    {
+        std::env::var("UCABLED_BLE_CHANNEL").is_ok_and(|v| !v.is_empty() && v != "0")
+    }
+    #[cfg(not(feature = "l2cap"))]
+    {
+        false
+    }
+}
+
 /// Run one full caBLE QR transaction: show a QR code, wait for the phone's
-/// BLE advert, do the tunnel handshake, forward the CTAP command and return
-/// the phone's CTAP response payload (status byte + CBOR).
+/// BLE advert, do the handshake over the chosen channel, forward the CTAP
+/// command and return the phone's CTAP response payload (status byte + CBOR).
 ///
 /// `on_qr` is invoked with the QR contents once; the caller decides how to
 /// present it (terminal, egui window, ...). `on_advert` is invoked when the
@@ -40,33 +56,61 @@ pub async fn run_qr_transaction(
     // Linking is shelved (iOS does not implement it, see docs/linking.md), so
     // do not advertise it and do not stay on the tunnel after the reply.
     let supports_linking = false;
+    let offer_ble = ble_channel_enabled();
+    let mut channels = vec![qr::TRANSPORT_WEBSOCKET];
+    if offer_ble {
+        channels.push(qr::TRANSPORT_BLE);
+    }
     let qr_url = qr::encode_qr_url(
         compressed,
         &qr_secret,
         NUM_ASSIGNED_TUNNEL_DOMAINS,
         supports_linking,
         request_type,
+        &channels,
     );
     on_qr(&qr_url);
 
     let mut eid_key = [0u8; eid::EID_KEY_SIZE];
     derive(&qr_secret, &[], Purpose::EidKey, &mut eid_key);
 
-    let plaintext_eid = match crate::ble::await_advert(&eid_key, BLE_ADVERT_TIMEOUT).await {
-        Ok(eid) => eid,
+    let advert = match crate::ble::await_advert_full(&eid_key, BLE_ADVERT_TIMEOUT).await {
+        Ok(advert) => advert,
         Err(BleError::Timeout) => return Err(TransactionError::Timeout),
         Err(BleError::Backend(e)) => return Err(TransactionError::transport(e)),
     };
     on_advert();
     tracing::info!("received valid caBLE advert");
 
+    let channel = select_channel(&advert, offer_ble);
+
     let flow = DesktopFlow {
         tunnel_base: None,
+        channel,
         qr_secret,
         identity,
-        plaintext_eid,
+        plaintext_eid: advert.plaintext_eid,
         supports_linking,
     };
     let result = flow.run(ctap_command).await?;
     Ok(result.ctap_reply)
+}
+
+/// Pick the data transfer channel from the advert: the L2CAP CoC if the phone
+/// offered a PSM and we advertised BLE, otherwise the WebSocket tunnel.
+fn select_channel(advert: &AdvertObservation, offer_ble: bool) -> Channel {
+    #[cfg(feature = "l2cap")]
+    if offer_ble {
+        if let Some(psm) = advert.psm {
+            tracing::info!(psm, "phone offered the BLE L2CAP channel");
+            return Channel::L2cap {
+                address: advert.address,
+                address_type: advert.address_type,
+                psm,
+            };
+        }
+    }
+    #[cfg(not(feature = "l2cap"))]
+    let _ = (advert, offer_ble);
+    Channel::Websocket
 }

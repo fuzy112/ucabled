@@ -7,6 +7,9 @@ license = "GPL-3.0-or-later"
 [features]
 default = ["ble"]
 ble = ["dep:bluer"]
+# CTAP 2.3 optional BLE data channel (L2CAP CoC). Experimental: the wire
+# framing is not yet verified against real phones, so it is off by default.
+l2cap = ["ble", "bluer/l2cap"]
 
 [dependencies]
 anyhow = "1"

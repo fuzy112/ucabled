@@ -14,6 +14,12 @@ const QR_KEY_NUM_KNOWN_DOMAINS: u8 = 2;
 const QR_KEY_EPOCH_SECONDS: u8 = 3;
 const QR_KEY_SUPPORTS_LINKING: u8 = 4;
 const QR_KEY_REQUEST_TYPE: u8 = 5;
+/// CTAP 2.3 §11.5.1.1: list of data transfer channels the client supports.
+const QR_KEY_TRANSPORTS: u8 = 6;
+
+/// Data transfer channel identifiers for QR `Key 6`.
+pub const TRANSPORT_WEBSOCKET: u64 = 0;
+pub const TRANSPORT_BLE: u64 = 1;
 
 /// Seven-byte chunks are encoded as 17-digit decimal numbers.
 const DIGIT_CHUNK_BYTES: usize = 7;
@@ -81,9 +87,10 @@ pub fn encode_qr_contents(
     num_known_domains: u8,
     supports_linking: bool,
     request_type: RequestType,
+    channels: &[u64],
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    cbor::map(&mut out, 6);
+    cbor::map(&mut out, 7);
 
     cbor::uint(&mut out, QR_KEY_PUBLIC_KEY as u64);
     cbor::bytes(&mut out, compressed_public_key);
@@ -111,6 +118,12 @@ pub fn encode_qr_contents(
     cbor::uint(&mut out, QR_KEY_REQUEST_TYPE as u64);
     cbor::text(&mut out, request_type.as_str());
 
+    cbor::uint(&mut out, QR_KEY_TRANSPORTS as u64);
+    cbor::array(&mut out, channels.len() as u64);
+    for &channel in channels {
+        cbor::uint(&mut out, channel);
+    }
+
     out
 }
 
@@ -120,6 +133,7 @@ pub fn encode_qr_url(
     num_known_domains: u8,
     supports_linking: bool,
     request_type: RequestType,
+    channels: &[u64],
 ) -> String {
     let contents = encode_qr_contents(
         compressed_public_key,
@@ -127,6 +141,7 @@ pub fn encode_qr_url(
         num_known_domains,
         supports_linking,
         request_type,
+        channels,
     );
     format!("FIDO:/{}", bytes_to_digits(&contents))
 }
@@ -237,6 +252,32 @@ fn parse_qr_cbor(data: &[u8]) -> Option<ParsedQr> {
                     read_bytes(&mut pos, skip)?;
                 }
             }
+            cbor::MAJOR_ARRAY => {
+                // QR key 6 is a list of transport-channel integers, but skip
+                // any array element generically so unknown keys cannot break
+                // parsing of keys 0 and 1.
+                let len = read_len(&mut pos, info)?;
+                for _ in 0..len {
+                    let h = read_u8(&mut pos)?;
+                    let emajor = h >> 5;
+                    let einfo = h & cbor::ARG_MASK;
+                    match emajor {
+                        cbor::MAJOR_UINT | cbor::MAJOR_NEGINT => {
+                            read_uint(&mut pos, einfo)?;
+                        }
+                        cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
+                            let n = read_len(&mut pos, einfo)?;
+                            read_bytes(&mut pos, n)?;
+                        }
+                        cbor::MAJOR_SIMPLE => {
+                            if (cbor::ARG_U8..=cbor::ARG_U64).contains(&einfo) {
+                                read_bytes(&mut pos, 1usize << (einfo - cbor::ARG_U8))?;
+                            }
+                        }
+                        _ => return None,
+                    }
+                }
+            }
             _ => return None,
         }
     }
@@ -282,5 +323,22 @@ mod tests {
     #[test]
     fn digits_empty_is_empty() {
         assert_eq!(digits_to_bytes("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn parse_ignores_transport_channels() {
+        let public_key = [0x11u8; COMPRESSED_PUBLIC_KEY_SIZE];
+        let secret = [0x22u8; QR_SECRET_SIZE];
+        let url = encode_qr_url(
+            &public_key,
+            &secret,
+            2,
+            false,
+            RequestType::GetAssertion,
+            &[TRANSPORT_WEBSOCKET, TRANSPORT_BLE],
+        );
+        let parsed = parse_qr_url(&url).unwrap();
+        assert_eq!(parsed.compressed_public_key, public_key);
+        assert_eq!(parsed.secret, secret);
     }
 }

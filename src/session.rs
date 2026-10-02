@@ -8,7 +8,7 @@ use crate::eid;
 use crate::error::TransactionError;
 use crate::handshake::HandshakeInitiator;
 use crate::kdf::{derive, Purpose};
-use crate::phone::{CableLink, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
+use crate::phone::{CableLink, CableTransport, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
 use crate::tunnel::{self, decode_tunnel_server_domain};
 
 /// The phone sends the post-handshake message right after the handshake.
@@ -17,9 +17,25 @@ const POST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// be confirming on the phone. Firefox gives the whole operation 5 minutes.
 const CTAP_REPLY_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Which data transfer channel the authenticator chose.
+pub enum Channel {
+    /// The default WebSocket tunnel server path.
+    Websocket,
+    /// The CTAP 2.3 optional BLE data channel: an LE L2CAP CoC identified by
+    /// the server PSM from the advertisement suffix.
+    #[cfg(feature = "l2cap")]
+    L2cap {
+        address: bluer::Address,
+        address_type: bluer::AddressType,
+        psm: u16,
+    },
+}
+
 pub struct DesktopFlow {
     /// e.g. "wss://cable.ua5v.com" or "ws://127.0.0.1:9000" for tests.
     pub tunnel_base: Option<String>,
+    /// Channel selected from the BLE advert (WebSocket unless it carried a PSM).
+    pub channel: Channel,
     pub qr_secret: [u8; 16],
     pub identity: SecretKey,
     pub plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE],
@@ -46,14 +62,6 @@ impl DesktopFlow {
     /// post-handshake message, send one CTAP command, return its reply.
     pub async fn run(mut self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
         let components = eid::to_components(&self.plaintext_eid);
-        let domain =
-            decode_tunnel_server_domain(components.tunnel_server_domain).ok_or_else(|| {
-                TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain"))
-            })?;
-
-        let tunnel_base = self
-            .tunnel_base
-            .unwrap_or_else(|| format!("wss://{domain}"));
 
         let mut tunnel_id = [0u8; 16];
         derive(&self.qr_secret, &[], Purpose::TunnelId, &mut tunnel_id);
@@ -62,25 +70,19 @@ impl DesktopFlow {
         // The QR secret is no longer needed once the tunnel ID and PSK exist.
         crate::secure_erase(&mut self.qr_secret);
 
-        let url = format!(
-            "{tunnel_base}/cable/connect/{}/{}",
-            hex::encode(components.routing_id),
-            hex::encode(tunnel_id)
-        );
-        tracing::info!("connecting caBLE tunnel");
-        let (mut ws, _response) = tunnel::dial(&url)
-            .await
-            .map_err(TransactionError::transport)?;
+        let mut transport = self.connect_transport(&components, &tunnel_id).await?;
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
         // The PSK now lives inside the handshake state.
         crate::secure_erase(&mut psk);
         let initial = handshake.build_initial_message();
-        tunnel::write_binary(&mut ws, initial)
+        transport
+            .send(initial)
             .await
             .map_err(TransactionError::transport)?;
 
-        let response = tunnel::read_binary(&mut ws)
+        let response = transport
+            .recv()
             .await
             .map_err(TransactionError::transport)?;
         let (crypter, handshake_hash) = handshake
@@ -89,7 +91,7 @@ impl DesktopFlow {
         tracing::info!("caBLE handshake complete");
 
         let mut link = CableLink {
-            ws,
+            transport,
             crypter,
             handshake_hash,
         };
@@ -152,6 +154,48 @@ impl DesktopFlow {
             updates,
         })
     }
+
+    /// Open the data transfer channel chosen by the authenticator.
+    async fn connect_transport(
+        &self,
+        components: &eid::EidComponents,
+        tunnel_id: &[u8; 16],
+    ) -> Result<CableTransport, TransactionError> {
+        match &self.channel {
+            Channel::Websocket => {
+                let domain = decode_tunnel_server_domain(components.tunnel_server_domain)
+                    .ok_or_else(|| {
+                        TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain"))
+                    })?;
+                let tunnel_base = self
+                    .tunnel_base
+                    .clone()
+                    .unwrap_or_else(|| format!("wss://{domain}"));
+                let url = format!(
+                    "{tunnel_base}/cable/connect/{}/{}",
+                    hex::encode(components.routing_id),
+                    hex::encode(tunnel_id)
+                );
+                tracing::info!("connecting caBLE tunnel");
+                let (ws, _response) = tunnel::dial(&url)
+                    .await
+                    .map_err(TransactionError::transport)?;
+                Ok(CableTransport::Websocket(Box::new(ws)))
+            }
+            #[cfg(feature = "l2cap")]
+            Channel::L2cap {
+                address,
+                address_type,
+                psm,
+            } => {
+                tracing::info!(%address, psm, "connecting caBLE L2CAP channel");
+                let stream = crate::l2cap::connect(*address, *address_type, *psm)
+                    .await
+                    .map_err(TransactionError::transport)?;
+                Ok(CableTransport::L2cap(stream))
+            }
+        }
+    }
 }
 
 async fn collect_updates(link: &mut CableLink, window: std::time::Duration) -> Vec<Vec<u8>> {
@@ -171,6 +215,6 @@ async fn collect_updates(link: &mut CableLink, window: std::time::Duration) -> V
 }
 
 async fn recv_raw(link: &mut CableLink) -> Result<Vec<u8>> {
-    let ct = tunnel::read_binary(&mut link.ws).await?;
+    let ct = link.transport.recv().await?;
     link.crypter.decrypt(&ct).context("decrypt failed")
 }
