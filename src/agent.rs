@@ -484,23 +484,21 @@ async fn dispatch_commands(
         // guards the case where the session's activity changed since.
         if let AgentCommand::Prompt { tid, .. } = &command {
             let tid = *tid;
-            match recheck(&authorize(&conn, &agent.destination, RECHECK_TIMEOUT).await) {
+            let outcome = recheck(&authorize(&conn, &agent.destination, RECHECK_TIMEOUT).await);
+            match outcome {
                 Recheck::Authorized => {}
-                Recheck::Denied => {
-                    tracing::warn!(
-                        destination = %agent.destination,
-                        "agent's session is no longer active, dropping the prompt"
-                    );
-                    if let Some(generation) = clear_if_matches(&slot, Some(&agent.destination)) {
-                        let _ = cancel_tx.send(CancelRequest::AgentGone(generation)).await;
+                outcome @ (Recheck::Denied | Recheck::Inconclusive) => {
+                    if outcome == Recheck::Denied {
+                        tracing::warn!(
+                            destination = %agent.destination,
+                            "agent's session is no longer active, dropping the prompt"
+                        );
+                    } else {
+                        tracing::warn!("polkit re-check failed, cancelling the transaction");
                     }
-                    continue;
-                }
-                Recheck::Inconclusive => {
-                    tracing::warn!("polkit re-check failed, cancelling the transaction");
-                    // Keep the agent: a transient bus or polkit failure must
-                    // not deregister a healthy agent for later transactions.
-                    let _ = cancel_tx.send(CancelRequest::Transaction(tid)).await;
+                    if let Some(cancel) = recheck_cancel(outcome, tid, &agent.destination, &slot) {
+                        let _ = cancel_tx.send(cancel).await;
+                    }
                     continue;
                 }
             }
@@ -644,6 +642,25 @@ fn recheck(result: &Result<Option<u32>>) -> Recheck {
     }
 }
 
+/// Apply a re-check outcome to the agent slot and decide what the daemon
+/// should be told.  A denial drops the agent and aborts the transaction
+/// through its registration generation; an inconclusive check keeps the
+/// agent and aborts only the transaction, so a transient bus or polkit
+/// failure does not deregister a healthy agent.  `None` means the prompt
+/// may be delivered.
+fn recheck_cancel(
+    outcome: Recheck,
+    tid: u64,
+    destination: &str,
+    slot: &Arc<Mutex<AgentSlot>>,
+) -> Option<CancelRequest> {
+    match outcome {
+        Recheck::Authorized => None,
+        Recheck::Denied => clear_if_matches(slot, Some(destination)).map(CancelRequest::AgentGone),
+        Recheck::Inconclusive => Some(CancelRequest::Transaction(tid)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,6 +729,39 @@ mod tests {
         assert_eq!(recheck(&Ok(None)), Denied);
         // An inconclusive check (bus/polkit failure) must not be treated as
         // a denial, or a hiccup would deregister a healthy agent.
-        assert_eq!(recheck(&Err(anyhow::anyhow!("polkit unreachable"))), Inconclusive);
+        assert_eq!(
+            recheck(&Err(anyhow::anyhow!("polkit unreachable"))),
+            Inconclusive
+        );
+    }
+
+    #[test]
+    fn recheck_effects_keep_or_drop_the_agent() {
+        let slot = Arc::new(Mutex::new(AgentSlot::default()));
+        slot.lock().unwrap().current = Some(Agent {
+            destination: ":1.7".into(),
+            path: "/org/ucabled/Agent".into(),
+            uid: 1000,
+        });
+        slot.lock().unwrap().generation = 42;
+
+        // Authorized: deliver the prompt and leave the agent in place.
+        assert!(recheck_cancel(Recheck::Authorized, 7, ":1.7", &slot).is_none());
+        assert!(slot.lock().unwrap().current.is_some());
+
+        // Inconclusive: keep the agent, abort only this transaction, so a
+        // transient failure does not deregister a healthy agent.
+        assert!(matches!(
+            recheck_cancel(Recheck::Inconclusive, 7, ":1.7", &slot),
+            Some(CancelRequest::Transaction(7))
+        ));
+        assert!(slot.lock().unwrap().current.is_some());
+
+        // Denied: drop the agent and abort through its generation.
+        assert!(matches!(
+            recheck_cancel(Recheck::Denied, 7, ":1.7", &slot),
+            Some(CancelRequest::AgentGone(42))
+        ));
+        assert!(slot.lock().unwrap().current.is_none());
     }
 }
