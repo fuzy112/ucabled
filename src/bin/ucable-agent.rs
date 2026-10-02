@@ -407,7 +407,16 @@ async fn desktop_notify(summary: String, body: String) {
         .method_call(
             "org.freedesktop.Notifications",
             "Notify",
-            ("ucabled", 0u32, "", summary, body, Vec::<String>::new(), hints, -1i32),
+            (
+                "ucabled",
+                0u32,
+                "",
+                summary,
+                body,
+                Vec::<String>::new(),
+                hints,
+                -1i32,
+            ),
         )
         .await;
     if let Err(e) = result {

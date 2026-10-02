@@ -133,10 +133,21 @@ async fn daemon_loop(
     mut cancel_rx: mpsc::Receiver<CancelRequest>,
     mut select_rx: mpsc::Receiver<(u64, bool)>,
 ) -> Result<()> {
+    // Warn (do not fix) when /dev/uhid is writable by anyone but the ucabled
+    // account: a loose node lets a local process create arbitrary virtual HID
+    // devices.  We deliberately do not tighten permissions ourselves.
+    if let Some(reason) = ucabled::uhid_perm::loose_reason(std::path::Path::new("/dev/uhid")) {
+        tracing::warn!(
+            "/dev/uhid is writable by more than the ucabled account ({reason}); a local \
+             process could create arbitrary virtual HID devices (e.g. a keyboard). A stale \
+             `uaccess` udev tag makes logind re-grant the active seat user; rebooting, or \
+             `udevadm trigger /sys/class/misc/uhid`, with the current rule removes it."
+        );
+    }
+
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
-
     let mut transport = Transport::new(ucabled::ctap::AAGUID);
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
