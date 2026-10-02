@@ -348,11 +348,15 @@ async fn daemon_loop(
                     }
                     UhidEvent::Close => {
                         if open_count == 0 {
+                            // Unbalanced close: the count no longer
+                            // reflects reality (an Open was missed), so do
+                            // not reset — that could cut off a live client
+                            // whose open was never counted.
                             tracing::warn!("hidraw close without a matching open");
-                        } else {
-                            open_count -= 1;
+                            continue;
                         }
-                        tracing::info!("hidraw closed");
+                        open_count -= 1;
+                        tracing::info!(open_count, "hidraw closed");
                         if open_count == 0 {
                             // The last host handle is gone, possibly
                             // mid-message or mid-transaction: drop the
