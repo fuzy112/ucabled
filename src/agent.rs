@@ -455,6 +455,10 @@ async fn dispatch_commands(
             Duration::from_secs(15),
             conn.clone(),
         );
+        let prompt_tid = match &command {
+            AgentCommand::Prompt { tid, .. } => Some(*tid),
+            _ => None,
+        };
         let result: std::result::Result<(), dbus::Error> = match command {
             AgentCommand::Prompt {
                 tid,
@@ -487,13 +491,24 @@ async fn dispatch_commands(
         };
         if let Err(e) = result {
             tracing::warn!("agent call failed: {e}");
-            // The NameOwnerChanged watch normally drops a dead agent
-            // first; this is a fallback in case that signal was missed. Do
-            // not clear on timeouts or other transient failures.
-            if agent_gone(&e) {
-                if let Some(generation) = clear_if_matches(&slot, Some(&agent.destination)) {
-                    let _ = cancel_tx.send(CancelRequest::AgentGone(generation)).await;
+            match failed_call(agent_gone(&e), prompt_tid) {
+                // The NameOwnerChanged watch normally drops a dead agent
+                // first; this is a fallback in case that signal was missed.
+                // Clearing the slot aborts the transaction through its
+                // generation tag, so it needs no separate tid cancel.
+                FailedCall::Gone => {
+                    if let Some(generation) = clear_if_matches(&slot, Some(&agent.destination)) {
+                        let _ = cancel_tx.send(CancelRequest::AgentGone(generation)).await;
+                    }
                 }
+                // A Prompt that could not be delivered (registered but
+                // unresponsive agent, call timed out) must not leave the
+                // transaction running invisibly with the HID channel held:
+                // cancel it like a user cancellation.
+                FailedCall::CancelTransaction(tid) => {
+                    let _ = cancel_tx.send(CancelRequest::Transaction(tid)).await;
+                }
+                FailedCall::Nothing => {}
             }
         }
     }
@@ -527,6 +542,29 @@ fn agent_gone(e: &dbus::Error) -> bool {
                 | "org.freedesktop.DBus.Error.Disconnected"
         )
     )
+}
+
+/// How a failed agent call should be reported to the daemon.  A gone agent
+/// is handled by clearing its slot, which aborts the transaction through
+/// the registration generation; an undeliverable Prompt to a still-live
+/// agent has no such departure to key on and is cancelled by transaction
+/// id instead.  Other commands own no transaction, so a transient failure
+/// on them cancels nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailedCall {
+    Gone,
+    CancelTransaction(u64),
+    Nothing,
+}
+
+fn failed_call(is_gone: bool, prompt_tid: Option<u64>) -> FailedCall {
+    if is_gone {
+        FailedCall::Gone
+    } else if let Some(tid) = prompt_tid {
+        FailedCall::CancelTransaction(tid)
+    } else {
+        FailedCall::Nothing
+    }
 }
 
 #[cfg(test)]
@@ -573,5 +611,19 @@ mod tests {
         ] {
             assert!(!agent_gone(&dbus::Error::new_custom(name, "transient")));
         }
+    }
+
+    #[test]
+    fn a_gone_agent_is_not_also_cancelled_by_tid() {
+        use FailedCall::*;
+        // A departure aborts through the slot's generation, so no tid
+        // cancel is emitted alongside it.
+        assert_eq!(failed_call(true, Some(7)), Gone);
+        assert_eq!(failed_call(true, None), Gone);
+        // An undelivered Prompt to a still-registered agent is cancelled
+        // by its transaction id.
+        assert_eq!(failed_call(false, Some(7)), CancelTransaction(7));
+        // A transient failure on a command with no transaction is ignored.
+        assert_eq!(failed_call(false, None), Nothing);
     }
 }
