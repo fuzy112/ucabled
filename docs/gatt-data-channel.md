@@ -122,14 +122,8 @@ authenticator 一律走 hybrid。直接证据：
 
 ## 3. 若要在桌面侧启用 L2CAP 通道
 
-- 链路抽象：`phone.rs::CableLink` 现直接持有 `ws` 并调用
-  `tunnel::write_binary/read_binary`；`session.rs::DesktopFlow` 握手前后也直接
-  用 `ws`。需引入一个字节双向流 trait 才能插入 L2CAP 链路。
-- 桌面侧 L2CAP central：需在 BlueZ 上建立 L2CAP CoC 连接（`BTPROTO_L2CAP`），
-  并从 extended advertising 的 advertisement suffix 解析 PSM；`bluer` 目前是
-  D-Bus 封装，能否直接做 L2CAP 需实测。
-- Noise 握手、消息加解密（`handshake.rs` / `crypter.rs`）可原样复用。
-- 手机侧：Android 已实现该 BLE 数据通道；iOS 的可用性待确认。
+见专门的 `docs/l2cap-channel.md`（协议机制、`bluer` 的 L2CAP 支持、未决问题与
+spike 计划）。要点：把承载链路换成 LE L2CAP CoC，其余 caBLE 代码可复用。
 
 ## 4. 建议
 

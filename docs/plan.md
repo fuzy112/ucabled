@@ -31,7 +31,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | FR-6 | 支持 iPhone（iCloud Keychain）与 Android（Google Password Manager）扫码；手机端零安装 | P0 |
 | FR-7 | state-assisted linking（"记住这台手机"）：存储 contact ID，后续操作免扫码 | P2 |
 | FR-8a | **BLE advert 接收**：扫描手机广播的 EID（UUID 0000fff9 的 20 字节 service data），trial-decrypt 得到 routing ID 与连接 nonce。**协议必需**（CTAP 2.2 §11.5.1：PSK 由 QR secret + 解密后的 BLE advert 派生，作为 proximity proof；无 BLE 则无握手） | P0 |
-| FR-8b | **BLE 数据通道**：规范中的 FIDO GATT service（`0xFFFD`，§11.4）可承载 CTAP2，但 iOS/Android 平台 passkey 不提供；CTAP 2.3 另给 hybrid 加了走 L2CAP CoC 的 BLE 数据通道，作为摆脱隧道服务器的候选待评估。见 docs/gatt-data-channel.md | — |
+| FR-8b | **BLE 数据通道**：规范中的 FIDO GATT service（`0xFFFD`，§11.4）可承载 CTAP2，但 iOS/Android 平台 passkey 不提供；CTAP 2.3 另给 hybrid 加了走 L2CAP CoC 的 BLE 数据通道，作为摆脱隧道服务器的候选待评估。见 docs/gatt-data-channel.md、docs/l2cap-channel.md | — |
 | FR-9 | per-RP / 全局策略配置（何时走手机流程） | P2 |
 
 ### 2.2 非功能需求
@@ -219,7 +219,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
 | QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
 | UI | system daemon + 每用户 session agent `ucable-agent`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucable-agent-helper`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
-| BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；无 GATT 数据通道，hybrid 的 BLE 数据通道为 L2CAP（CTAP 2.3），桌面侧未实现（见 docs/gatt-data-channel.md） |
+| BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；无 GATT 数据通道，hybrid 的 BLE 数据通道为 L2CAP（CTAP 2.3），桌面侧未实现（见 docs/gatt-data-channel.md、docs/l2cap-channel.md） |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
 700–1000 行；CTAP2 分发 200–400 行；caBLE initiator 完整化 1000–1500 行；

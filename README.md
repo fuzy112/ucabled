@@ -205,8 +205,8 @@ Helper tools in the repo (not shipped in the package):
 Requirements and design: `docs/plan.md`; system service / UI agent design:
 `docs/system-service.md`; D-Bus async design: `docs/async-dbus.md`; tunnel
 server rationale: `docs/tunnel-server.md`; BLE data channel (GATT vs L2CAP):
-`docs/gatt-data-channel.md`; related projects: `docs/prior-art.md`; linking
-design: `docs/linking.md`.
+`docs/gatt-data-channel.md` and L2CAP feasibility: `docs/l2cap-channel.md`;
+related projects: `docs/prior-art.md`; linking design: `docs/linking.md`.
 
 ## License
 
