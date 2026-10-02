@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::ctap::{
     CMD_GET_ASSERTION, CMD_GET_INFO, CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL,
@@ -59,6 +60,13 @@ const KEEPALIVE_STATUS_UPNEEDED: u8 = 0x02;
 const CAP_WINK: u8 = 0x01;
 const CAP_CBOR: u8 = 0x04;
 
+/// How long a multi-frame assembly may go without the next continuation
+/// frame before it is dropped.  Hosts send continuation frames back to
+/// back, so 2s of silence means the sender is gone; without a deadline a
+/// single truncated frame would wedge the busy slot (and with it all
+/// WebAuthn traffic) until someone happened to send a CANCEL.
+pub const ASSEMBLY_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug, PartialEq)]
 pub enum CtapAction {
     /// CTAP2-level request payload (after the CTAPHID_CBOR command byte),
@@ -73,6 +81,7 @@ struct Assembly {
     total_len: usize,
     buf: Vec<u8>,
     next_seq: u8,
+    last_frame: Instant,
 }
 
 pub struct Transport {
@@ -132,6 +141,7 @@ impl Transport {
                     total_len: len,
                     buf: payload.to_vec(),
                     next_seq: 0,
+                    last_frame: Instant::now(),
                 });
                 (vec![], None)
             }
@@ -150,6 +160,7 @@ impl Transport {
                 return (error_response(cid, ERR_INVALID_SEQ), None);
             }
             assembly.next_seq += 1;
+            assembly.last_frame = Instant::now();
             let remaining = assembly.total_len - assembly.buf.len();
             let take = remaining.min(CONT_DATA_SIZE);
             assembly
@@ -263,6 +274,32 @@ impl Transport {
 
     pub fn busy_channel(&self) -> Option<u32> {
         self.busy
+    }
+
+    /// Drop a multi-frame assembly whose sender has been silent for at
+    /// least [`ASSEMBLY_IDLE_TIMEOUT`], freeing the busy slot.  Returns
+    /// whether anything was dropped.  Only unfinished assemblies expire:
+    /// the busy slot of a relayed CTAP operation is owned by the daemon's
+    /// pending-transaction lifecycle and can legitimately last minutes.
+    pub fn expire_assembly(&mut self, now: Instant) -> bool {
+        let Some(assembly) = &self.assembly else {
+            return false;
+        };
+        if now.saturating_duration_since(assembly.last_frame) < ASSEMBLY_IDLE_TIMEOUT {
+            return false;
+        }
+        self.assembly = None;
+        self.busy = None;
+        true
+    }
+
+    /// Forget all host-visible state: an unfinished assembly, a stuck busy
+    /// slot and the allocated channel ids.  Used when the last hidraw
+    /// handle closes so a fresh opener starts clean.
+    pub fn reset(&mut self) {
+        self.busy = None;
+        self.assembly = None;
+        self.channels.clear();
     }
 }
 
@@ -440,5 +477,59 @@ mod tests {
         assert_eq!(t.busy_channel(), Some(1));
         let reports = t.complete_relay(1, &[0x00, 0xa1]);
         assert_eq!(reports[0][4], CMD_CBOR);
+    }
+
+    #[test]
+    fn unfinished_assembly_expires_after_idle_timeout() {
+        let mut t = Transport::new([0u8; 16]);
+        // A PING announcing 200 bytes buffers the first 57 and waits for
+        // continuation frames that never arrive.
+        let payload: Vec<u8> = (0..200u32).map(|i| (i % 256) as u8).collect();
+        let mut f = vec![0u8; REPORT_SIZE];
+        f[0..4].copy_from_slice(&1u32.to_be_bytes());
+        f[4] = CMD_PING;
+        f[5..7].copy_from_slice(&200u16.to_be_bytes());
+        f[7..].copy_from_slice(&payload[..57]);
+        let (resp, _) = t.handle_report(&f);
+        assert!(resp.is_empty());
+        assert_eq!(t.busy_channel(), Some(1));
+
+        let now = Instant::now();
+        // Still fresh: no expiry, and other channels stay locked out.
+        assert!(!t.expire_assembly(now));
+        assert_eq!(t.busy_channel(), Some(1));
+
+        // Past the idle timeout the assembly is dropped and the transport
+        // serves new requests again.
+        assert!(t.expire_assembly(now + ASSEMBLY_IDLE_TIMEOUT));
+        assert_eq!(t.busy_channel(), None);
+        let (resp, _) = t.handle_report(&init_frame(2, CMD_CBOR, &[0x04]));
+        assert_eq!(resp[0][4], CMD_CBOR);
+    }
+
+    #[test]
+    fn relay_busy_slot_does_not_expire() {
+        let mut t = Transport::new([0u8; 16]);
+        let (_, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        assert!(matches!(action, Some(CtapAction::Relay(_))));
+        let now = Instant::now();
+        assert!(!t.expire_assembly(now + ASSEMBLY_IDLE_TIMEOUT * 10));
+        assert_eq!(t.busy_channel(), Some(1));
+    }
+
+    #[test]
+    fn reset_clears_all_state() {
+        let mut t = Transport::new([0u8; 16]);
+        let _ = t.handle_report(&init_frame(
+            BROADCAST_CID,
+            CMD_INIT,
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        ));
+        let _ = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        assert!(t.busy_channel().is_some());
+        assert!(!t.channels.is_empty());
+        t.reset();
+        assert_eq!(t.busy_channel(), None);
+        assert!(t.channels.is_empty());
     }
 }

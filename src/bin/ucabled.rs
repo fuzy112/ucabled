@@ -140,6 +140,9 @@ async fn daemon_loop(
     let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
     let mut read_failures = 0u32;
     let mut write_failures = 0u32;
+    // Number of processes holding the hidraw node open (several clients may
+    // share it); the transport is reset when the last one closes.
+    let mut open_count = 0u32;
 
     loop {
         tokio::select! {
@@ -331,8 +334,38 @@ async fn daemon_loop(
                             None => {}
                         }
                     }
-                    UhidEvent::Open => tracing::info!("hidraw opened by a process"),
-                    UhidEvent::Close => tracing::info!("hidraw closed"),
+                    UhidEvent::Open => {
+                        open_count += 1;
+                        tracing::info!("hidraw opened by a process");
+                    }
+                    UhidEvent::Close => {
+                        if open_count == 0 {
+                            tracing::warn!("hidraw close without a matching open");
+                        } else {
+                            open_count -= 1;
+                        }
+                        tracing::info!("hidraw closed");
+                        if open_count == 0 {
+                            // The last host handle is gone, possibly
+                            // mid-message or mid-transaction: drop the
+                            // partial state so a fresh opener does not
+                            // inherit a wedged channel, and stop any work
+                            // nobody is left to read the answer of.  This
+                            // includes the silent-probe preflight cache,
+                            // which must not leak across host clients.
+                            transport.reset();
+                            fake_assertions = None;
+                            if let Some(p) = pending.take() {
+                                if let Pending::Relay { abort, .. } = p {
+                                    abort.abort();
+                                }
+                                notifier.hide();
+                                tracing::info!(
+                                    "last hidraw handle closed, dropped pending transaction"
+                                );
+                            }
+                        }
+                    }
                     UhidEvent::Start | UhidEvent::Stop => {}
                     UhidEvent::Other(t) => tracing::debug!(t, "unhandled uhid event"),
                 }
@@ -399,11 +432,18 @@ async fn daemon_loop(
                     }
                 }
             }
-            _ = keepalive.tick(), if pending.is_some() => {
-                let cid = pending.as_ref().map(Pending::cid).unwrap();
+            _ = keepalive.tick() => {
+                // A truncated multi-frame request must not wedge the busy
+                // slot forever; hosts send continuation frames back to
+                // back, so idle silence means the sender is gone.
+                if transport.expire_assembly(std::time::Instant::now()) {
+                    tracing::warn!("dropped an unfinished multi-frame request (idle timeout)");
+                }
+                let Some(p) = pending.as_ref() else { continue };
+                let cid = p.cid();
                 let timed_out = matches!(
-                    pending.as_ref(),
-                    Some(Pending::Select { deadline, .. })
+                    p,
+                    Pending::Select { deadline, .. }
                         if tokio::time::Instant::now() >= *deadline
                 );
                 if timed_out {
