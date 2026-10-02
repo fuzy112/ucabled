@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use ucabled::agent::CancelRequest;
 use ucabled::ctap::{
     CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION,
     CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_PIN_NOT_SET,
@@ -34,10 +35,9 @@ const MAX_UHID_READ_FAILURES: u32 = 10;
 /// declining. The helper has its own, slightly shorter, timeout.
 const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
 
-/// Bound on queued UI cancellations. Cancellations carry the transaction id
-/// and are only acted on when they match the in-flight transaction, so a
-/// full queue can only ever mean a misbehaving agent; excess ones are
-/// dropped in the D-Bus layer.
+/// Bound on queued UI cancellations.  Cancellations are only acted on when
+/// they match the in-flight transaction, so a full queue can only ever mean
+/// a misbehaving agent; excess ones are dropped in the D-Bus layer.
 const CANCEL_QUEUE_SIZE: usize = 16;
 
 /// Bound on queued device-selection answers, same rationale as
@@ -47,7 +47,13 @@ const SELECT_QUEUE_SIZE: usize = 16;
 /// An in-flight operation that the daemon is waiting on.
 enum Pending {
     /// A caBLE transaction is running for `cid`; `abort` cancels it.
-    Relay { cid: u32, abort: AbortHandle },
+    /// `agent` is the registration generation of the agent the QR window
+    /// was requested from, used to recognise stale agent-gone signals.
+    Relay {
+        cid: u32,
+        abort: AbortHandle,
+        agent: Option<u64>,
+    },
     /// The user is being asked to choose the phone over another
     /// authenticator (e.g. a physical security key). Firefox's own prompt can
     /// only be answered by touching a physical key, so we ask through the
@@ -55,6 +61,7 @@ enum Pending {
     Select {
         cid: u32,
         deadline: tokio::time::Instant,
+        agent: Option<u64>,
     },
 }
 
@@ -63,6 +70,26 @@ impl Pending {
         match self {
             Pending::Relay { cid, .. } | Pending::Select { cid, .. } => *cid,
         }
+    }
+
+    fn agent(&self) -> Option<u64> {
+        match self {
+            Pending::Relay { agent, .. } | Pending::Select { agent, .. } => *agent,
+        }
+    }
+}
+
+/// Whether a cancel request applies to the pending operation.  A user
+/// cancellation is tagged with the transaction id the agent was prompted
+/// for, and an agent-gone signal with the agent's registration generation,
+/// so a stale signal (a window closed after its transaction ended, an agent
+/// whose successor already started a new transaction) cannot abort a later,
+/// unrelated transaction.
+fn cancel_aborts(request: &CancelRequest, pending: Option<&Pending>) -> bool {
+    match (request, pending) {
+        (CancelRequest::Transaction(tid), Some(p)) => p.cid() as u64 == *tid,
+        (CancelRequest::AgentGone(generation), Some(p)) => p.agent() == Some(*generation),
+        _ => false,
     }
 }
 
@@ -75,7 +102,7 @@ fn main() -> Result<()> {
 
     let no_ui = std::env::args().any(|a| a == "--no-ui");
 
-    let (cancel_tx, cancel_rx) = mpsc::channel::<u64>(CANCEL_QUEUE_SIZE);
+    let (cancel_tx, cancel_rx) = mpsc::channel::<CancelRequest>(CANCEL_QUEUE_SIZE);
     let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>(SELECT_QUEUE_SIZE);
     let rt = tokio::runtime::Runtime::new()?;
     let notifier = if no_ui {
@@ -95,7 +122,7 @@ fn main() -> Result<()> {
 
 async fn daemon_loop(
     notifier: Notifier,
-    mut cancel_rx: mpsc::Receiver<u64>,
+    mut cancel_rx: mpsc::Receiver<CancelRequest>,
     mut select_rx: mpsc::Receiver<(u64, bool)>,
 ) -> Result<()> {
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
@@ -208,11 +235,13 @@ async fn daemon_loop(
                                 // key only does once touched. Put the choice in
                                 // the user's hands with our own window.
                                 if ucabled::ctap::is_blink_probe(&payload) {
-                                    if notifier.select(cid as u64) {
+                                    if let Some(agent) = notifier.select(cid as u64) {
                                         tracing::info!("asking the user to choose the phone");
                                         pending = Some(Pending::Select {
                                             cid,
-                                            deadline: tokio::time::Instant::now() + SELECT_TIMEOUT,
+                                            deadline: tokio::time::Instant::now()
+                                                + SELECT_TIMEOUT,
+                                            agent: Some(agent),
                                         });
                                     } else {
                                         tracing::info!("blink probe, no UI available, declining");
@@ -224,7 +253,11 @@ async fn daemon_loop(
                                 // Any preflight state is done with once the real
                                 // request starts.
                                 fake_assertions = None;
-                                if !notifier.available() {
+                                // One atomic read: availability and the
+                                // generation tag share it, so an agent
+                                // departing between the two cannot leave
+                                // the transaction untagged.
+                                let Some(ui) = notifier.ui_for_transaction() else {
                                     tracing::warn!(
                                         "no UI agent registered; refusing the transaction"
                                     );
@@ -232,7 +265,7 @@ async fn daemon_loop(
                                         .complete_relay(cid, &[CTAP1_ERR_TIMEOUT]);
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
-                                }
+                                };
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
                                 let transports_hint =
                                     ucabled::ctap::request_has_transport_hints(&payload);
@@ -277,6 +310,7 @@ async fn daemon_loop(
                                 pending = Some(Pending::Relay {
                                     cid,
                                     abort: task.abort_handle(),
+                                    agent: ui.generation(),
                                 });
                             }
                             Some(CtapAction::CancelRelay) => match pending.take() {
@@ -342,27 +376,26 @@ async fn daemon_loop(
                     }
                 }
             }
-            Some(tid) = cancel_rx.recv() => {
-                // Cancellations are tagged with the transaction id the agent
-                // was prompted for; a stale one (e.g. from a window closed
-                // after its transaction already ended) must not abort a
-                // later, unrelated transaction.
-                match pending.take() {
-                    Some(Pending::Relay { cid, abort }) if cid as u64 == tid => {
+            Some(request) = cancel_rx.recv() => {
+                if !cancel_aborts(&request, pending.as_ref()) {
+                    tracing::debug!(?request, "ignoring stale cancellation");
+                    continue;
+                }
+                match pending.take().unwrap() {
+                    Pending::Relay { cid, abort, .. } => {
                         abort.abort();
                         let reports = transport.cancel_relay(cid);
                         write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!("transaction cancelled from UI");
+                        tracing::info!(?request, "pending transaction cancelled");
                     }
-                    Some(Pending::Select { cid, .. }) if cid as u64 == tid => {
+                    // The selection window answers through SelectionResult,
+                    // so a TransactionCancelled for its tid should never
+                    // arrive; decline defensively if one does.
+                    Pending::Select { cid, .. } => {
                         let reports =
                             transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
                         write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!("device selection cancelled from UI");
-                    }
-                    other => {
-                        pending = other;
-                        tracing::debug!(tid, "ignoring stale cancellation");
+                        tracing::info!(?request, "pending device selection cancelled");
                     }
                 }
             }
@@ -401,5 +434,47 @@ async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u3
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn select_pending(cid: u32, agent: Option<u64>) -> Pending {
+        Pending::Select {
+            cid,
+            deadline: tokio::time::Instant::now() + SELECT_TIMEOUT,
+            agent,
+        }
+    }
+
+    #[test]
+    fn user_cancellation_matches_only_the_current_transaction() {
+        let p = select_pending(7, Some(1));
+        assert!(cancel_aborts(&CancelRequest::Transaction(7), Some(&p)));
+        // Stale tid from an earlier, already-finished transaction.
+        assert!(!cancel_aborts(&CancelRequest::Transaction(6), Some(&p)));
+        // Nothing pending at all.
+        assert!(!cancel_aborts(&CancelRequest::Transaction(7), None));
+    }
+
+    #[test]
+    fn agent_gone_matches_only_the_owning_generation() {
+        let p = select_pending(7, Some(3));
+        assert!(cancel_aborts(&CancelRequest::AgentGone(3), Some(&p)));
+        // A departed predecessor or a not-yet-seen successor must not
+        // abort this transaction.
+        assert!(!cancel_aborts(&CancelRequest::AgentGone(2), Some(&p)));
+        assert!(!cancel_aborts(&CancelRequest::AgentGone(4), Some(&p)));
+        assert!(!cancel_aborts(&CancelRequest::AgentGone(3), None));
+    }
+
+    #[test]
+    fn agent_gone_does_not_touch_agentless_transactions() {
+        // Terminal QR: no agent was involved, so no agent departure
+        // applies.
+        let p = select_pending(7, None);
+        assert!(!cancel_aborts(&CancelRequest::AgentGone(1), Some(&p)));
     }
 }

@@ -59,12 +59,28 @@ pub struct Agent {
 #[derive(Default)]
 pub struct AgentSlot {
     current: Option<Agent>,
+    /// Incremented on every registration; distinguishes the current agent
+    /// from a departed one with which a transaction may still be pending.
+    generation: u64,
 }
 
 impl AgentSlot {
     pub fn current(&self) -> Option<&Agent> {
         self.current.as_ref()
     }
+}
+
+/// Why the daemon should drop its in-flight transaction.
+#[derive(Debug, Clone, Copy)]
+pub enum CancelRequest {
+    /// The user cancelled the dialog for this transaction id.
+    Transaction(u64),
+    /// The registered agent went away, so nothing remains to confirm or
+    /// cancel the pending transaction with; abort it.  Tagged with the
+    /// agent's registration generation so a signal from a departed agent
+    /// cannot abort a transaction owned by its already-registered
+    /// successor.
+    AgentGone(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +118,14 @@ impl AgentClient {
         self.slot.lock().unwrap().current.is_some()
     }
 
+    /// Registration generation of the current agent, if any.  Callers tag
+    /// a pending transaction with it so a stale `AgentGone` from the
+    /// agent's predecessor is ignored.
+    pub fn generation(&self) -> Option<u64> {
+        let guard = self.slot.lock().unwrap();
+        guard.current.as_ref().map(|_| guard.generation)
+    }
+
     pub fn prompt(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
         self.active_tid.store(tid, Ordering::SeqCst);
         let _ = self.tx.send(AgentCommand::Prompt {
@@ -132,16 +156,17 @@ impl AgentClient {
 }
 
 /// Start the D-Bus service and dispatch tasks on `handle`. `cancel_tx`
-/// receives the transaction id when the agent reports that the user cancelled
-/// the dialog; `select_tx` receives the user's answer (`true` = use the
-/// phone) to a [`AgentClient::select`] request.
+/// receives a [`CancelRequest`] when the agent reports that the user
+/// cancelled the dialog or when the agent itself goes away; `select_tx`
+/// receives the user's answer (`true` = use the phone) to a
+/// [`AgentClient::select`] request.
 ///
 /// The setup (connect, request the bus name, install matches) runs inline so
 /// a failure still falls back at startup; message routing and outbound calls
 /// then live in spawned tasks on a single async connection.
 pub fn start(
     handle: &Handle,
-    cancel_tx: mpsc::Sender<u64>,
+    cancel_tx: mpsc::Sender<CancelRequest>,
     select_tx: mpsc::Sender<(u64, bool)>,
 ) -> Result<AgentClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
@@ -154,20 +179,17 @@ pub fn start(
         tracing::error!("system bus connection lost: {err}");
     });
 
-    let crossroads = build_crossroads(&slot, cancel_tx, select_tx);
-    let registered = handle.block_on(register_on_bus(&conn))?;
-    let ((method_match, methods), (signal_match, signals)) = registered;
+    let crossroads = build_crossroads(&slot, cancel_tx.clone(), select_tx);
+    let streams = handle.block_on(register_on_bus(&conn))?;
 
     handle.spawn(route_messages(
         conn.clone(),
         crossroads,
-        method_match,
-        methods,
-        signal_match,
-        signals,
+        streams,
         slot.clone(),
+        cancel_tx.clone(),
     ));
-    handle.spawn(dispatch_commands(conn, rx, slot.clone()));
+    handle.spawn(dispatch_commands(conn, rx, slot.clone(), cancel_tx.clone()));
 
     Ok(AgentClient {
         tx,
@@ -219,9 +241,16 @@ fn authorize(sender: &str) -> Result<Option<u32>> {
 
 type MatchStream = (MsgMatch, MessageReceiver<Message>);
 
+/// Guards and streams for the two installed matches; dropping a guard stops
+/// matching, so both are owned by the routing task.
+struct MatchStreams {
+    methods: MatchStream,
+    signals: MatchStream,
+}
+
 /// Request the bus name and install the method-call and NameOwnerChanged
 /// matches, returning the guards (dropping them stops matching) and streams.
-async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<(MatchStream, MatchStream)> {
+async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<MatchStreams> {
     conn.request_name(BUS_NAME, false, false, false)
         .await
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
@@ -234,12 +263,15 @@ async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<(MatchStream, Mat
         .await
         .context("match NameOwnerChanged")?;
     tracing::info!("listening on {BUS_NAME} ({MANAGER_INTERFACE})");
-    Ok((method.msg_stream(), signal.msg_stream()))
+    Ok(MatchStreams {
+        methods: method.msg_stream(),
+        signals: signal.msg_stream(),
+    })
 }
 
 fn build_crossroads(
     slot: &Arc<Mutex<AgentSlot>>,
-    cancel_tx: mpsc::Sender<u64>,
+    cancel_tx: mpsc::Sender<CancelRequest>,
     select_tx: mpsc::Sender<(u64, bool)>,
 ) -> Crossroads {
     let mut crossroads = Crossroads::new();
@@ -268,20 +300,34 @@ fn build_crossroads(
                             "only the active local session may register an agent",
                         )));
                     };
-                    tracing::info!(%sender, %path, uid, "agent registered");
-                    register_slot.lock().unwrap().current = Some(Agent {
-                        destination: sender,
+                    let mut guard = register_slot.lock().unwrap();
+                    guard.generation += 1;
+                    let generation = guard.generation;
+                    guard.current = Some(Agent {
+                        destination: sender.clone(),
                         path: path.to_string(),
                         uid,
                     });
+                    tracing::info!(%sender, %path, uid, generation, "agent registered");
                     Ok(())
                 },
             );
 
             let unregister_slot = slot.clone();
+            let unregister_cancel = cancel_tx.clone();
             builder.method("UnregisterAgent", (), (), move |ctx, _: &mut (), ()| {
                 let sender = ctx.message().sender().map(|s| s.to_string());
-                clear_if_matches(&unregister_slot, sender.as_deref());
+                if let Some(generation) = clear_if_matches(&unregister_slot, sender.as_deref()) {
+                    // Sync context: no guaranteed delivery here.  The queue
+                    // drains promptly, so a full queue means a flood; the
+                    // async departure paths below use blocking delivery.
+                    if unregister_cancel
+                        .try_send(CancelRequest::AgentGone(generation))
+                        .is_err()
+                    {
+                        tracing::warn!("cancel queue full, agent-gone signal dropped");
+                    }
+                }
                 Ok(())
             });
 
@@ -303,7 +349,7 @@ fn build_crossroads(
                         tracing::info!(tid, "agent reported cancellation");
                         // Bounded queue: a flooded or stale cancellation is
                         // dropped, never retained.
-                        let _ = cancel_tx.try_send(tid);
+                        let _ = cancel_tx.try_send(CancelRequest::Transaction(tid));
                     }
                     Ok(())
                 },
@@ -343,12 +389,12 @@ fn build_crossroads(
 async fn route_messages(
     conn: Arc<SyncConnection>,
     mut crossroads: Crossroads,
-    _method_match: MsgMatch,
-    mut methods: MessageReceiver<Message>,
-    _signal_match: MsgMatch,
-    mut signals: MessageReceiver<Message>,
+    streams: MatchStreams,
     slot: Arc<Mutex<AgentSlot>>,
+    cancel_tx: mpsc::Sender<CancelRequest>,
 ) {
+    let (_method_match, mut methods) = streams.methods;
+    let (_signal_match, mut signals) = streams.signals;
     loop {
         tokio::select! {
             msg = methods.next() => {
@@ -359,7 +405,14 @@ async fn route_messages(
                 let Some(sig) = sig else { break };
                 if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>() {
                     if new_owner.is_empty() {
-                        clear_if_matches(&slot, Some(&name));
+                        if let Some(generation) = clear_if_matches(&slot, Some(&name)) {
+                            // Awaited delivery: this is the backstop that
+                            // frees the shared HID channel and must not be
+                            // lost to a momentarily full queue.
+                            let _ = cancel_tx
+                                .send(CancelRequest::AgentGone(generation))
+                                .await;
+                        }
                     }
                 }
             }
@@ -371,6 +424,7 @@ async fn dispatch_commands(
     conn: Arc<SyncConnection>,
     mut rx: UnboundedReceiver<AgentCommand>,
     slot: Arc<Mutex<AgentSlot>>,
+    cancel_tx: mpsc::Sender<CancelRequest>,
 ) {
     while let Some(command) = rx.recv().await {
         // The lock is released before the await: only the cloned Agent
@@ -416,13 +470,19 @@ async fn dispatch_commands(
             // first; this is a fallback in case that signal was missed. Do
             // not clear on timeouts or other transient failures.
             if agent_gone(&e) {
-                clear_if_matches(&slot, Some(&agent.destination));
+                if let Some(generation) = clear_if_matches(&slot, Some(&agent.destination)) {
+                    let _ = cancel_tx.send(CancelRequest::AgentGone(generation)).await;
+                }
             }
         }
     }
 }
 
-fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) {
+/// Drop the slot's agent if it belongs to `sender`, returning the dropped
+/// agent's registration generation.  Callers signal the daemon so an
+/// in-flight transaction is aborted rather than leaving the shared HID
+/// channel locked until the BLE timeout.
+fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) -> Option<u64> {
     let mut guard = slot.lock().unwrap();
     if guard
         .current()
@@ -431,7 +491,9 @@ fn clear_if_matches(slot: &Arc<Mutex<AgentSlot>>, sender: Option<&str>) {
     {
         tracing::info!("agent unregistered");
         guard.current = None;
+        return Some(guard.generation);
     }
+    None
 }
 
 /// Whether a call error means the agent's connection is gone for good.
@@ -468,9 +530,9 @@ mod tests {
         });
         assert!(client.available());
 
-        clear_if_matches(&slot, Some(":1.8"));
+        assert!(clear_if_matches(&slot, Some(":1.8")).is_none());
         assert!(client.available());
-        clear_if_matches(&slot, Some(":1.7"));
+        assert!(clear_if_matches(&slot, Some(":1.7")).is_some());
         assert!(!client.available());
     }
 

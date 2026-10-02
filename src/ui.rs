@@ -15,12 +15,37 @@ pub enum Notifier {
     Agent(AgentClient),
 }
 
-impl Notifier {
-    /// Whether a UI is ready to show the QR code.
-    pub fn available(&self) -> bool {
+/// The UI available for a new transaction, carrying the generation tag to
+/// record on the pending operation so a stale agent-gone signal is
+/// ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiTag {
+    /// Terminal QR: a UI is available, but no agent is involved.
+    Terminal,
+    /// A session agent, tagged with its registration generation.
+    Agent(u64),
+}
+
+impl UiTag {
+    /// The generation tag recorded on the daemon's pending operations.
+    pub fn generation(&self) -> Option<u64> {
         match self {
-            Notifier::Terminal => true,
-            Notifier::Agent(client) => client.available(),
+            UiTag::Terminal => None,
+            UiTag::Agent(generation) => Some(*generation),
+        }
+    }
+}
+
+impl Notifier {
+    /// The UI for a new transaction, or `None` when none is available.
+    /// The agent slot is read exactly once, so the availability check and
+    /// the generation tag cannot race with an agent departure (which would
+    /// leave the transaction untagged and its agent-gone signal
+    /// unmatched).
+    pub fn ui_for_transaction(&self) -> Option<UiTag> {
+        match self {
+            Notifier::Terminal => Some(UiTag::Terminal),
+            Notifier::Agent(client) => client.generation().map(UiTag::Agent),
         }
     }
 
@@ -32,19 +57,18 @@ impl Notifier {
     }
 
     /// Ask the user to pick the phone when another authenticator (e.g. a
-    /// physical security key) is also present. Returns whether a prompt was
-    /// shown; if not, the caller should decline instead of waiting for an
-    /// answer.
-    pub fn select(&self, tid: u64) -> bool {
+    /// physical security key) is also present. Returns the agent's
+    /// registration generation (to tag the pending selection) when the
+    /// prompt was shown, `None` when no agent is available and the caller
+    /// should decline instead of waiting for an answer.  The generation is
+    /// read atomically with the availability check.
+    pub fn select(&self, tid: u64) -> Option<u64> {
         match self {
-            Notifier::Terminal => false,
+            Notifier::Terminal => None,
             Notifier::Agent(client) => {
-                if client.available() {
-                    client.select(tid);
-                    true
-                } else {
-                    false
-                }
+                let generation = client.generation()?;
+                client.select(tid);
+                Some(generation)
             }
         }
     }
