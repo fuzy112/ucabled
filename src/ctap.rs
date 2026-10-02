@@ -207,10 +207,16 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
     Some((out, c.pos))
 }
 
-/// Detect a silent getAssertion probe: options.up == false. Firefox sends
-/// these (with an empty clientDataHash) to filter the allowList to
-/// credentials present on this device. A phone cannot answer silently, so
-/// the daemon answers locally with `fake_silent_assertion`.
+/// Detect Firefox's silent getAssertion probe: `options.up == false` **and** a
+/// non-empty allowList. Firefox sends these (with an empty clientDataHash) to
+/// filter the allowList to credentials present on this device; a phone cannot
+/// answer silently, so the daemon answers locally with
+/// [`fake_silent_assertion`].
+///
+/// The allowList is required. A `up=false` assertion without one is a
+/// discoverable (resident) getAssertion — `ssh-keygen -t ecdsa-sk -O resident`
+/// sends one with rpId `ssh:` — which has nothing to filter and must be
+/// relayed to the phone instead.
 pub fn is_silent_probe(command: &[u8]) -> bool {
     let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
         return false;
@@ -222,30 +228,47 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
     let Some(pairs) = c.map_header() else {
         return false;
     };
+    let (mut has_allow_list, mut up_false) = (false, false);
     for _ in 0..pairs {
         let Some(key) = c.uint() else { return false };
-        if key == GA_KEY_OPTIONS {
-            // options map
-            let Some(inner) = c.map_header() else {
-                return false;
-            };
-            for _ in 0..inner {
-                let Some(k) = c.text() else { return false };
-                if k == "up" {
-                    let Some(b) = c.byte() else { return false };
-                    return b == cbor::FALSE;
+        match key {
+            GA_KEY_ALLOW_LIST => {
+                let Some(b) = c.byte() else { return false };
+                if b >> 5 != cbor::MAJOR_ARRAY {
+                    return false;
                 }
+                let Some(n) = c.argument(b & cbor::ARG_MASK) else {
+                    return false;
+                };
+                has_allow_list = n > 0;
+                for _ in 0..n {
+                    if c.skip_value().is_none() {
+                        return false;
+                    }
+                }
+            }
+            GA_KEY_OPTIONS => {
+                let Some(inner) = c.map_header() else {
+                    return false;
+                };
+                for _ in 0..inner {
+                    let Some(k) = c.text() else { return false };
+                    if k == "up" {
+                        let Some(b) = c.byte() else { return false };
+                        up_false = b == cbor::FALSE;
+                    } else if c.skip_value().is_none() {
+                        return false;
+                    }
+                }
+            }
+            _ => {
                 if c.skip_value().is_none() {
                     return false;
                 }
             }
-            return false;
-        }
-        if c.skip_value().is_none() {
-            return false;
         }
     }
-    false
+    has_allow_list && up_false
 }
 
 /// Parse a getAssertion request into `(rpId, credential ids)`, collecting
@@ -927,6 +950,15 @@ mod tests {
         // No options at all
         let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         assert!(!is_silent_probe(&plain));
+        // Captured from `ssh-keygen -t ecdsa-sk -O resident`: a discoverable
+        // getAssertion for rpId "ssh:" with options {up:false, uv:true} and
+        // no allowList. It must be relayed, not answered locally.
+        let ssh_resident = hex::decode(
+            "02a301647373683a02582066687aadf862bd776c8fc18b8e9f8e20\
+             089714856ee233b3902a591d0d5f292505a2627570f4627576f5",
+        )
+        .unwrap();
+        assert!(!is_silent_probe(&ssh_resident));
     }
 
     #[test]
