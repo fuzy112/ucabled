@@ -36,6 +36,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH AF_NETLINK
 UMask=0077
 LimitCORE=0
 MemorySwapMax=0
+MemoryMax=64M
 
 [Install]
 WantedBy=multi-user.target

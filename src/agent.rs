@@ -132,17 +132,17 @@ impl AgentClient {
 }
 
 /// Start the D-Bus service and dispatch tasks on `handle`. `cancel_tx`
-/// receives a `()` when the agent reports that the user cancelled the dialog;
-/// `select_tx` receives the user's answer (`true` = use the phone) to a
-/// [`AgentClient::select`] request.
+/// receives the transaction id when the agent reports that the user cancelled
+/// the dialog; `select_tx` receives the user's answer (`true` = use the
+/// phone) to a [`AgentClient::select`] request.
 ///
 /// The setup (connect, request the bus name, install matches) runs inline so
 /// a failure still falls back at startup; message routing and outbound calls
 /// then live in spawned tasks on a single async connection.
 pub fn start(
     handle: &Handle,
-    cancel_tx: UnboundedSender<()>,
-    select_tx: UnboundedSender<(u64, bool)>,
+    cancel_tx: mpsc::Sender<u64>,
+    select_tx: mpsc::Sender<(u64, bool)>,
 ) -> Result<AgentClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let (tx, rx) = mpsc::unbounded_channel();
@@ -239,8 +239,8 @@ async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<(MatchStream, Mat
 
 fn build_crossroads(
     slot: &Arc<Mutex<AgentSlot>>,
-    cancel_tx: UnboundedSender<()>,
-    select_tx: UnboundedSender<(u64, bool)>,
+    cancel_tx: mpsc::Sender<u64>,
+    select_tx: mpsc::Sender<(u64, bool)>,
 ) -> Crossroads {
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(MANAGER_INTERFACE, {
@@ -301,7 +301,9 @@ fn build_crossroads(
                     };
                     if is_current {
                         tracing::info!(tid, "agent reported cancellation");
-                        let _ = cancel_tx.send(());
+                        // Bounded queue: a flooded or stale cancellation is
+                        // dropped, never retained.
+                        let _ = cancel_tx.try_send(tid);
                     }
                     Ok(())
                 },
@@ -323,7 +325,8 @@ fn build_crossroads(
                     };
                     if is_current {
                         tracing::info!(tid, use_phone, "agent reported device selection");
-                        let _ = select_tx.send((tid, use_phone));
+                        // Bounded queue, as for cancellations.
+                        let _ = select_tx.try_send((tid, use_phone));
                     }
                     Ok(())
                 },

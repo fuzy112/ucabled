@@ -34,6 +34,16 @@ const MAX_UHID_READ_FAILURES: u32 = 10;
 /// declining. The helper has its own, slightly shorter, timeout.
 const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
 
+/// Bound on queued UI cancellations. Cancellations carry the transaction id
+/// and are only acted on when they match the in-flight transaction, so a
+/// full queue can only ever mean a misbehaving agent; excess ones are
+/// dropped in the D-Bus layer.
+const CANCEL_QUEUE_SIZE: usize = 16;
+
+/// Bound on queued device-selection answers, same rationale as
+/// [`CANCEL_QUEUE_SIZE`].
+const SELECT_QUEUE_SIZE: usize = 16;
+
 /// An in-flight operation that the daemon is waiting on.
 enum Pending {
     /// A caBLE transaction is running for `cid`; `abort` cancels it.
@@ -65,8 +75,8 @@ fn main() -> Result<()> {
 
     let no_ui = std::env::args().any(|a| a == "--no-ui");
 
-    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
-    let (select_tx, select_rx) = mpsc::unbounded_channel::<(u64, bool)>();
+    let (cancel_tx, cancel_rx) = mpsc::channel::<u64>(CANCEL_QUEUE_SIZE);
+    let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>(SELECT_QUEUE_SIZE);
     let rt = tokio::runtime::Runtime::new()?;
     let notifier = if no_ui {
         Notifier::Terminal
@@ -85,8 +95,8 @@ fn main() -> Result<()> {
 
 async fn daemon_loop(
     notifier: Notifier,
-    mut cancel_rx: mpsc::UnboundedReceiver<()>,
-    mut select_rx: mpsc::UnboundedReceiver<(u64, bool)>,
+    mut cancel_rx: mpsc::Receiver<u64>,
+    mut select_rx: mpsc::Receiver<(u64, bool)>,
 ) -> Result<()> {
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
@@ -332,14 +342,28 @@ async fn daemon_loop(
                     }
                 }
             }
-            Some(()) = cancel_rx.recv(),
-                if matches!(pending.as_ref(), Some(Pending::Relay { .. })) =>
-            {
-                if let Some(Pending::Relay { cid, abort }) = pending.take() {
-                    abort.abort();
-                    let reports = transport.cancel_relay(cid);
-                    write_all(&device, reports, &mut write_failures).await;
-                    tracing::info!("transaction cancelled from UI");
+            Some(tid) = cancel_rx.recv() => {
+                // Cancellations are tagged with the transaction id the agent
+                // was prompted for; a stale one (e.g. from a window closed
+                // after its transaction already ended) must not abort a
+                // later, unrelated transaction.
+                match pending.take() {
+                    Some(Pending::Relay { cid, abort }) if cid as u64 == tid => {
+                        abort.abort();
+                        let reports = transport.cancel_relay(cid);
+                        write_all(&device, reports, &mut write_failures).await;
+                        tracing::info!("transaction cancelled from UI");
+                    }
+                    Some(Pending::Select { cid, .. }) if cid as u64 == tid => {
+                        let reports =
+                            transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
+                        write_all(&device, reports, &mut write_failures).await;
+                        tracing::info!("device selection cancelled from UI");
+                    }
+                    other => {
+                        pending = other;
+                        tracing::debug!(tid, "ignoring stale cancellation");
+                    }
                 }
             }
             _ = keepalive.tick(), if pending.is_some() => {

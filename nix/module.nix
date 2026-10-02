@@ -144,6 +144,7 @@ in
         UMask = "0077";
         LimitCORE = 0;
         MemorySwapMax = 0;
+        MemoryMax = "64M";
       };
     };
 
