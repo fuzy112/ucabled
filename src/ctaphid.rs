@@ -210,7 +210,10 @@ impl Transport {
                 // CTAPHID_CANCEL itself gets no response, but a pending CBOR
                 // command on this channel must be answered with
                 // CTAP2_ERR_KEEPALIVE_CANCEL, otherwise the host waits forever.
-                if self.busy == Some(cid) || self.assembly.is_some() {
+                // Only this channel's state: an in-progress assembly implies
+                // busy == its own cid, so the busy check covers both, and a
+                // cancel must not clear another channel's assembly.
+                if self.busy == Some(cid) {
                     self.busy = None;
                     self.assembly = None;
                     (
@@ -445,6 +448,25 @@ mod tests {
         let (resp, action) = t.handle_report(&init_frame(1, CMD_CANCEL, &[]));
         assert!(resp.is_empty());
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn cancel_leaves_other_channels_assembly_alone() {
+        let mut t = Transport::new([0u8; 16]);
+        // Channel 1 starts a multi-frame message.
+        let mut f = vec![0u8; REPORT_SIZE];
+        f[0..4].copy_from_slice(&1u32.to_be_bytes());
+        f[4] = CMD_PING;
+        f[5..7].copy_from_slice(&200u16.to_be_bytes());
+        let (resp, _) = t.handle_report(&f);
+        assert!(resp.is_empty());
+        assert_eq!(t.busy_channel(), Some(1));
+
+        // A cancel on channel 2 must not disturb channel 1's assembly.
+        let (resp, action) = t.handle_report(&init_frame(2, CMD_CANCEL, &[]));
+        assert!(resp.is_empty());
+        assert!(action.is_none());
+        assert_eq!(t.busy_channel(), Some(1));
     }
 
     #[test]
