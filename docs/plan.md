@@ -31,7 +31,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | FR-6 | 支持 iPhone（iCloud Keychain）与 Android（Google Password Manager）扫码；手机端零安装 | P0 |
 | FR-7 | state-assisted linking（"记住这台手机"）：存储 contact ID，后续操作免扫码 | P2 |
 | FR-8a | **BLE advert 接收**：扫描手机广播的 EID（UUID 0000fff9 的 20 字节 service data），trial-decrypt 得到 routing ID 与连接 nonce。**协议必需**（CTAP 2.2 §11.5.1：PSK 由 QR secret + 解密后的 BLE advert 派生，作为 proximity proof；无 BLE 则无握手） | P0 |
-| FR-8b | ~~BLE GATT 数据通道~~ **取消**：caBLE v2 / hybrid 无此传输，规范中唯一的 BLE GATT 是旧 U2F/CTAP1 传输（service 0xFFFD），手机不提供也不使用。见 docs/gatt-data-channel.md | — |
+| FR-8b | **BLE 数据通道**：规范中的 FIDO GATT service（`0xFFFD`，§11.4）可承载 CTAP2，但 iOS/Android 平台 passkey 不提供；CTAP 2.3 另给 hybrid 加了走 L2CAP CoC 的 BLE 数据通道，作为摆脱隧道服务器的候选待评估。见 docs/gatt-data-channel.md | — |
 | FR-9 | per-RP / 全局策略配置（何时走手机流程） | P2 |
 
 ### 2.2 非功能需求
@@ -60,7 +60,8 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 
 - **caBLE v2 (Cloud Assisted BLE)**：FIDO CTAP 2.2 §11.5 定义的跨设备传输；桌面端
 显示 QR（内含 ephemeral 公钥、QR secret、隧道服务器域名），手机扫码后经
-隧道服务器 WSS 与桌面端交换 CTAP2，可选切换到 BLE。
+隧道服务器 WSS 与桌面端交换 CTAP2。CTAP 2.3 起数据通道除 WSS 外还可选 BLE
+（L2CAP CoC），但我们只实现 WSS。
 - **U2FHID / CTAP-HID**：FIDO2 设备 over USB-HID 的帧协议（INIT/CONT 分片，
 最大 payload 7609 字节 @ 64 字节 report）。
 - **CTAP2**：authenticator 协议（CBOR 命令：MakeCredential 0x01、GetAssertion
@@ -218,7 +219,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
 | QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
 | UI | system daemon + 每用户 session agent `ucable-agent`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucable-agent-helper`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
-| BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；无 GATT 数据通道（见 docs/gatt-data-channel.md） |
+| BLE | `bluer`(feature `bluetoothd`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；无 GATT 数据通道，hybrid 的 BLE 数据通道为 L2CAP（CTAP 2.3），桌面侧未实现（见 docs/gatt-data-channel.md） |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
 700–1000 行；CTAP2 分发 200–400 行；caBLE initiator 完整化 1000–1500 行；
@@ -280,7 +281,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 
 ### M5 — 增强（可选）
 
-- [x] ~~FR-8b：BLE GATT 数据通道~~ **取消**（协议中不存在，手机不提供；见 docs/gatt-data-channel.md）
+- [ ] FR-8b：BLE 数据通道——§11.4 的 GATT（手机不提供）确认放弃；CTAP 2.3 的 hybrid L2CAP 通道待评估（见 docs/gatt-data-channel.md）
 - [ ] ~~FR-7：state-assisted "remember this phone"~~ **搁置**（2026-09-29 真机验证：iOS 不支持 linking；无 Android 设备复测）——设计见 docs/linking.md
 - [ ] FR-9：per-RP 策略
 - [ ] extensions 静态列表按真机实测结果扩充
@@ -290,7 +291,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 1. ~~隧道-only 是否被手机接受~~——**已解决**：spec 考证确认 BLE advert 是
 QR 流程的协议必需项（PSK 绑定解密后的 advert，proximity proof），
 隧道-only 在密码学上不可能。方案已调整为 BLE 扫描（FR-8a，仅接收、
-无需 GATT）+ 隧道传 CTAP；S0 真机验收已通过。
+无需数据通道）+ 隧道传 CTAP；S0 真机验收已通过。
 2. ~~Firefox 多 FIDO 设备枚举行为~~——**已解决**：实测确认 Firefox 只能靠
    触摸选择，故用"Use phone"窗口选中虚拟设备（见 §5.3）；无需 daemon 开关。
 3. getInfo extensions 静态广告与真机能力偏差——表现为个别 RP 报
@@ -331,7 +332,8 @@ INVALID_OPTION，可接受、可迭代。
 
 ## 9. 参考
 
-- FIDO CTAP 2.2 spec §11.5（Hybrid transports / caBLE v2）
+- FIDO CTAP 2.3 spec §11.4（BLE GATT 传输）与 §11.5（Hybrid transports /
+caBLE v2，含 §11.5.1.1.2 BLE L2CAP 数据通道）；CTAP 2.2 §11.5 作交叉校验
 - Chromium `device/fido/cable`（实现对齐的第一参考源：`qr_generator.cc`、
 `tunnel_server_client`、v2 handshake）
 - 虚拟设备先例：token2-fido-bridge、tpm-fido、virtual-fido、soft-fido2(passless)
