@@ -233,7 +233,30 @@ async fn route_messages(
     }
 }
 
+/// Locate the UI helper executable.
+///
+/// `UCABLED_HELPER` overrides the bundled helper. If it is an absolute
+/// path, it is used only when it exists; a missing path logs a warning and
+/// falls through. A bare name is returned as-is so `Command` resolves it via
+/// `PATH`. Without the variable, the default is the `ucable-agent-helper`
+/// sibling of the agent binary.
 fn helper_path() -> Option<std::path::PathBuf> {
+    if let Some(value) = std::env::var_os("UCABLED_HELPER") {
+        let path = std::path::PathBuf::from(value);
+        if path.as_os_str().is_empty() {
+            tracing::warn!("UCABLED_HELPER is empty; using the bundled helper");
+        } else if path.is_absolute() {
+            if path.exists() {
+                return Some(path);
+            }
+            tracing::warn!(
+                "UCABLED_HELPER={} does not exist; using the bundled helper",
+                path.display()
+            );
+        } else {
+            return Some(path);
+        }
+    }
     let sibling = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("ucable-agent-helper")))?;
