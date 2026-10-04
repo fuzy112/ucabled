@@ -474,12 +474,6 @@ impl eframe::App for QrWindow {
                                     .size(15.0)
                                     .color(pal.text),
                             );
-                            ui.add_space(3.0);
-                            ui.label(
-                                RichText::new("iCloud Keychain or Google Password Manager")
-                                    .size(12.0)
-                                    .color(pal.muted),
-                            );
                             ui.add_space(10.0);
                             countdown_bar(ui, &pal, fraction);
                         }
@@ -517,23 +511,136 @@ fn fraction_remaining(remaining: Duration, timeout: Duration) -> f32 {
     }
 }
 
-/// Build the crisp QR texture plus a heavily downscaled copy. The downscaled
+/// Pixels per QR module in the rendered texture. The texture is drawn scaled
+/// down into the card, so a handful of pixels per module stay crisp.
+const QR_MODULE_PX: usize = 10;
+/// Quiet zone around the code, in modules.
+const QR_QUIET_MODULES: f32 = 4.0;
+/// Anti-aliasing samples per axis.
+const QR_AA: usize = 4;
+/// When a centre image is drawn, force at least this version so the icon does
+/// not eat enough of the error-correction budget to break decoding.
+const QR_MIN_VERSION: i16 = 5;
+/// Side of the centre image, in modules.
+const QR_CENTER_MODULES: usize = 10;
+/// The passkey icon as an 8-bit grayscale mask (0 = ink, 255 = paper), 100×100
+/// px — one byte per module pixel for the `QR_CENTER_MODULES` patch at
+/// `QR_MODULE_PX`. Regenerate with `rsvg-convert -w 100 -h 100 -b white
+/// passkey.svg` piped through `ffmpeg -pix_fmt gray`.
+const PASSKEY_ICON: &[u8; 100 * 100] = include_bytes!("resources/passkey.gray");
+
+/// Build the QR code with error-correction level M and at least version 5.
+fn make_qr_code(url: &str) -> qrcode::QrCode {
+    for v in QR_MIN_VERSION..=40 {
+        if let Ok(code) =
+            qrcode::QrCode::with_version(url.as_bytes(), qrcode::Version::Normal(v), qrcode::EcLevel::M)
+        {
+            return code;
+        }
+    }
+    qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::M)
+        .expect("QR contents too long")
+}
+
+/// Is (px, py) inside the rounded rectangle at (x0, y0), size w×h, radius r?
+fn in_round_rect(x0: f32, y0: f32, w: f32, h: f32, r: f32, px: f32, py: f32) -> bool {
+    let dx = (px - (x0 + w / 2.0)).abs() - (w / 2.0 - r);
+    let dy = (py - (y0 + h / 2.0)).abs() - (h / 2.0 - r);
+    dx.max(0.0) * dx.max(0.0) + dy.max(0.0) * dy.max(0.0) <= r * r
+}
+
+/// Offset of module (x, y) inside the 7×7 finder pattern it belongs to, if any.
+fn locator_local(n: usize, x: usize, y: usize) -> Option<(f32, f32)> {
+    const S: usize = 7;
+    if x < S && y < S {
+        Some((x as f32, y as f32))
+    } else if x >= n - S && y < S {
+        Some(((x - (n - S)) as f32, y as f32))
+    } else if x < S && y >= n - S {
+        Some((x as f32, (y - (n - S)) as f32))
+    } else {
+        None
+    }
+}
+
+/// Whether (mx, my) — module coordinates with the quiet zone stripped — is dark
+/// in this rendering: round data modules and rounded finder patterns.
+fn qr_module_dark(code: &qrcode::QrCode, n: usize, mx: f32, my: f32) -> bool {
+    if mx < 0.0 || my < 0.0 || mx >= n as f32 || my >= n as f32 {
+        return false;
+    }
+    let (x, y) = (mx as usize, my as usize);
+    let (fx, fy) = (mx - x as f32, my - y as f32);
+
+    if let Some((lx, ly)) = locator_local(n, x, y) {
+        // Three nested rounded rectangles: 7×7 ring, 5×5 gap, 3×3 core, all
+        // with a corner radius of one module.
+        let (px, py) = (lx + fx, ly + fy);
+        if in_round_rect(2.0, 2.0, 3.0, 3.0, 1.0, px, py) {
+            return true;
+        }
+        if in_round_rect(1.0, 1.0, 5.0, 5.0, 1.0, px, py) {
+            return false;
+        }
+        return in_round_rect(0.0, 0.0, 7.0, 7.0, 1.0, px, py);
+    }
+
+    if code[(x, y)] == qrcode::types::Color::Dark {
+        // Round dot, radius = module/2 − 1 px.
+        let r = 0.5 - 1.0 / QR_MODULE_PX as f32;
+        let (dx, dy) = (fx - 0.5, fy - 0.5);
+        return dx * dx + dy * dy <= r * r;
+    }
+    false
+}
+
+/// Stamp the passkey icon onto a cleared patch in the centre of the code. The
+/// patch is a whole number of modules, so it snaps to the module grid.
+fn draw_center_icon(img: &mut egui::ColorImage, n: usize) {
+    const IW: usize = 100;
+    const IH: usize = 100;
+    let box_px = QR_CENTER_MODULES * QR_MODULE_PX;
+    let origin = (n - QR_CENTER_MODULES) / 2 + QR_QUIET_MODULES as usize;
+    let (px0, py0) = (origin * QR_MODULE_PX, origin * QR_MODULE_PX);
+    for iy in 0..box_px {
+        for ix in 0..box_px {
+            let ink = PASSKEY_ICON[(iy * IH / box_px) * IW + ix * IW / box_px];
+            img[(px0 + ix, py0 + iy)] = egui::Color32::from_gray(ink);
+        }
+    }
+}
+
+/// Build the crisp QR texture plus a heavily downscaled copy. The crisp one is
+/// drawn with round modules and rounded finders; the downscaled
 /// copy is drawn scaled back up with linear filtering, which smears the module
 /// pattern beyond recognition while still reading as "the code".
 fn make_qr_textures(ctx: &egui::Context, url: &str) -> (egui::TextureHandle, egui::TextureHandle) {
-    let code = qrcode::QrCode::new(url.as_bytes()).expect("invalid QR contents");
-    let qr_width = code.width();
-    let border = 4;
-    let size = qr_width + border * 2;
-    let mut img = egui::ColorImage::new([size, size], vec![egui::Color32::WHITE; size * size]);
-    for y in 0..qr_width {
-        for x in 0..qr_width {
-            if code[(x, y)] == qrcode::types::Color::Dark {
-                img[(x + border, y + border)] = egui::Color32::BLACK;
+    let code = make_qr_code(url);
+    let n = code.width();
+    let size = n + QR_QUIET_MODULES as usize * 2;
+    let dim = size * QR_MODULE_PX;
+
+    let mut img = egui::ColorImage::new([dim, dim], vec![egui::Color32::WHITE; dim * dim]);
+    let samples = (QR_AA * QR_AA) as u32;
+    for py in 0..dim {
+        for px in 0..dim {
+            let mut light = 0u32;
+            for sy in 0..QR_AA {
+                for sx in 0..QR_AA {
+                    let mx = (px as f32 + (sx as f32 + 0.5) / QR_AA as f32) / QR_MODULE_PX as f32
+                        - QR_QUIET_MODULES;
+                    let my = (py as f32 + (sy as f32 + 0.5) / QR_AA as f32) / QR_MODULE_PX as f32
+                        - QR_QUIET_MODULES;
+                    if !qr_module_dark(&code, n, mx, my) {
+                        light += 255;
+                    }
+                }
             }
+            img[(px, py)] = egui::Color32::from_gray((light / samples) as u8);
         }
     }
-    let crisp = ctx.load_texture("qr", img.clone(), egui::TextureOptions::NEAREST);
+    draw_center_icon(&mut img, n);
+    let crisp = ctx.load_texture("qr", img.clone(), egui::TextureOptions::LINEAR);
 
     // Averaging the image down to a handful of pixels destroys the module
     // pattern; upscaling that with linear filtering blurs it out.
