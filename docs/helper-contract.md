@@ -40,6 +40,9 @@ agent 按以下顺序解析 helper 可执行文件：
 找不到 helper 时，agent 不弹窗：QR 模式直接放弃该事务，select 模式按
 "放弃、保留实体密钥"作答，两者各记一条 `tracing::warn!`。
 
+NixOS 模块暴露 `services.ucabled.helper`，其值会作为 `UCABLED_HELPER` 注入每
+用户会话 agent 的环境，从而在系统配置里指定替代 helper。
+
 ## 3. 模式与 argv
 
 helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 两种

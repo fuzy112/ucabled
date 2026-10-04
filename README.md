@@ -63,6 +63,9 @@ Add this repository to your flake and enable the module:
   # in your NixOS module:
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
+
+  # optional: use an alternate UI helper
+  services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
 }
 ```
 
