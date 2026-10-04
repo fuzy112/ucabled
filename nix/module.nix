@@ -9,6 +9,17 @@
 let
   cfg = config.services.ucabled;
 
+  # The session agent looks up its UI helper through UCABLED_HELPER: an
+  # absolute path (used only if it exists) or a bare command name resolved
+  # via PATH. A package is reduced to its main program.
+  helperEnv =
+    if cfg.helper == null then
+      null
+    else if lib.isDerivation cfg.helper then
+      lib.getExe cfg.helper
+    else
+      toString cfg.helper;
+
   # D-Bus system policy: the daemon owns org.ucabled and may call the session
   # agent back (to a unique name); local users may call the daemon.
   dbusPolicy = pkgs.writeTextDir "share/dbus-1/system.d/org.ucabled.conf" ''
@@ -59,6 +70,20 @@ in
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.ucabled;
       defaultText = lib.literalExpression "ucabled.packages.\${pkgs.stdenv.hostPlatform.system}.ucabled";
       description = "The ucabled package to use.";
+    };
+
+    helper = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.either lib.types.package (lib.types.either lib.types.path lib.types.str)
+      );
+      default = null;
+      example = "\${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+      description = ''
+        UI helper the per-user session agent spawns to show prompts. May be a
+        package (its main program is exported), a path, or a bare command name
+        resolved through the agent's `PATH`. When `null`, the agent uses the
+        bundled `ucable-agent-helper` binary next to its own executable.
+      '';
     };
   };
 
@@ -165,6 +190,7 @@ in
         NoNewPrivileges = true;
         LimitCORE = 0;
         MemorySwapMax = 0;
+        Environment = lib.mkIf (helperEnv != null) [ "UCABLED_HELPER=${helperEnv}" ];
       };
     };
   };
