@@ -66,6 +66,12 @@ Add this repository to your flake and enable the module:
 
   # optional: use an alternate UI helper
   services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+
+  # optional: extra helper arguments. The GTK4 helper of this flake takes
+  # --layer-shell, presenting the prompt as a wlr-layer-shell overlay on
+  # wlroots compositors such as Sway or Hyprland:
+  # services.ucabled.helper = "${inputs.ucabled.packages.${pkgs.system}.ucabled}/bin/ucable-agent-helper-gtk";
+  # services.ucabled.helperExtraArgs = [ "--layer-shell" ];
 }
 ```
 
@@ -148,6 +154,26 @@ the window or click Cancel to abort.
   `--no-ui` prints the QR code on a controlling terminal instead.
 - Cancel/timeout/disconnect are mapped back to Firefox as the proper CTAP
   error codes.
+
+### UI helpers
+
+`ucable-agent` draws nothing itself: for each prompt it spawns a helper
+executable and speaks to it over argv, stdin and the exit status (see
+`docs/helper-contract.md`). Two helpers ship with the project:
+
+- `ucable-agent-helper` — the bundled default, written in Rust with egui. It is
+  self-contained: no system GUI toolkit beyond Wayland/Vulkan.
+- `ucable-agent-helper-gtk` — an optional native GTK4 helper. Build it with
+  `--features helper-gtk`; add `helper-gtk-layer-shell` (a wlr-layer-shell
+  overlay on wlroots compositors such as Sway), `helper-gtk-adwaita`
+  (GNOME-native window chrome) and `helper-gtk-i18n` (localized strings) as
+  wanted. As a normal window it carries a header bar with a close button; as a
+  layer surface it draws no chrome at all — the compositor places the bare card
+  (rounded, like GTK's own decorations) and Esc (or the agent) dismisses it.
+
+Pick one with `UCABLED_HELPER` (an absolute path or a bare command name), or
+with `services.ucabled.helper` on NixOS; extra helper flags go in
+`services.ucabled.helperExtraArgs` (for example `[ "--layer-shell" ]`).
 
 ### SSH security keys
 
@@ -253,6 +279,10 @@ cargo clippy --all-targets
 nix build .#ucabled
 nix flake check
 ```
+
+The optional GTK4 helper is built with its features enabled, e.g.
+`cargo build --features helper-gtk,helper-gtk-layer-shell,helper-gtk-i18n`
+(the Nix package enables exactly those three).
 
 Helper tools in the repo (not shipped in the package):
 
