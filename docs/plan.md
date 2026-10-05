@@ -25,7 +25,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | --- | --- | --- |
 | FR-1 | 向浏览器呈现符合 U2FHID/CTAP2 规范的虚拟 FIDO2 设备（via `/dev/uhid`），Firefox 零改动识别为安全密钥 | P0 |
 | FR-2 | `authenticatorMakeCredential` / `authenticatorGetAssertion` 经 caBLE v2 中继至手机；本机不做 FIDO 加密学、不存储密钥 | P0 |
-| FR-3 | QR 码展示：MVP 终端 Unicode 方块码，正式版 egui 浮窗（RP 域名 + 取消按钮） | P0 / P1 |
+| FR-3 | QR 码展示：MVP 终端 Unicode 方块码，正式版 GTK4 浮窗（RP 域名 + 取消按钮） | P0 / P1 |
 | FR-4 | 长操作期间发送 KEEPALIVE（STATUS_UPNEEDED）；正确处理 CANCEL、超时、断连，错误码正确映射回 Firefox | P0 |
 | FR-5 | getInfo 能力协商：`versions: ["FIDO_2_0"]`，`options: {rk, up, uv}`，`clientPin: false`，`maxMsgSize: 7609`，`transports: ["hybrid"]`，不广告 U2F_V2 | P0 |
 | FR-6 | 支持 iPhone（iCloud Keychain）与 Android（Google Password Manager）扫码；手机端零安装 | P0 |
@@ -217,8 +217,8 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
 | caBLE v2 | 手写 | 逐函数对齐 Chromium `device/fido/cable`；无成熟独立移植，边界清晰 |
 | 隧道 | `tokio-tungstenite` + `rustls` | WSS |
 | 加密 | `p256`(ECDH) + `hkdf` + `sha2` + `hmac` + `aes` + `aes-gcm` | caBLE v2 握手（Noise P-256）与消息加密 |
-| QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / egui 窗口 |
-| UI | system daemon + 每用户 session agent `ucable-agent`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucable-agent-helper`（egui 无边框置顶窗；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
+| QR | `qrcode` | payload 按十进制数字串编码（numeric mode），终端 Unicode 方块码 / GTK4 窗口 |
+| UI | system daemon + 每用户 session agent `ucable-agent`（system D-Bus `org.ucabled`，polkit 授权注册）；窗口仍是 per-transaction 子进程 `ucable-agent-helper`（原生 GTK4 窗口；缺失或 `--no-ui` 时回落终端 QR） | RP 域名（窗口标题） + QR + 取消（关窗） |
 | BLE | `bluer`(feature `bluetoothd`, 可选 `l2cap`) | BlueZ discovery 扫描手机 EID advert（FR-8a，协议必需）；无 GATT 数据通道；hybrid 的 BLE 数据通道（CTAP 2.3 L2CAP CoC）为实验特性（见 docs/gatt-data-channel.md、docs/l2cap-channel.md） |
 
 代码量预估：spike（QR + 隧道握手 + 假 CBOR 往返）500–800 行；传输层
@@ -272,7 +272,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 
 ### M4 — UX 打磨（验收：日常使用可接受）
 
-- [x] QR 浮窗：RP 域名、QR、取消（egui/wgpu 无边框置顶窗，per-transaction
+- [x] QR 浮窗：RP 域名、QR、取消（原生 GTK4 窗口，per-transaction
       子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
 - [x] 与真实硬件密钥共存实测（多设备时弹出"Use phone"选择窗口，见 §5.3）
@@ -301,7 +301,7 @@ INVALID_OPTION，可接受、可迭代。
 ## 8. NixOS 配置
 
 仓库自带 flake：包 `ucabled`（rustPlatform.buildRustPackage，发布
-`ucabled` + `ucable-agent` + `ucable-agent-helper`，QR helper 包装了 Vulkan/Wayland
+`ucabled` + `ucable-agent` + `ucable-agent-helper`，QR helper 包装了 GTK4
 运行时库路径），NixOS module `nixosModules.ucabled`，devShell。
 
 运行模型见 `docs/system-service.md`：daemon 是 system service（专用

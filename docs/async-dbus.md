@@ -47,7 +47,7 @@ dbus-tokio（连接 #4），即同一进程里 libdbus 连接有四条、专用�
 非目标：
 
 - 不换 zbus（进程内会有 libdbus + zbus 两套 D-Bus 栈，见 §6）。
-- 不动 uhid / BLE / 隧道 / relay / session 逻辑；不动 eframe helper。
+- 不动 uhid / BLE / 隧道 / relay / session 逻辑；不动 GTK helper。
 - 不改变并发语义：UI 命令仍串行分发，agent 仍单实例注册。
 
 ## 3. 方案（daemon 侧）
