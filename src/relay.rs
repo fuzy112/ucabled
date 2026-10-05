@@ -38,7 +38,7 @@ fn ble_channel_enabled() -> bool {
 /// command and return the phone's CTAP response payload (status byte + CBOR).
 ///
 /// `on_qr` is invoked with the QR contents once; the caller decides how to
-/// present it (terminal, egui window, ...). `on_advert` is invoked when the
+/// present it (terminal, GTK window, ...). `on_advert` is invoked when the
 /// phone's BLE advert has been received, so the UI can stop waiting.
 pub async fn run_qr_transaction(
     ctap_command: &[u8],

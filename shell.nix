@@ -9,23 +9,23 @@ pkgs.mkShell {
     gcc
     pkg-config
     dbus
-    # GTK4 helper (helper-gtk*) build dependencies.
+    # GTK4 helper build dependencies.
     gtk4
     libadwaita
     gtk4-layer-shell
     gettext
   ];
 
-  # egui/eframe runtime libs (winit Wayland + wgpu/Vulkan). The NixOS hardware
-  # drivers (Vulkan ICDs) live in /run/opengl-driver.
+  # Runtime libraries for the GTK4 helper. GDK needs its toolkit libs and, on
+  # NixOS, the GPU drivers live in /run/opengl-driver.
   LD_LIBRARY_PATH =
     "/run/opengl-driver/lib:"
     + pkgs.lib.makeLibraryPath (
       with pkgs;
       [
-        wayland
-        libxkbcommon
-        vulkan-loader
+        gtk4
+        libadwaita
+        gtk4-layer-shell
       ]
     );
 }

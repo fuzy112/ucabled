@@ -10,16 +10,9 @@ ble = ["dep:bluer"]
 # CTAP 2.3 optional BLE data channel (L2CAP CoC). Experimental: the wire
 # framing is not yet verified against real phones, so it is off by default.
 l2cap = ["ble", "bluer/l2cap"]
-# Native GTK4 UI helper (src/bin/ucable-agent-helper-gtk.rs). The egui helper
-# stays the default; this one is opt-in.
-helper-gtk = ["dep:gtk"]
 # GNOME-native window chrome via libadwaita. Optional: without it the helper
 # uses plain GTK4 and stays desktop-neutral.
-helper-gtk-adwaita = ["helper-gtk", "dep:adw"]
-# Present the window as a wlr-layer-shell overlay on wlroots compositors.
-helper-gtk-layer-shell = ["helper-gtk", "dep:gtk4-layer-shell"]
-# gettext catalogs for the GTK4 helper's UI strings.
-helper-gtk-i18n = ["helper-gtk", "dep:gettext-rs"]
+adwaita = ["dep:adw"]
 
 [dependencies]
 anyhow = "1"
@@ -45,11 +38,6 @@ rustls = { version = "0.23", default-features = false, features = [
   "std",
 ] }
 qrcode = { version = "0.14", default-features = false }
-eframe = { version = "0.36", default-features = false, features = [
-  "default_fonts",
-  "wgpu",
-  "wayland",
-] }
 
 bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
 dbus = "0.9"
@@ -57,20 +45,13 @@ dbus-crossroads = "0.5"
 dbus-tokio = "0.7"
 libc = "0.2"
 
-# GTK4 helper (all optional; enabled through the helper-gtk* features).
-# The gtk4 crate's library is called `gtk4` and libadwaita's is `libadwaita`,
-# so rename them to the conventional `gtk` / `adw` import names.
-gtk = { package = "gtk4", version = "0.11", optional = true }
-# adw::ToolbarView (the GNOME window chrome) needs libadwaita >= 1.4.
-adw = { package = "libadwaita", version = "0.9", optional = true, features = ["v1_4"] }
-gtk4-layer-shell = { version = "0.8", optional = true }
-gettext-rs = { version = "0.8", optional = true }
+# GTK4 UI helper. The gtk4 crate's library is called `gtk4` and libadwaita's is
+# `libadwaita`, so rename them to the conventional `gtk` / `adw` import names.
+gtk = { package = "gtk4", version = "0.11" }
+# GNOME-native window chrome; enabled through the `adwaita` feature.
+adw = { package = "libadwaita", version = "0.9", optional = true }
+gtk4-layer-shell = "0.8"
+gettext-rs = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-
-# The GTK4 helper is a second UI backend, not part of the default build.
-[[bin]]
-name = "ucable-agent-helper-gtk"
-path = "src/bin/ucable-agent-helper-gtk.rs"
-required-features = ["helper-gtk"]

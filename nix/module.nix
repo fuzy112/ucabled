@@ -94,13 +94,13 @@ in
         lib.types.either lib.types.package (lib.types.either lib.types.path lib.types.str)
       );
       default = null;
-      example = "\${pkgs.ucabled}/bin/ucable-agent-helper-gtk";
+      example = "\${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
       description = ''
         UI helper the per-user session agent spawns to show prompts. May be a
         package (its main program is exported), a path, or a bare command name
         resolved through the agent's `PATH`. When `null`, the agent uses the
-        bundled `ucable-agent-helper` binary next to its own executable; the
-        package also ships `ucable-agent-helper-gtk`, a native GTK4 helper.
+        bundled `ucable-agent-helper` binary next to its own executable; that
+        is a native GTK4 helper.
       '';
     };
 
