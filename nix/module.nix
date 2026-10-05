@@ -12,13 +12,30 @@ let
   # The session agent looks up its UI helper through UCABLED_HELPER: an
   # absolute path (used only if it exists) or a bare command name resolved
   # via PATH. A package is reduced to its main program.
-  helperEnv =
+  helperExe =
     if cfg.helper == null then
-      null
+      # Only reached when extra arguments force an explicit path; without them
+      # the agent finds the helper bundled next to its own executable.
+      "${cfg.package}/bin/ucable-agent-helper"
     else if lib.isDerivation cfg.helper then
       lib.getExe cfg.helper
     else
       toString cfg.helper;
+
+  # The agent passes arguments of its own (the relying party, --timeout and
+  # --select), so extra helper arguments need a launcher in front of it. The
+  # agent's arguments come last and win where the two overlap.
+  helperLauncher = pkgs.writeShellScript "ucable-agent-helper-launcher" ''
+    exec ${helperExe} ${lib.escapeShellArgs cfg.helperExtraArgs} "$@"
+  '';
+
+  helperEnv =
+    if cfg.helperExtraArgs != [ ] then
+      "${helperLauncher}"
+    else if cfg.helper == null then
+      null
+    else
+      helperExe;
 
   # D-Bus system policy: the daemon owns org.ucabled and may call the session
   # agent back (to a unique name); local users may call the daemon.
@@ -77,12 +94,30 @@ in
         lib.types.either lib.types.package (lib.types.either lib.types.path lib.types.str)
       );
       default = null;
-      example = "\${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+      example = "\${pkgs.ucabled}/bin/ucable-agent-helper-gtk";
       description = ''
         UI helper the per-user session agent spawns to show prompts. May be a
         package (its main program is exported), a path, or a bare command name
         resolved through the agent's `PATH`. When `null`, the agent uses the
-        bundled `ucable-agent-helper` binary next to its own executable.
+        bundled `ucable-agent-helper` binary next to its own executable; the
+        package also ships `ucable-agent-helper-gtk`, a native GTK4 helper.
+      '';
+    };
+
+    helperExtraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "--layer-shell" ];
+      description = ''
+        Extra arguments to start the UI helper with. They are helper-specific:
+        the agent adds its own arguments on top (the relying party,
+        `--timeout`, `--select`), which win where the two overlap.
+
+        Use this for flags the agent does not know about — for example
+        `--layer-shell`, which makes the GTK4 helper a wlr-layer-shell overlay
+        on wlroots compositors such as Sway or Hyprland. Helpers that do not
+        understand an argument may misread it, so only list flags your helper
+        actually takes.
       '';
     };
   };

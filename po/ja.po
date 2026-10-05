@@ -1,0 +1,41 @@
+# Japanese translation for ucable-agent-helper-gtk.
+msgid ""
+msgstr ""
+"Project-Id-Version: ucable-agent-helper-gtk 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-03 00:00+0800\n"
+"PO-Revision-Date: 2026-10-03 00:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: Japanese\n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Scan with your phone"
+msgstr "スマートフォンでスキャン"
+
+msgid "Phone detected"
+msgstr "スマートフォンを検出しました"
+
+msgid "Confirm the sign-in on your phone"
+msgstr "スマートフォンでサインインを確認してください"
+
+msgid "Code expired"
+msgstr "コードの有効期限が切れました"
+
+msgid "Close this window and start again."
+msgstr "このウィンドウを閉じて、もう一度やり直してください。"
+
+msgid "Passkey request"
+msgstr "パスキーのリクエスト"
+
+msgid "A security key is also connected. Use your phone's passkey instead?"
+msgstr "セキュリティキーも接続されています。代わりにスマートフォンのパスキーを使いますか？"
+
+msgid "Keep using the security key"
+msgstr "セキュリティキーを使い続ける"
+
+msgid "Use phone"
+msgstr "スマートフォンを使用"

@@ -9,6 +9,11 @@ pkgs.mkShell {
     gcc
     pkg-config
     dbus
+    # GTK4 helper (helper-gtk*) build dependencies.
+    gtk4
+    libadwaita
+    gtk4-layer-shell
+    gettext
   ];
 
   # egui/eframe runtime libs (winit Wayland + wgpu/Vulkan). The NixOS hardware

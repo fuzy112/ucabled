@@ -1,0 +1,41 @@
+# Korean translation for ucable-agent-helper-gtk.
+msgid ""
+msgstr ""
+"Project-Id-Version: ucable-agent-helper-gtk 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-03 00:00+0800\n"
+"PO-Revision-Date: 2026-10-03 00:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: Korean\n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Scan with your phone"
+msgstr "휴대폰으로 스캔하세요"
+
+msgid "Phone detected"
+msgstr "휴대폰 감지됨"
+
+msgid "Confirm the sign-in on your phone"
+msgstr "휴대폰에서 로그인을 확인하세요"
+
+msgid "Code expired"
+msgstr "코드가 만료되었습니다"
+
+msgid "Close this window and start again."
+msgstr "이 창을 닫고 다시 시작하세요."
+
+msgid "Passkey request"
+msgstr "패스키 요청"
+
+msgid "A security key is also connected. Use your phone's passkey instead?"
+msgstr "보안 키도 연결되어 있습니다. 대신 휴대폰의 패스키를 사용하시겠습니까?"
+
+msgid "Keep using the security key"
+msgstr "보안 키 계속 사용"
+
+msgid "Use phone"
+msgstr "휴대폰 사용"

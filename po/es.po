@@ -1,0 +1,41 @@
+# Spanish translation for ucable-agent-helper-gtk.
+msgid ""
+msgstr ""
+"Project-Id-Version: ucable-agent-helper-gtk 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-03 00:00+0800\n"
+"PO-Revision-Date: 2026-10-03 00:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: Spanish\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Scan with your phone"
+msgstr "Escanea con tu teléfono"
+
+msgid "Phone detected"
+msgstr "Teléfono detectado"
+
+msgid "Confirm the sign-in on your phone"
+msgstr "Confirma el inicio de sesión en tu teléfono"
+
+msgid "Code expired"
+msgstr "Código caducado"
+
+msgid "Close this window and start again."
+msgstr "Cierra esta ventana y vuelve a empezar."
+
+msgid "Passkey request"
+msgstr "Solicitud de clave de acceso"
+
+msgid "A security key is also connected. Use your phone's passkey instead?"
+msgstr "También hay una clave de seguridad conectada. ¿Usar la clave de acceso de tu teléfono en su lugar?"
+
+msgid "Keep using the security key"
+msgstr "Seguir usando la clave de seguridad"
+
+msgid "Use phone"
+msgstr "Usar el teléfono"
