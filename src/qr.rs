@@ -165,122 +165,24 @@ pub fn parse_qr_url(url: &str) -> Option<ParsedQr> {
 }
 
 fn parse_qr_cbor(data: &[u8]) -> Option<ParsedQr> {
-    let mut pos = 0usize;
-    let read_u8 = |pos: &mut usize| -> Option<u8> {
-        let b = *data.get(*pos)?;
-        *pos += 1;
-        Some(b)
-    };
-    let read_bytes = |pos: &mut usize, n: usize| -> Option<&[u8]> {
-        let s = data.get(*pos..*pos + n)?;
-        *pos += n;
-        Some(s)
-    };
-    let read_len = |pos: &mut usize, info: u8| -> Option<usize> {
-        match info {
-            0..=cbor::ARG_INLINE_MAX => Some(info as usize),
-            cbor::ARG_U8 => Some(read_u8(pos)? as usize),
-            cbor::ARG_U16 => {
-                let b = read_bytes(pos, 2)?;
-                Some(u16::from_be_bytes([b[0], b[1]]) as usize)
-            }
-            cbor::ARG_U32 => {
-                let b = read_bytes(pos, 4)?;
-                Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
-            }
-            _ => None,
-        }
-    };
-    let read_uint = |pos: &mut usize, info: u8| -> Option<u64> {
-        match info {
-            0..=cbor::ARG_INLINE_MAX => Some(info as u64),
-            cbor::ARG_U8 => Some(read_u8(pos)? as u64),
-            cbor::ARG_U16 => {
-                let b = read_bytes(pos, 2)?;
-                Some(u16::from_be_bytes([b[0], b[1]]) as u64)
-            }
-            cbor::ARG_U32 => {
-                let b = read_bytes(pos, 4)?;
-                Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64)
-            }
-            cbor::ARG_U64 => {
-                let b = read_bytes(pos, 8)?;
-                Some(u64::from_be_bytes([
-                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                ]))
-            }
-            _ => None,
-        }
-    };
-
-    let header = read_u8(&mut pos)?;
-    if header >> 5 != cbor::MAJOR_MAP {
-        return None;
-    }
-    let pairs = (header & cbor::ARG_MASK) as usize;
+    let mut d = cbor::Decoder::new(data);
+    let pairs = d.map_header()?;
 
     let mut public_key: Option<[u8; COMPRESSED_PUBLIC_KEY_SIZE]> = None;
     let mut secret: Option<[u8; QR_SECRET_SIZE]> = None;
 
     for _ in 0..pairs {
-        let key_header = read_u8(&mut pos)?;
-        let key = read_uint(&mut pos, key_header & cbor::ARG_MASK)?;
-        let value_header = read_u8(&mut pos)?;
-        let major = value_header >> 5;
-        let info = value_header & cbor::ARG_MASK;
-        match major {
-            cbor::MAJOR_UINT | cbor::MAJOR_NEGINT => {
-                read_uint(&mut pos, info)?;
+        let key = d.uint()?;
+        match key {
+            k if k == QR_KEY_PUBLIC_KEY as u64 => {
+                public_key = Some(d.bytes()?.try_into().ok()?);
             }
-            cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
-                let len = read_len(&mut pos, info)?;
-                let bytes = read_bytes(&mut pos, len)?;
-                if major == cbor::MAJOR_BYTES
-                    && key == QR_KEY_PUBLIC_KEY as u64
-                    && len == COMPRESSED_PUBLIC_KEY_SIZE
-                {
-                    public_key = Some(bytes.try_into().ok()?);
-                }
-                if major == cbor::MAJOR_BYTES
-                    && key == QR_KEY_SECRET as u64
-                    && len == QR_SECRET_SIZE
-                {
-                    secret = Some(bytes.try_into().ok()?);
-                }
+            k if k == QR_KEY_SECRET as u64 => {
+                secret = Some(d.bytes()?.try_into().ok()?);
             }
-            cbor::MAJOR_SIMPLE => {
-                if (cbor::ARG_U8..=cbor::ARG_U64).contains(&info) {
-                    let skip = 1usize << (info - cbor::ARG_U8);
-                    read_bytes(&mut pos, skip)?;
-                }
-            }
-            cbor::MAJOR_ARRAY => {
-                // QR key 6 is a list of transport-channel integers, but skip
-                // any array element generically so unknown keys cannot break
-                // parsing of keys 0 and 1.
-                let len = read_len(&mut pos, info)?;
-                for _ in 0..len {
-                    let h = read_u8(&mut pos)?;
-                    let emajor = h >> 5;
-                    let einfo = h & cbor::ARG_MASK;
-                    match emajor {
-                        cbor::MAJOR_UINT | cbor::MAJOR_NEGINT => {
-                            read_uint(&mut pos, einfo)?;
-                        }
-                        cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
-                            let n = read_len(&mut pos, einfo)?;
-                            read_bytes(&mut pos, n)?;
-                        }
-                        cbor::MAJOR_SIMPLE => {
-                            if (cbor::ARG_U8..=cbor::ARG_U64).contains(&einfo) {
-                                read_bytes(&mut pos, 1usize << (einfo - cbor::ARG_U8))?;
-                            }
-                        }
-                        _ => return None,
-                    }
-                }
-            }
-            _ => return None,
+            // Unknown keys are skipped generically (the spec requires ignoring
+            // them); the shared decoder bounds any nesting they contain.
+            _ => d.skip_value()?,
         }
     }
 

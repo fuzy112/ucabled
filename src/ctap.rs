@@ -143,10 +143,7 @@ pub fn mock_getinfo_response() -> Vec<u8> {
 /// Returns None on any parse irregularity; callers must tolerate that.
 pub fn extract_rp_id(command: &[u8]) -> Option<String> {
     let (&cmd, params) = command.split_first()?;
-    let mut c = CborCursor {
-        data: params,
-        pos: 0,
-    };
+    let mut c = cbor::Decoder::new(params);
     let pairs = c.map_header()?;
     // makeCredential: key 2 = rp entity map; getAssertion: key 1 = rpId.
     let wanted = match cmd {
@@ -181,9 +178,9 @@ pub fn extract_rp_id(command: &[u8]) -> Option<String> {
 /// `data` must start exactly at the map header. Returns the rebuilt map and
 /// the number of input bytes consumed.
 fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8>, usize)> {
-    let mut c = CborCursor { data, pos: 0 };
+    let mut c = cbor::Decoder::new(data);
     let pairs = c.map_header()?;
-    let header_len = c.pos;
+    let header_len = c.pos();
 
     let mut entries: Vec<(String, std::ops::Range<usize>)> = Vec::new();
     let mut have_key = false;
@@ -192,9 +189,9 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
         if k == add_key {
             have_key = true;
         }
-        let start = c.pos;
+        let start = c.pos();
         c.skip_value()?;
-        entries.push((k, start..c.pos));
+        entries.push((k, start..c.pos()));
     }
     if have_key {
         return None;
@@ -214,7 +211,7 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
         }
     }
     let _ = header_len;
-    Some((out, c.pos))
+    Some((out, c.pos()))
 }
 
 /// Detect Firefox's silent getAssertion probe: `options.up == false` **and** a
@@ -231,10 +228,7 @@ pub fn is_silent_probe(command: &[u8]) -> bool {
     let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
         return false;
     };
-    let mut c = CborCursor {
-        data: params,
-        pos: 0,
-    };
+    let mut c = cbor::Decoder::new(params);
     let Some(pairs) = c.map_header() else {
         return false;
     };
@@ -288,10 +282,7 @@ fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
     let (&CMD_GET_ASSERTION, params) = command.split_first()? else {
         return None;
     };
-    let mut c = CborCursor {
-        data: params,
-        pos: 0,
-    };
+    let mut c = cbor::Decoder::new(params);
     let pairs = c.map_header()?;
 
     let mut rp_id: Option<String> = None;
@@ -407,19 +398,16 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     };
 
     let result = (|| -> Option<Vec<u8>> {
-        let mut c = CborCursor {
-            data: params,
-            pos: 0,
-        };
+        let mut c = cbor::Decoder::new(params);
         let pairs = c.map_header()?;
 
         let mut out = vec![CMD_MAKE_CREDENTIAL];
         let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
         for _ in 0..pairs {
             let key = c.uint()?;
-            let start = c.pos;
+            let start = c.pos();
             c.skip_value()?;
-            entries.push((key, start..c.pos));
+            entries.push((key, start..c.pos()));
         }
 
         let mut changed = false;
@@ -434,10 +422,7 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
                 MC_KEY_USER => {
                     // user entity: add "displayName", falling back to "name"
                     let display = {
-                        let mut inner = CborCursor {
-                            data: value,
-                            pos: 0,
-                        };
+                        let mut inner = cbor::Decoder::new(value);
                         let mut found = None;
                         if let Some(p) = inner.map_header() {
                             for _ in 0..p {
@@ -499,19 +484,16 @@ pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
     };
 
     let result = (|| -> Option<Vec<u8>> {
-        let mut c = CborCursor {
-            data: params,
-            pos: 0,
-        };
+        let mut c = cbor::Decoder::new(params);
         let pairs = c.map_header()?;
 
         let mut out = vec![cmd];
         let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
         for _ in 0..pairs {
             let key = c.uint()?;
-            let start = c.pos;
+            let start = c.pos();
             c.skip_value()?;
-            entries.push((key, start..c.pos));
+            entries.push((key, start..c.pos()));
         }
 
         let mut changed = false;
@@ -544,19 +526,19 @@ pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
 /// order. Returns `(rebuilt, removed)`; `None` when `data` is not a text-keyed
 /// map or lacks an `id`, so callers can fail safe and keep the original.
 fn strip_transports_from_descriptor(data: &[u8]) -> Option<(Vec<u8>, bool)> {
-    let mut c = CborCursor { data, pos: 0 };
+    let mut c = cbor::Decoder::new(data);
     let pairs = c.map_header()?;
 
     let mut kept: Vec<(std::ops::Range<usize>, std::ops::Range<usize>)> = Vec::new();
     let mut removed = false;
     let mut has_id = false;
     for _ in 0..pairs {
-        let key_start = c.pos;
+        let key_start = c.pos();
         let key = c.text()?;
-        let key_end = c.pos;
-        let val_start = c.pos;
+        let key_end = c.pos();
+        let val_start = c.pos();
         c.skip_value()?;
-        let val_end = c.pos;
+        let val_end = c.pos();
         if key == "transports" {
             removed = true;
         } else {
@@ -580,7 +562,7 @@ fn strip_transports_from_descriptor(data: &[u8]) -> Option<(Vec<u8>, bool)> {
 /// Strip transport hints from every descriptor in an array. Returns
 /// `(rebuilt, removed)`; `None` when `data` is not an array.
 fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
-    let mut c = CborCursor { data, pos: 0 };
+    let mut c = cbor::Decoder::new(data);
     let b = c.byte()?;
     if b >> 5 != cbor::MAJOR_ARRAY {
         return None;
@@ -591,9 +573,9 @@ fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
     cbor::array(&mut out, n);
     let mut removed = false;
     for _ in 0..n {
-        let start = c.pos;
+        let start = c.pos();
         c.skip_value()?;
-        let elem = &data[start..c.pos];
+        let elem = &data[start..c.pos()];
         match strip_transports_from_descriptor(elem) {
             Some((stripped, true)) => {
                 removed = true;
@@ -620,10 +602,7 @@ pub fn request_has_transport_hints(command: &[u8]) -> bool {
     };
 
     let result = (|| -> Option<bool> {
-        let mut c = CborCursor {
-            data: params,
-            pos: 0,
-        };
+        let mut c = cbor::Decoder::new(params);
         let pairs = c.map_header()?;
         for _ in 0..pairs {
             let key = c.uint()?;
@@ -638,7 +617,7 @@ pub fn request_has_transport_hints(command: &[u8]) -> bool {
     result.unwrap_or(false)
 }
 
-fn array_has_transport_hint(c: &mut CborCursor) -> bool {
+fn array_has_transport_hint(c: &mut cbor::Decoder) -> bool {
     let Some(b) = c.byte() else { return false };
     if b >> 5 != cbor::MAJOR_ARRAY {
         return false;
@@ -647,11 +626,11 @@ fn array_has_transport_hint(c: &mut CborCursor) -> bool {
         return false;
     };
     for _ in 0..n {
-        let start = c.pos;
+        let start = c.pos();
         if c.skip_value().is_none() {
             return false;
         }
-        let elem = &c.data[start..c.pos];
+        let elem = &c.data()[start..c.pos()];
         if descriptor_has_transport_hint(elem) {
             return true;
         }
@@ -660,7 +639,7 @@ fn array_has_transport_hint(c: &mut CborCursor) -> bool {
 }
 
 fn descriptor_has_transport_hint(data: &[u8]) -> bool {
-    let mut c = CborCursor { data, pos: 0 };
+    let mut c = cbor::Decoder::new(data);
     let Some(pairs) = c.map_header() else {
         return false;
     };
@@ -674,113 +653,6 @@ fn descriptor_has_transport_hint(data: &[u8]) -> bool {
         }
     }
     false
-}
-
-struct CborCursor<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-/// Maximum nesting depth accepted while skipping CBOR values. The payload is
-/// browser/page-influenced, so skipping it must not recurse unbounded.
-const MAX_CBOR_DEPTH: usize = 16;
-
-impl<'a> CborCursor<'a> {
-    fn byte(&mut self) -> Option<u8> {
-        let b = *self.data.get(self.pos)?;
-        self.pos += 1;
-        Some(b)
-    }
-
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        let s = self.data.get(self.pos..self.pos.checked_add(n)?)?;
-        self.pos += n;
-        Some(s)
-    }
-
-    fn argument(&mut self, info: u8) -> Option<u64> {
-        match info {
-            0..=cbor::ARG_INLINE_MAX => Some(info as u64),
-            cbor::ARG_U8 => Some(self.byte()? as u64),
-            cbor::ARG_U16 => {
-                let b = self.take(2)?;
-                Some(u16::from_be_bytes([b[0], b[1]]) as u64)
-            }
-            cbor::ARG_U32 => {
-                let b = self.take(4)?;
-                Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as u64)
-            }
-            cbor::ARG_U64 => {
-                let b = self.take(8)?;
-                Some(u64::from_be_bytes([
-                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                ]))
-            }
-            _ => None,
-        }
-    }
-
-    fn uint(&mut self) -> Option<u64> {
-        let b = self.byte()?;
-        if b >> 5 != cbor::MAJOR_UINT {
-            return None;
-        }
-        self.argument(b & cbor::ARG_MASK)
-    }
-
-    fn map_header(&mut self) -> Option<u64> {
-        let b = self.byte()?;
-        if b >> 5 != cbor::MAJOR_MAP {
-            return None;
-        }
-        self.argument(b & cbor::ARG_MASK)
-    }
-
-    fn text(&mut self) -> Option<String> {
-        let b = self.byte()?;
-        if b >> 5 != cbor::MAJOR_TEXT {
-            return None;
-        }
-        let len = self.argument(b & cbor::ARG_MASK)? as usize;
-        String::from_utf8(self.take(len)?.to_vec()).ok()
-    }
-
-    fn skip_value(&mut self) -> Option<()> {
-        self.skip_value_at(0)
-    }
-
-    fn skip_value_at(&mut self, depth: usize) -> Option<()> {
-        if depth > MAX_CBOR_DEPTH {
-            return None;
-        }
-        let b = self.byte()?;
-        let major = b >> 5;
-        let info = b & cbor::ARG_MASK;
-        match major {
-            cbor::MAJOR_UINT | cbor::MAJOR_NEGINT | cbor::MAJOR_SIMPLE => {
-                self.argument(info)?;
-            }
-            cbor::MAJOR_BYTES | cbor::MAJOR_TEXT => {
-                let len = self.argument(info)?;
-                self.take(len as usize)?;
-            }
-            cbor::MAJOR_ARRAY => {
-                let n = self.argument(info)?;
-                for _ in 0..n {
-                    self.skip_value_at(depth + 1)?;
-                }
-            }
-            cbor::MAJOR_MAP => {
-                let n = self.argument(info)?;
-                for _ in 0..n {
-                    self.skip_value_at(depth + 1)?;
-                    self.skip_value_at(depth + 1)?;
-                }
-            }
-            _ => return None,
-        }
-        Some(())
-    }
 }
 
 #[cfg(test)]
@@ -1015,22 +887,5 @@ mod tests {
         assert_eq!(next[0], 0x00);
         assert!(next.windows(2).any(|w| w == [0x03, 0x04]));
         assert!(!next.windows(2).any(|w| w == [0x05, 0x01]));
-    }
-
-    #[test]
-    fn cbor_skip_rejects_deep_nesting() {
-        let mut shallow = CborCursor {
-            data: &[0x81, 0x81, 0x81, 0x81, 0x00],
-            pos: 0,
-        };
-        assert!(shallow.skip_value().is_some());
-
-        let mut deep = vec![0x81u8; MAX_CBOR_DEPTH + 4];
-        deep.push(0x00);
-        let mut c = CborCursor {
-            data: &deep,
-            pos: 0,
-        };
-        assert!(c.skip_value().is_none());
     }
 }
