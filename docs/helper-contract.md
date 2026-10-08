@@ -51,12 +51,19 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
 ### 3.1 QR 模式
 
 ```
-<helper> [RP] --timeout <SECS>
+<helper> [RP] --timeout <SECS> [--request-type <mc|ga>]
 ```
 
 - `RP`：可选的位置参数，依赖方（relying party）域名字符串，**仅用于显示**
   （参考实现把它画在标题下方）。agent 只在其非空时传入。
 - `--timeout <SECS>`：十进制秒数，agent 原样透传守护进程给出的超时值。
+- `--request-type <mc|ga>`：本次转发的 CTAP 命令，`mc` 对应
+  `authenticatorMakeCredential`（在手机上保存通行密钥），`ga` 对应
+  `authenticatorGetAssertion`（用通行密钥认证）。取值与 QR 内容里的
+  request type（CTAP 2.2 §11.5.1 key 5）一致，agent 总是传入其中之一。
+  helper 可据此说明扫码之后会发生什么；不认识这个参数（或只实现早期契约）
+  的 helper 忽略即可，此时文案应退化为不涉及操作类型的说法。该值不是秘密，
+  可以显示。
 
 ### 3.2 Select 模式
 
@@ -65,7 +72,7 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
 ```
 
 - 用于"检测到另一把安全密钥，是否改用手机"的选择窗口。
-- 没有 RP 位置参数。
+- 没有 RP 位置参数，也没有 `--request-type`：该窗口与具体命令无关。
 
 > 参考实现的解析器还把 argv 中以 `FIDO:/` 开头的参数当作 QR URL。这只是
 > 历史容错：按契约 URL 必须走 stdin（见 §4），agent 从不在 argv 里传 URL。

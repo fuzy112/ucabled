@@ -73,9 +73,10 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - user unit，对所有用户启用；谁真正能弹窗完全由 polkit 决定，不按用户配置。
 - 连接到 **system bus**，导出一个对象实现 `org.ucabled.Agent1`，调用
   `org.ucabled.Manager1.RegisterAgent(path)` 注册自己。
-- 收到 `Prompt(tid, url, rp, timeout)` 时，按既有窗口逻辑 spawn
-  `ucable-agent-helper`，把 URL 写进它的 stdin；把 helper 的退出转成
-  `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
+- 收到 `Prompt(tid, url, rp, timeout, request_type)` 时，按既有窗口逻辑 spawn
+  `ucable-agent-helper`，把 URL 写进它的 stdin，并把请求类型转成 helper 的
+  `--request-type` 参数（见 `docs/helper-contract.md` §3.1）；把 helper 的
+  退出转成 `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
 - 收到 `Select(tid)` 时 spawn `ucable-agent-helper --select`，按退出码
   （0=用手机，其余=放弃）回 `SelectionResult(tid, use_phone)`。
 - 收到 `Notify(summary, body)` 时经会话总线 `org.freedesktop.Notifications`
@@ -124,7 +125,7 @@ agent 实现（对象路径由 `RegisterAgent` 传入）：
 
 ```
 interface org.ucabled.Agent1
-  Prompt(t tid, s url, s rp, t timeout_secs)
+  Prompt(t tid, s url, s rp, t timeout_secs, s request_type)
   Select(t tid)                    # 弹设备选择窗口
   Found(t tid)
   Close(t tid)
