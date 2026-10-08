@@ -48,15 +48,13 @@ jobs:
         CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
       run: nix run nixpkgs#cachix -- push ucabled "$(nix build .#ucabled --no-link --print-out-paths)"
 
-    - name: Check formatting
-      run: nix develop --command cargo fmt --all --check
+    # Flake checks cover the package build (including its tests), cargo fmt
+    # and cargo clippy, matching what a developer can run locally.  The
+    # package itself is already built and cached by the steps above.
+    - name: Run flake checks
+      run: nix flake check -L
 
-    - name: Lint
-      run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
-
-    - name: Run tests
-      run: nix develop --command cargo test --locked
-
+    # Feature combinations are not flake outputs, so they stay plain cargo.
     - name: Check without default features
       run: nix develop --command cargo check --locked --no-default-features --all-targets
 
