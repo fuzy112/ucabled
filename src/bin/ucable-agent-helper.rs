@@ -682,6 +682,37 @@ fn activate(app: &gtk::Application, opts: Options) {
 }
 
 fn main() {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "ucable-agent-helper {} — QR/selection window for ucable-agent\n\
+                     \n\
+                     Usage: ucable-agent-helper [RP] [--select] [--layer-shell]\n\
+                     \x20                            [--timeout SECS] [--request-type mc|ga]\n\
+                     \n\
+                     The caBLE URL is read from the first stdin line; a later\n\
+                     \"found\" line switches to the phone-detected page. In --select\n\
+                     mode the exit status answers: 0 = use the phone, 1 = decline.\n\
+                     \n\
+                     Environment:\n\
+                     \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
+                     \n\
+                     Options:\n\
+                     \x20 -h, --help     print this help\n\
+                     \x20 -V, --version  print the version",
+                    env!("CARGO_PKG_VERSION")
+                );
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("ucable-agent-helper {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+
     let opts = parse_args();
     init_i18n();
 

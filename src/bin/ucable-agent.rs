@@ -47,6 +47,40 @@ type WindowSlot = Arc<Mutex<Option<LiveWindow>>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // The agent takes no options; every argument is handled or rejected.
+    if let Some(arg) = std::env::args().nth(1) {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "ucable-agent {} — per-user session agent for ucabled\n\
+                     \n\
+                     Registers with the system daemon over D-Bus and shows the\n\
+                     QR window on request. Normally started by systemd as a user\n\
+                     service (ucable-agent.service); takes no options.\n\
+                     \n\
+                     Environment:\n\
+                     \x20 UCABLED_HELPER  UI helper to spawn (absolute path or a name\n\
+                     \x20                 resolved via PATH); defaults to the bundled\n\
+                     \x20                 ucable-agent-helper\n\
+                     \n\
+                     Options:\n\
+                     \x20 -h, --help     print this help\n\
+                     \x20 -V, --version  print the version",
+                    env!("CARGO_PKG_VERSION")
+                );
+                return Ok(());
+            }
+            "-V" | "--version" => {
+                println!("ucable-agent {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            other => {
+                eprintln!("unknown argument: {other} (try --help)");
+                std::process::exit(2);
+            }
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

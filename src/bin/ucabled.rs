@@ -102,14 +102,42 @@ fn cancel_aborts(request: &CancelRequest, pending: Option<&Pending>) -> bool {
 }
 
 fn main() -> Result<()> {
+    let mut no_ui = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--no-ui" => no_ui = true,
+            "-h" | "--help" => {
+                println!(
+                    "ucabled {} — virtual FIDO2 device relaying WebAuthn ceremonies\n\
+                     to a phone via caBLE v2 (hybrid transport)\n\
+                     \n\
+                     Usage: ucabled [--no-ui]\n\
+                     \n\
+                     Options:\n\
+                     \x20 --no-ui        print the QR code on the terminal instead of\n\
+                     \x20                 using the UI agent\n\
+                     \x20 -h, --help     print this help\n\
+                     \x20 -V, --version  print the version",
+                    env!("CARGO_PKG_VERSION")
+                );
+                return Ok(());
+            }
+            "-V" | "--version" => {
+                println!("ucabled {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            other => {
+                eprintln!("unknown argument: {other} (try --help)");
+                std::process::exit(2);
+            }
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-
-    let no_ui = std::env::args().any(|a| a == "--no-ui");
-
     let (cancel_tx, cancel_rx) = mpsc::channel::<CancelRequest>(CANCEL_QUEUE_SIZE);
     let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>(SELECT_QUEUE_SIZE);
     let rt = tokio::runtime::Runtime::new()?;
