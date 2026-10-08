@@ -109,7 +109,8 @@ mod tests {
 
     #[test]
     fn rejects_a_corrupt_key_file() {
-        let dir = std::env::temp_dir().join(format!("ucabled-identity-corrupt-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ucabled-identity-corrupt-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(IDENTITY_FILE_NAME), b"not a key").unwrap();
