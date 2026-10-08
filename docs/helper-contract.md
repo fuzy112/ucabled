@@ -149,3 +149,10 @@ agent 传递的信息只有退出码（§6）。
    结束用 0。
 7. 假定同一槽内旧进程随时可能被 `SIGKILL`，不做跨进程的状态持久化。
 8. 把 stdout / stderr 当作可丢弃的诊断，不依赖 agent 读取。
+
+## 11. 社区/示例实现
+
+- `contrib/ucable-agent-helper-foot`：极简 shell 版，用 foot 终端 +
+  qrencode 显示 QR（ANSI 半方块），按键取消，select 模式按 y 选择手机。
+  依赖仅 foot、qrencode、bash；agent 的 stdin 经 0600 FIFO 转发进终端
+  （foot 子进程拿的是 pty，读不到 agent 管道；FIFO 只过内核缓冲不落盘）。

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Minimal ucable-agent helper (Contract v1) built on the foot terminal.
+# Dependencies: foot, qrencode, bash.
+#
+# Select with:
+#   services.ucabled.helper = "/path/to/contrib/ucable-agent-helper-foot";
+# or export UCABLED_HELPER=/path/to/contrib/ucable-agent-helper-foot.
+#
+# Contract notes:
+# - The caBLE URL arrives on stdin and is only ever piped into qrencode
+#   inside the terminal; it never touches argv, logs, or the filesystem.
+# - foot attaches its child to a pty, so the agent's stdin pipe cannot be
+#   read from inside the terminal directly. A 0600 FIFO under
+#   $XDG_RUNTIME_DIR forwards the stream; a FIFO stores nothing on disk,
+#   data only passes through the kernel pipe buffer. The in-terminal script
+#   unlinks the FIFO right after opening it (the open fd stays valid).
+# - Both modes `exec foot`, so the agent's lifecycle SIGKILL lands on foot
+#   itself and the window always disappears with the transaction.
+# - QR mode: any keypress cancels (exit 1); the timeout is enforced by the
+#   keypress read. Select mode: 'y' exits 0, anything else declines.
+
+set -eu
+
+mode=qr
+rp=""
+timeout_s=300
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --select) mode=select ;;
+        --timeout) timeout_s=$2; shift ;;
+        FIDO:/*) ;; # legacy tolerance: the URL belongs on stdin, ignore
+        *) rp=$1 ;;
+    esac
+    shift
+done
+
+if [ "$mode" = select ]; then
+    exec foot --app-id ucabled --title "Passkey" --window-size-chars 60x10 \
+        bash -c '
+            printf "Another authenticator (a security key) was detected.\n\nUse the phone instead? [y/N] "
+            read -rsn1 -t "$1" ans || exit 1
+            printf "\n"
+            case "$ans" in y|Y) exit 0 ;; esac
+            exit 1
+        ' _ "$timeout_s"
+fi
+
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
+fifo=$(mktemp -u "$runtime_dir/ucabled-helper.XXXXXX")
+mkfifo -m 600 "$fifo"
+
+# Forward the agent's stdin (URL line, then status lines) into the FIFO.
+# The explicit <&0 matters: without it the shell hands the background job
+# /dev/null as stdin and the URL never reaches the terminal. Dies to SIGPIPE
+# once the in-terminal reader goes away.
+cat <&0 >"$fifo" &
+
+exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
+    bash -c '
+        set -u
+        fifo=$1 rp=$2 timeout_s=$3
+        exec 3<"$fifo"
+        rm -f "$fifo"
+        IFS= read -r url <&3
+        case "$url" in
+            FIDO:/*) ;;
+            *)
+                printf "expected a FIDO:/ URL on stdin, got \"%s\"\n" "$url" >&2
+                printf "(this helper is meant to be launched by ucable-agent;\n" >&2
+                printf "to smoke-test: printf \"FIDO:/TEST\\\\n\" | ucable-agent-helper-foot)\n" >&2
+                read -rsn1 -t 10 || :
+                exit 1
+                ;;
+        esac
+        clear
+        qrencode -t ANSIUTF8 -m 2 -- "$url"
+        [ -n "$rp" ] && printf "\n  %s\n" "$rp"
+        printf "\n  Scan with your phone. Press any key to cancel.\n"
+        (
+            while IFS= read -r line <&3; do
+                [ "$line" = found ] &&
+                    printf "\n  === phone detected, confirm on your phone ===\n"
+            done
+        ) &
+        watcher=$!
+        read -rsn1 -t "$timeout_s" || :
+        kill "$watcher" 2>/dev/null || :
+        exit 1
+    ' _ "$fifo" "$rp" "$timeout_s"
