@@ -158,6 +158,11 @@ async fn daemon_loop(
     let device = UhidDevice::create("Phone Passkey Bridge", &FIDO_REPORT_DESCRIPTOR)
         .context("failed to create uhid device (is /dev/uhid accessible?)")?;
     tracing::info!("virtual FIDO2 device registered as 'Phone Passkey Bridge'");
+    // Persistent caBLE identity (like Chromium's per-device identity), used as
+    // the public key in every QR code and, once linking lands, as the desktop's
+    // long-term identity towards linked phones.
+    let identity = ucabled::identity::load_or_create(&ucabled::identity::state_dir())
+        .context("failed to load the persistent identity key")?;
     let mut transport = Transport::new(ucabled::ctap::AAGUID);
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
@@ -326,10 +331,12 @@ async fn daemon_loop(
                                 let tx = result_tx.clone();
                                 let notifier2 = notifier.clone();
                                 let notifier3 = notifier.clone();
+                                let identity = identity.clone();
                                 let task = tokio::spawn(async move {
                                     let r = ucabled::relay::run_qr_transaction(
                                         &payload,
                                         request_type,
+                                        &identity,
                                         move |url| {
                                             notifier2.show(
                                                 cid as u64,

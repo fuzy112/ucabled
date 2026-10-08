@@ -39,7 +39,8 @@ linking map 内部：
 - **签名必须验证**：`HMAC-SHA256(key = ECDH(桌面 identity 私钥, 手机公钥),
   数据 = handshake_hash)`。handshake_hash 是 Noise 会话的 channel binding，
   内含桌面生成的随机量，保证新鲜性。验证失败 → 丢弃 linking 数据。
-  （我们的 identity key 是随机生成的，验证在事务内存态内完成即可，无需持久。）
+  （桌面 identity 已持久化，见 `src/identity.rs`：与 Chromium 的 per-device
+  身份对齐，linking 落地后手机可跨事务识别本桌面。）
 - 桌面发出 shutdown 后仍需继续接收 update 消息（spec 建议至少 2 分钟；
   实务窗口 ~15s）。CTAP 应答先行回给 Firefox，linking 接收在后台收尾。
 

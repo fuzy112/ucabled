@@ -170,6 +170,8 @@ in
         User = "ucabled";
         Group = "ucabled";
         Restart = "on-failure";
+        # Persistent caBLE identity key lives in /var/lib/ucabled.
+        StateDirectory = "ucabled";
         # The daemon only needs /dev/uhid plus the system bus and the network.
         NoNewPrivileges = true;
         PrivateTmp = true;

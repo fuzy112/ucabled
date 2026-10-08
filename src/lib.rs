@@ -9,6 +9,7 @@ pub mod ctaphid;
 pub mod eid;
 pub mod error;
 pub mod handshake;
+pub mod identity;
 pub mod kdf;
 pub mod noise;
 pub mod phone;
