@@ -88,8 +88,8 @@ The module configures everything:
   cryptographically required by caBLE)
 - the system service `systemd.services.ucabled`
 - the per-user agent `systemd.user.services.ucable-agent`, enabled for every user
-- a D-Bus policy, the polkit action `org.ucabled.register-agent`, and a polkit
-  rule letting the `ucabled` user drive BlueZ
+- a D-Bus policy and the polkit action `org.ucabled.register-agent` (BlueZ
+  needs no polkit rule; the D-Bus policy already covers it)
 
 Run `nixos-rebuild switch`, then log out and back in (or run
 `systemctl --user start ucable-agent`) so the agent registers.

@@ -294,8 +294,7 @@ NixOS module（`nix/module.nix`）：
 2. ~~新增 `ucable-agent` agent~~：实现 `Agent1`，复用 `ucable-agent-helper`。
 3. ~~守护进程改用 D-Bus UI 驱动~~；无 agent 快速失败；移除进程内 GUI。
 4. ~~系统服务化~~：system 用户/组、udev ACL 规则、system unit + sandbox、
-   agent unit、D-Bus policy、polkit action（+ 规则）、BlueZ polkit、dist
-   单元。
+   agent unit、D-Bus policy、polkit action（+ 规则）、dist 单元。
 5. ~~文档~~：README 与 `docs/plan.md`。
 
 ## 13. 参考

@@ -11,9 +11,9 @@
 //!
 //! The subtle case is a stale `uaccess` tag: logind then re-grants the active
 //! seat user on every seat change, which leaves the mode bits looking normal
-//! (`0660 root:root`) while an ACL entry grants the human access.  The tag is
-//! what udev persists and what drives that mechanism, so we read it back from
-//! `/run/udev/data`.
+//! (`0600 root:root`, the devtmpfs default) while an ACL entry grants the
+//! human access.  The tag is what udev persists and what drives that
+//! mechanism, so we read it back from `/run/udev/data`.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -49,10 +49,11 @@ fn udev_tags(rdev: u64) -> Vec<String> {
 
 /// The decision, factored out for tests.
 ///
-/// Group/other read bits and the usual `0660 root:root` group write are not
-/// flagged: that is the node's normal mode, and the human user does not gain
-/// write from it.  What matters is world write and the `uaccess`/`xaccess-`
-/// tags that make logind hand the active seat user an ACL.
+/// The kernel creates the node `0600 root:root`; group/other bits only ever
+/// come from an admin's udev rule (e.g. `0660 root:somegroup`), which grants
+/// nothing to the seat user, so group write is not flagged.  What matters is
+/// world write and the `uaccess`/`xaccess-` tags that make logind hand the
+/// active seat user an ACL.
 fn evaluate(mode: u32, tags: &[String]) -> Option<String> {
     let mut reasons = Vec::new();
     if mode & 0o002 != 0 {

@@ -1,7 +1,7 @@
 name: Audit
 
-# Dependency advisory scanning: on lockfile changes, weekly (a crate we pin
-# can gain a known vulnerability between commits), and on demand.  The
+# Dependency advisory scanning: on manifest/lockfile changes, weekly (a crate
+# we pin can gain a known vulnerability between commits), and on demand.  The
 # schedule only fires on the default branch.
 on:
   push:

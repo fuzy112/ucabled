@@ -61,7 +61,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 - **caBLE v2 (Cloud Assisted BLE)**：FIDO CTAP 2.2 §11.5 定义的跨设备传输；桌面端
 显示 QR（内含 ephemeral 公钥、QR secret、隧道服务器域名），手机扫码后经
 隧道服务器 WSS 与桌面端交换 CTAP2。CTAP 2.3 起数据通道除 WSS 外还可选 BLE
-（L2CAP CoC），但我们只实现 WSS。
+（L2CAP CoC），两者均已实现（L2CAP 在 `l2cap` feature 下）。
 - **U2FHID / CTAP-HID**：FIDO2 设备 over USB-HID 的帧协议（INIT/CONT 分片，
 最大 payload 7609 字节 @ 64 字节 report）。
 - **CTAP2**：authenticator 协议（CBOR 命令：MakeCredential 0x01、GetAssertion
@@ -122,7 +122,7 @@ UI 提示（独立会话进程，详见 docs/system-service.md）：
 
 | 命令 | 处理 |
 | --- | --- |
-| GetInfo (0x04) | 本地应答：见 FR-5；aaguid 为固定常量；不广告 extensions（先保守，实测后按需加 hmac-secret/prf） |
+| GetInfo (0x04) | 本地应答：见 FR-5；aaguid 为固定常量；extensions 广告 `credProtect`（OpenSSH 无它不会走 credProtect 路径），其余按需再加 |
 | MakeCredential (0x01) / GetAssertion (0x02) | 启动 caBLE 流程，CBOR 透传（仅只读提取 rpId 用于 UI）；等待期间持续发 KEEPALIVE |
 | ClientPIN / credMgmt / Reset / 其他 | 返回 COMMAND_NOT_SUPPORTED / INVALID_COMMAND |
 | CANCEL (U2FHID 0x91) | 终止隧道，挂起的 CBOR 回 `0x2D` (KEEPALIVE_CANCEL) |
@@ -138,7 +138,8 @@ UI 提示（独立会话进程，详见 docs/system-service.md）：
 Chromium 从 32 字节 seed 确定性派生以便日后验证 pairing 签名，FR-7 阶段
 再改 seed 派生）。
 2. QR payload = canonical CBOR map：`{0: 33 字节压缩公钥, 1: 16 字节 secret,
-2: 已知隧道域名数(=2), 3: epoch 秒, 4: supports_linking, 5: "mc"/"ga"}`。
+2: 已知隧道域名数(=2), 3: epoch 秒, 4: supports_linking, 5: "mc"/"ga",
+6: transports（至少 [0]=WSS）}`。
 QR 内容为 `FIDO:/` + digitEncode(CBOR)：每 7 字节小端转 u64，补零成
 17 位十进制；尾部按 1..6 字节用 3/5/8/10/13/15 位（QR numeric mode；
 **不是 base64，也不是原始二进制**）。
@@ -316,7 +317,7 @@ INVALID_OPTION，可接受、可迭代。
   # 模块自动带上：ucabled 系统用户/组、udev ACL 规则（setfacl 给 ucabled rw）、
   # boot.kernelModules=[uhid]、hardware.bluetooth.enable=mkDefault true、
   # system service ucabled、user service ucable-agent、D-Bus policy、
-  # polkit action 与 BlueZ 规则
+  # polkit action（BlueZ 无需 polkit 规则，D-Bus policy 已覆盖）
 }
 ```
 

@@ -94,15 +94,11 @@ D-Bus 调用**（libdbus 会丢弃迟到的应答），语义与今天一致，�
 
 ### 3.2 `RegisterAgent` 的 polkit 检查
 
-crossroads 0.5 的方法是同步闭包，无法原生 async。两个选项：
-
-- **选定：保留同步 `authorize()`，内嵌在闭包里**（照今天做法，短命
-  阻塞连接）。注册是稀有事件，polkitd 本地应答在毫秒级；25s 只是超时
-  上限。代价是路由 task 在注册瞬间短暂停摆——可接受，且与今天
-  service 线程被占完全等价。
-- 备选：在路由 task 里把 `RegisterAgent` 从 crossroads 摘出来手写，
-  spawn 独立 task 做异步 polkit 调用再手动回包。更干净但丢掉
-  crossroads 的参数解析，复杂度不值。
+- **实现：crossroads 0.5 的 `set_async_support` + `method_with_cr_async`**，
+  `authorize()` 是 async fn，在 daemon 唯一的异步连接上 await。路由 task
+  在注册期间让出而不是停摆，短命阻塞连接被一并删除。
+- 备选（未采用）：保留同步 `authorize()` 内嵌在同步闭包里。实现后对照，
+  异步方案没有预想中复杂，且消除了路由 task 的阻塞窗口。
 
 ### 3.3 `AgentClient` 与 channel
 
@@ -119,15 +115,15 @@ crossroads 0.5 的方法是同步闭包，无法原生 async。两个选项：
 - 上报（`TransactionCancelled`/`SelectionResult`）与注册
   （`RegisterAgent`）改为同连接 nonblock 调用；唯一名身份由同连接
   天然保证（今天的"必须用服务连接上报"约束自动满足）。
-- 重注册：`NameOwnerChanged(name=org.ucabled, new_owner≠"")` 进路由
-  task 置标志，主循环 `tokio::time::interval(2s)` 重试——删除
-  `AtomicBool` + 200ms 轮询。
+- 重注册：`NameOwnerChanged(name=org.ucabled, new_owner≠"")` 事件驱动——
+  信号进路由 task 后经 `daemon_tx` 通知主循环立即重注册，无轮询；仅
+  首次注册前的重试循环用 2s sleep。
 - helper 子进程：`tokio::process::Command`，由专属 window task 持有并
-  `Child::wait()`；slot 只存 `{pid, 行队列 sender}`，stdin 由该 task
+  `Child::wait()`；slot 只存 `{pid, tid, 行队列 sender}`，stdin 由该 task
   从行队列喂入（保证 URL/found 行的顺序），删除两个 150ms watcher
-  线程。`Close`/新窗口用 `libc::kill(pid, SIGKILL)`（子进程未回收前
-  pid 不会复用，安全），task 发现 slot 易主则不上报退出，保持
-  "关窗=取消" 与 select 退出码语义。
+  线程。`Close`/新窗口由持有该子进程的 window task 自己调
+  `start_kill()`（不用 libc::kill 按 pid 杀），task 发现 slot 易主则不
+  上报退出，保持 "关窗=取消" 与 select 退出码语义。
 - 无图形会话直接退出、被拒（`NotAuthorized`）退出等行为不变。
 
 ## 5. 验证

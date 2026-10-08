@@ -172,9 +172,9 @@ in
           "AF_BLUETOOTH"
           "AF_NETLINK"
         ];
-        # /dev/uhid is gated by the ucabled group (mode 0660); a cgroup device
-        # filter would be redundant and has path-resolution failure modes, so
-        # leave it off.
+        # The udev rule grants the ucabled user rw on /dev/uhid via an ACL;
+        # a cgroup device filter would be redundant and has path-resolution
+        # failure modes, so leave it off.
         UMask = "0077";
         LimitCORE = 0;
         MemorySwapMax = 0;

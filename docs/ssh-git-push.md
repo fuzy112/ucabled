@@ -5,7 +5,7 @@
 
 ## 1. 背景
 
-passkey（`id_ed25519_sk` 等 resident credential）的私钥永远在手机上，
+passkey（`id_ecdsa_sk` 等 resident credential）的私钥永远在手机上，
 **每次签名都必须手机参与一次**——ssh-agent 无法缓存来免除扫码，这是协
 议的安全设计，不是 bug。因此要减少扫码次数，只能减少签名的次数。
 
