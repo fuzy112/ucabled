@@ -32,11 +32,14 @@ const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 /// How long the device-selection window stays up before declining.
 const SELECT_TIMEOUT_SECS: u64 = 60;
 
-/// A live helper window: its pid (for killing) and a queue of stdin lines.
-/// The helper process itself is owned by its window task.
+/// A live helper window: its pid (to tell it apart when it exits) and a queue
+/// of stdin lines. The helper process itself is owned by its window task, so
+/// killing is delegated to that task through `kill` rather than signalled by
+/// pid from here.
 struct LiveWindow {
     pid: u32,
     lines: UnboundedSender<String>,
+    kill: UnboundedSender<()>,
 }
 
 type WindowSlot = Arc<Mutex<Option<LiveWindow>>>;
@@ -279,15 +282,14 @@ fn helper_path() -> Option<std::path::PathBuf> {
     sibling.exists().then_some(sibling)
 }
 
-/// Kill the live window's helper, if any. The window task reaps it through
-/// its pending `wait()` and stays silent because the slot no longer holds
-/// its pid.
+/// Kill the live window's helper, if any, by asking its window task to. That
+/// task owns the `Child`, so it kills a process it has not reaped yet and the
+/// signal can never hit a recycled pid; it then stays silent because the slot
+/// no longer holds its pid.
 fn close_window(slot: &WindowSlot) {
     if let Some(window) = slot.lock().unwrap().take() {
         drop(window.lines);
-        // Safe: the pid belongs to our own not-yet-reaped child (the window
-        // task reaps it), so it cannot have been recycled.
-        unsafe { libc::kill(window.pid as i32, libc::SIGKILL) };
+        let _ = window.kill.send(());
     }
 }
 
@@ -319,12 +321,15 @@ fn open_window(
     if let Some(initial) = initial {
         let _ = lines.send(initial);
     }
-    *slot.lock().unwrap() = Some(LiveWindow { pid, lines });
+    let (kill, mut kill_rx) = mpsc::unbounded_channel::<()>();
+    *slot.lock().unwrap() = Some(LiveWindow { pid, lines, kill });
 
     let slot = slot.clone();
     tokio::spawn(async move {
         let mut stdin = child.stdin.take();
         let mut lines_open = true;
+        let mut kill_open = true;
+        let mut kill_requested = false;
         let status = loop {
             tokio::select! {
                 status = child.wait() => break status,
@@ -339,6 +344,17 @@ fn open_window(
                         None => lines_open = false,
                     }
                 }
+                _ = kill_rx.recv(), if kill_open => {
+                    kill_open = false;
+                    kill_requested = true;
+                }
+            }
+            // Run the kill after `select!` has released its borrow of `child`,
+            // so it is this task — which still owns the unreaped process — that
+            // signals it.  The slot is already empty, so no exit is reported.
+            if kill_requested {
+                kill_requested = false;
+                let _ = child.start_kill();
             }
         };
         let still_live = {
@@ -516,5 +532,49 @@ async fn notify_selection(conn: &Arc<SyncConnection>, tid: u64, use_phone: bool)
     .await;
     if let Err(e) = result {
         tracing::warn!("failed to report device selection: {e:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn closing_a_window_kills_the_helper_without_reporting_it() {
+        let slot: WindowSlot = Arc::new(Mutex::new(None));
+        let reported = Arc::new(AtomicBool::new(false));
+        let reported_in_cb = reported.clone();
+        let mut command = Command::new("sleep");
+        command.arg("30").stdin(Stdio::piped());
+        assert!(open_window(&slot, &mut command, None, move |_| {
+            reported_in_cb.store(true, Ordering::SeqCst);
+        }));
+
+        let pid = slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("the window is live")
+            .pid;
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists());
+
+        close_window(&slot);
+
+        // The window task reaps the helper, so its /proc entry disappears.
+        let mut gone = false;
+        for _ in 0..100 {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(gone, "helper {pid} was not killed");
+        assert!(slot.lock().unwrap().is_none());
+        assert!(
+            !reported.load(Ordering::SeqCst),
+            "a window killed by close_window must not report an exit"
+        );
     }
 }
