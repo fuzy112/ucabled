@@ -80,8 +80,13 @@ pub fn decrypt(advert: &[u8], key: &[u8; EID_KEY_SIZE]) -> Option<[u8; EID_PLAIN
     }
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key[KEY_HALF..]).unwrap();
     mac.update(&advert[..AES_BLOCK_SIZE]);
-    let tag = mac.finalize().into_bytes();
-    if tag[..ADVERT_TAG_SIZE] != advert[AES_BLOCK_SIZE..] {
+    // verify_truncated_left compares in constant time and accepts the
+    // 4-byte prefix we put on the wire; a != on the tag would early-exit
+    // on the first mismatching byte.
+    if mac
+        .verify_truncated_left(&advert[AES_BLOCK_SIZE..])
+        .is_err()
+    {
         return None;
     }
 
