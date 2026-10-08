@@ -40,46 +40,22 @@ let
   # D-Bus system policy: the daemon owns org.ucabled and only needs to call
   # the bus driver, polkit, BlueZ, and the session agents (unique names, so
   # matched by interface). Signals and requested replies are already allowed
-  # by the default policy; only method calls are opened here.
-  dbusPolicy = pkgs.writeTextDir "share/dbus-1/system.d/org.ucabled.conf" ''
-    <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
-     "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-    <busconfig>
-      <policy user="ucabled">
-        <allow own="org.ucabled"/>
-        <allow send_destination="org.freedesktop.DBus" send_type="method_call"/>
-        <allow send_destination="org.freedesktop.PolicyKit1" send_type="method_call"/>
-        <allow send_destination="org.bluez" send_type="method_call"/>
-        <allow send_interface="org.ucabled.Agent1" send_type="method_call"/>
-      </policy>
-      <policy context="default">
-        <allow send_destination="org.ucabled"/>
-      </policy>
-    </busconfig>
+  # by the default policy; only method calls are opened here. The content
+  # lives in dist/org.ucabled.conf so the manual install and this module
+  # cannot drift apart.
+  dbusPolicy = pkgs.runCommand "ucabled-dbus-policy" { } ''
+    install -Dm644 ${../dist/org.ucabled.conf} \
+      $out/share/dbus-1/system.d/org.ucabled.conf
   '';
 
   # Only the active local session may register an agent. The
   # org.freedesktop.policykit.owner annotation lets the non-root ucabled
   # service call CheckAuthorization on a *session user's* subject: without it
-  # polkit rejects cross-uid checks from anyone but uid 0.
-  polkitAction = pkgs.writeTextDir "share/polkit-1/actions/org.ucabled.policy" ''
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE policyconfig PUBLIC
-     "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
-     "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
-    <policyconfig>
-      <vendor>ucabled</vendor>
-      <action id="org.ucabled.register-agent">
-        <description>Register the phone passkey dialog</description>
-        <message>Authentication is required to show passkey prompts</message>
-        <defaults>
-          <allow_any>no</allow_any>
-          <allow_inactive>no</allow_inactive>
-          <allow_active>yes</allow_active>
-        </defaults>
-        <annotate key="org.freedesktop.policykit.owner">unix-user:ucabled</annotate>
-      </action>
-    </policyconfig>
+  # polkit rejects cross-uid checks from anyone but uid 0. Single-sourced
+  # from dist/org.ucabled.policy, like the D-Bus policy above.
+  polkitAction = pkgs.runCommand "ucabled-polkit-action" { } ''
+    install -Dm644 ${../dist/org.ucabled.policy} \
+      $out/share/polkit-1/actions/org.ucabled.policy
   '';
 in
 {
