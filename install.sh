@@ -130,6 +130,11 @@ The ucabled user/group and the /dev/uhid ACL were kept.  To remove them:
 
 The ACL also disappears on the next reboot, or after
 'udevadm trigger /sys/class/misc/uhid' now that the rule is gone.
+
+The long-term caBLE identity key was kept at
+/var/lib/ucabled/identity.key.  Delete it (and the directory) only if
+you will not reinstall: phones will no longer recognise this machine
+once a different key is generated.
 EOF
     exit 0
 fi
