@@ -1,0 +1,35 @@
+name: Audit
+
+# Dependency advisory scanning: on lockfile changes, weekly (a crate we pin
+# can gain a known vulnerability between commits), and on demand.  The
+# schedule only fires on the default branch.
+on:
+  push:
+    branches: ["master", "next"]
+    paths: ["Cargo.lock", "Cargo.toml"]
+  schedule:
+    - cron: "24 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+
+    # The advisory database is fetched over the network at run time.
+    - name: Audit the locked dependencies
+      run: nix run nixpkgs#cargo-audit -- audit
