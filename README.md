@@ -296,7 +296,9 @@ Requirements and design: `docs/plan.md`; system service / UI agent design:
 `docs/system-service.md`; D-Bus async design: `docs/async-dbus.md`; tunnel
 server rationale: `docs/tunnel-server.md`; BLE data channel: `docs/gatt-data-channel.md`
 and `docs/l2cap-channel.md`; related projects: `docs/prior-art.md`; linking
-design: `docs/linking.md`.
+design: `docs/linking.md`. If you keep your SSH key as a passkey on the phone,
+see `docs/ssh-git-push.md` (Chinese) for avoiding repeated QR scans on
+`git push` (SSH connection multiplexing + git-lfs).
 
 The optional CTAP 2.3 BLE data channel (L2CAP CoC) is experimental and off by
 default: build with `--features l2cap` and set `UCABLED_BLE_CHANNEL=1`. iPhones
