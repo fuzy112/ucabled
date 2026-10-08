@@ -44,6 +44,7 @@ pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
     let path = dir.join(IDENTITY_FILE_NAME);
     match fs::read(&path) {
         Ok(mut bytes) => {
+            warn_if_group_or_world_readable(&path);
             // Do not leave the key in a heap buffer; wipe it once parsed.
             let key = SecretKey::from_slice(&bytes)
                 .with_context(|| format!("invalid identity key in {}", path.display()));
@@ -104,6 +105,32 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Err(last.unwrap_or_else(|| io::Error::other("no temporary name")))
 }
 
+/// A pre-existing key file with group/other bits set was not created by us
+/// (e.g. restored from a backup) and may be readable by other users. Warn
+/// instead of silently rewriting permissions we did not set — the same
+/// "warn, don't fix" philosophy as `uhid_perm`.
+#[cfg(unix)]
+fn warn_if_group_or_world_readable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    match fs::metadata(path) {
+        Ok(meta) => {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                tracing::warn!(
+                    path = %path.display(),
+                    mode = format_args!("{mode:04o}"),
+                    "identity key is group/world-readable; run: chmod 600 {}",
+                    path.display()
+                );
+            }
+        }
+        Err(e) => tracing::warn!("cannot stat {}: {e}", path.display()),
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_group_or_world_readable(_path: &Path) {}
+
 #[cfg(not(unix))]
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::write(path, bytes)
@@ -161,6 +188,31 @@ mod tests {
         fs::write(dir.join(IDENTITY_FILE_NAME), b"not a key").unwrap();
 
         assert!(load_or_create(&dir).is_err());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loads_a_key_with_loose_permissions_but_warns() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("ucabled-identity-perms-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let key = load_or_create(&dir).unwrap();
+        let path = dir.join(IDENTITY_FILE_NAME);
+        // Simulate a key restored from a backup with loose permissions.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        // Warn, don't fix: the key still loads and the mode is untouched.
+        let reloaded = load_or_create(&dir).unwrap();
+        assert_eq!(reloaded.to_bytes(), key.to_bytes());
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
