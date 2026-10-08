@@ -10,6 +10,7 @@
 use std::collections::VecDeque;
 use std::f64::consts::PI;
 use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -44,9 +45,28 @@ const PASSKEY_ICON: &[u8; 100 * 100] = include_bytes!("resources/passkey.gray");
 /// gettext domain for this helper's catalogs.
 const GETTEXT_DOMAIN: &str = "ucable-agent-helper-gtk";
 
-/// Where gettext catalogs are installed; overridable at build time.
-fn localedir() -> &'static str {
-    option_env!("UCABLED_LOCALEDIR").unwrap_or("/usr/local/share/locale")
+/// Where gettext catalogs are installed.  `UCABLED_LOCALEDIR` wins when set
+/// at build time; otherwise the directory is derived from the executable's
+/// own location so any install prefix works without a wrapper.
+fn localedir() -> String {
+    if let Some(dir) = option_env!("UCABLED_LOCALEDIR") {
+        return dir.to_string();
+    }
+    std::env::current_exe()
+        .ok()
+        .map(|exe| localedir_for_exe(&exe))
+        .unwrap_or_else(|| "/usr/local/share/locale".to_string())
+}
+
+/// `<prefix>/bin/<helper>` maps to `<prefix>/share/locale`; anything else
+/// falls back to the default install prefix.
+fn localedir_for_exe(exe: &Path) -> String {
+    exe.parent()
+        .and_then(Path::parent)
+        .map(|prefix| prefix.join("share/locale"))
+        .unwrap_or_else(|| PathBuf::from("/usr/local/share/locale"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Which CTAP command the daemon is relaying, as handed over on argv.  It only
@@ -148,10 +168,14 @@ fn env_truthy(name: &str) -> bool {
 // --------------------------------------------------------------------------
 
 fn init_i18n() {
-    use gettextrs::{bindtextdomain, textdomain};
+    use gettextrs::{bindtextdomain, setlocale, textdomain, LocaleCategory};
 
-    // The locale itself is set by GTK's own initialization; only the message
-    // catalog needs pointing at our install prefix.
+    // GTK4 dropped the setlocale() that GTK3 did at init, so without this the
+    // process stays in the "C" locale and gettext never loads a catalog.
+    // SAFETY: single-threaded here; this runs before the GTK main loop.
+    unsafe {
+        setlocale(LocaleCategory::LcAll, "");
+    }
     let _ = bindtextdomain(GETTEXT_DOMAIN, localedir());
     let _ = textdomain(GETTEXT_DOMAIN);
 }
@@ -677,6 +701,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn localedir_follows_the_install_prefix() {
+        assert_eq!(
+            localedir_for_exe(Path::new("/usr/local/bin/ucable-agent-helper")),
+            "/usr/local/share/locale"
+        );
+        assert_eq!(
+            localedir_for_exe(Path::new("/opt/ucabled/bin/ucable-agent-helper")),
+            "/opt/ucabled/share/locale"
+        );
+        assert_eq!(
+            localedir_for_exe(Path::new("/ucable-agent-helper")),
+            "/usr/local/share/locale"
+        );
+    }
 
     #[test]
     fn caption_names_the_command_being_relayed() {

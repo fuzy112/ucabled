@@ -109,6 +109,11 @@ if ((UNINSTALL)); then
     for b in "${BINARIES[@]}"; do
         rm -f "$BIN_DIR/$b"
     done
+    for po in "$ROOT"/po/*.po; do
+        [[ -e "$po" ]] || continue
+        lang="$(basename "$po" .po)"
+        rm -f "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
+    done
 
     systemctl daemon-reload || true
     systemctl reload dbus 2>/dev/null || true
@@ -151,6 +156,20 @@ install -d -m 0755 "$BIN_DIR"
 for b in "${BINARIES[@]}"; do
     install -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
 done
+
+# Gettext catalogs for the GTK4 helper, which looks them up relative to its
+# own location (<prefix>/share/locale).
+if command -v msgfmt >/dev/null; then
+    for po in "$ROOT"/po/*.po; do
+        [[ -e "$po" ]] || continue
+        lang="$(basename "$po" .po)"
+        install -d -m 0755 "$PREFIX/share/locale/$lang/LC_MESSAGES"
+        msgfmt "$po" \
+            -o "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
+    done
+else
+    printf 'warning: msgfmt not found; helper translations not installed (install gettext)\n' >&2
+fi
 
 # Load the uhid module now and at boot.
 install -d -m 0755 "$MODULES_LOAD_DIR"
