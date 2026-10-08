@@ -144,10 +144,9 @@ sudo modprobe uhid
 sudo cp dist/90-ucabled.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 
-# system D-Bus policy, polkit action + BlueZ rule
+# system D-Bus policy + polkit action
 sudo cp dist/org.ucabled.conf  /etc/dbus-1/system.d/
 sudo cp dist/org.ucabled.policy /usr/share/polkit-1/actions/
-sudo cp dist/50-ucabled-bluez.rules /etc/polkit-1/rules.d/
 
 # system daemon
 sudo cp dist/ucabled.service /etc/systemd/system/
