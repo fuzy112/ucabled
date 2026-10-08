@@ -17,10 +17,17 @@ pub enum Purpose {
     PerContactIdSecret = 6,
 }
 
+/// Derive `out` bytes from `secret` for `purpose` (HKDF-SHA256).
+///
+/// # Panics
+///
+/// Panics when `out` exceeds the HKDF-SHA256 limit of 8160 bytes
+/// (255 × 32). All callers derive fixed-size keys far below that.
 pub fn derive(secret: &[u8], salt: &[u8], purpose: Purpose, out: &mut [u8]) {
     let info = (purpose as u32).to_le_bytes();
     let hk = Hkdf::<Sha256>::new(Some(salt), secret);
-    hk.expand(&info, out).expect("HKDF expand failed");
+    hk.expand(&info, out)
+        .expect("HKDF-SHA256 output is at most 8160 bytes");
 }
 
 #[cfg(test)]

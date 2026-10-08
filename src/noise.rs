@@ -33,6 +33,13 @@ pub struct Noise {
 }
 
 impl Noise {
+    /// Start a handshake state for `protocol_name`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `protocol_name` exceeds 32 bytes (the Noise spec hashes
+    /// longer names instead; caBLE only ever uses the two 31/32-byte
+    /// constant names above).
     pub fn new(protocol_name: &[u8]) -> Self {
         assert!(protocol_name.len() <= 32);
         let mut ck = [0u8; 32];
