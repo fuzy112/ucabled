@@ -63,3 +63,4 @@ gettext-rs = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+proptest = "1"
