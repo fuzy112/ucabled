@@ -137,6 +137,13 @@ sudo install -Dm755 target/release/ucabled    /usr/local/bin/ucabled
 sudo install -Dm755 target/release/ucable-agent /usr/local/bin/ucable-agent
 sudo install -Dm755 target/release/ucable-agent-helper /usr/local/bin/ucable-agent-helper
 
+# translations for the GTK4 helper (needs gettext's msgfmt)
+for po in po/*.po; do
+  lang=$(basename "$po" .po)
+  sudo install -d /usr/local/share/locale/$lang/LC_MESSAGES
+  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo
+done
+
 # dedicated service account, kernel module and udev rule
 sudo groupadd --system ucabled
 sudo useradd --system --gid ucabled --no-create-home ucabled
