@@ -32,12 +32,13 @@ const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 /// How long the device-selection window stays up before declining.
 const SELECT_TIMEOUT_SECS: u64 = 60;
 
-/// A live helper window: its pid (to tell it apart when it exits) and a queue
-/// of stdin lines. The helper process itself is owned by its window task, so
-/// killing is delegated to that task through `kill` rather than signalled by
-/// pid from here.
+/// A live helper window: its pid (to tell it apart when it exits), the
+/// transaction it belongs to, and a queue of stdin lines. The helper process
+/// itself is owned by its window task, so killing is delegated to that task
+/// through `kill` rather than signalled by pid from here.
 struct LiveWindow {
     pid: u32,
+    tid: u64,
     lines: UnboundedSender<String>,
     kill: UnboundedSender<()>,
 }
@@ -176,10 +177,8 @@ fn build_crossroads(
                 "Found",
                 ("tid",),
                 (),
-                move |_ctx, _: &mut (), (_tid,): (u64,)| {
-                    if let Some(window) = found_window.lock().unwrap().as_ref() {
-                        let _ = window.lines.send("found\n".to_string());
-                    }
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
+                    forward_line_for_tid(&found_window, tid, "found\n");
                     Ok(())
                 },
             );
@@ -202,9 +201,9 @@ fn build_crossroads(
                 "Close",
                 ("tid",),
                 (),
-                move |_ctx, _: &mut (), (_tid,): (u64,)| {
-                    close_window(&close_qr);
-                    close_window(&close_select);
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
+                    close_window_for_tid(&close_qr, tid);
+                    close_window_for_tid(&close_select, tid);
                     Ok(())
                 },
             );
@@ -293,12 +292,44 @@ fn close_window(slot: &WindowSlot) {
     }
 }
 
+/// Like `close_window`, but only when the live window belongs to `tid`. A
+/// Close (or any tid-carrying call) for a finished transaction must not kill
+/// the window of a newer one.
+fn close_window_for_tid(slot: &WindowSlot, tid: u64) {
+    let window = {
+        let mut guard = slot.lock().unwrap();
+        match guard.as_ref() {
+            Some(window) if window.tid == tid => guard.take(),
+            _ => None,
+        }
+    };
+    if let Some(window) = window {
+        drop(window.lines);
+        let _ = window.kill.send(());
+    }
+}
+
+/// Forward a stdin line to the live window, but only when it belongs to
+/// `tid`: a Found for a finished transaction must not leak into the window
+/// of a newer one. Returns whether the line was forwarded.
+fn forward_line_for_tid(slot: &WindowSlot, tid: u64, line: &str) -> bool {
+    let guard = slot.lock().unwrap();
+    match guard.as_ref() {
+        Some(window) if window.tid == tid => {
+            let _ = window.lines.send(line.to_string());
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Spawn `command`, queue `initial` as its first stdin line, and run
 /// `on_exit` with the exit status — but only if the window is still the
 /// live one; a Close or a newer window kills the helper and suppresses the
 /// report. Returns false when the helper could not be spawned.
 fn open_window(
     slot: &WindowSlot,
+    tid: u64,
     command: &mut Command,
     initial: Option<String>,
     on_exit: impl FnOnce(std::process::ExitStatus) + Send + 'static,
@@ -322,7 +353,12 @@ fn open_window(
         let _ = lines.send(initial);
     }
     let (kill, mut kill_rx) = mpsc::unbounded_channel::<()>();
-    *slot.lock().unwrap() = Some(LiveWindow { pid, lines, kill });
+    *slot.lock().unwrap() = Some(LiveWindow {
+        pid,
+        tid,
+        lines,
+        kill,
+    });
 
     let slot = slot.clone();
     tokio::spawn(async move {
@@ -406,6 +442,7 @@ fn show_window(
     let cancel_tx = cancel_tx.clone();
     open_window(
         state,
+        tid,
         &mut command,
         Some(format!("{url}\n")),
         move |_status| {
@@ -431,7 +468,7 @@ fn show_select_window(state: &WindowSlot, result_tx: &UnboundedSender<(u64, bool
         .stdin(Stdio::null());
     let result_tx = result_tx.clone();
     let decline_tx = result_tx.clone();
-    let opened = open_window(state, &mut command, None, move |status| {
+    let opened = open_window(state, tid, &mut command, None, move |status| {
         // Exit code 0 means "Use phone"; anything else (cancel, close,
         // timeout, signal) declines and lets the other key win.
         let _ = result_tx.send((tid, status.code() == Some(0)));
@@ -547,7 +584,7 @@ mod tests {
         let reported_in_cb = reported.clone();
         let mut command = Command::new("sleep");
         command.arg("30").stdin(Stdio::piped());
-        assert!(open_window(&slot, &mut command, None, move |_| {
+        assert!(open_window(&slot, 1, &mut command, None, move |_| {
             reported_in_cb.store(true, Ordering::SeqCst);
         }));
 
@@ -576,5 +613,57 @@ mod tests {
             !reported.load(Ordering::SeqCst),
             "a window killed by close_window must not report an exit"
         );
+    }
+
+    async fn wait_for_death(pid: u32) -> bool {
+        for _ in 0..100 {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn a_close_for_another_tid_leaves_the_window_alone() {
+        let slot: WindowSlot = Arc::new(Mutex::new(None));
+        let mut command = Command::new("sleep");
+        command.arg("30").stdin(Stdio::piped());
+        // The live window belongs to transaction 2.
+        assert!(open_window(&slot, 2, &mut command, None, |_| {}));
+        let pid = slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("the window is live")
+            .pid;
+
+        // A Close for the older transaction 1 must not kill it.
+        close_window_for_tid(&slot, 1);
+        assert!(slot.lock().unwrap().is_some());
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists());
+
+        // A Close carrying the window's own tid does.
+        close_window_for_tid(&slot, 2);
+        assert!(slot.lock().unwrap().is_none());
+        assert!(wait_for_death(pid).await, "helper {pid} was not killed");
+    }
+
+    #[tokio::test]
+    async fn lines_are_forwarded_only_to_the_owning_transaction() {
+        let slot: WindowSlot = Arc::new(Mutex::new(None));
+        let mut command = Command::new("sleep");
+        command.arg("30").stdin(Stdio::piped());
+        assert!(open_window(&slot, 2, &mut command, None, |_| {}));
+        let pid = slot.lock().unwrap().as_ref().unwrap().pid;
+
+        assert!(forward_line_for_tid(&slot, 2, "found\n"));
+        assert!(!forward_line_for_tid(&slot, 1, "found\n"));
+
+        // No window at all: nothing to forward to.
+        close_window(&slot);
+        assert!(!forward_line_for_tid(&slot, 2, "found\n"));
+        assert!(wait_for_death(pid).await, "helper {pid} was not killed");
     }
 }
