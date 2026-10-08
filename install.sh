@@ -24,7 +24,6 @@ UDEV_DIR="${UDEV_DIR:-/etc/udev/rules.d}"
 MODULES_LOAD_DIR="${MODULES_LOAD_DIR:-/etc/modules-load.d}"
 DBUS_DIR="${DBUS_DIR:-/etc/dbus-1/system.d}"
 POLKIT_ACTIONS_DIR="${POLKIT_ACTIONS_DIR:-/usr/share/polkit-1/actions}"
-POLKIT_RULES_DIR="${POLKIT_RULES_DIR:-/etc/polkit-1/rules.d}"
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-/usr/lib/systemd/user}"
 
@@ -47,8 +46,7 @@ Usage:
 
 The installation prefix defaults to /usr/local and can be changed with
 --prefix or the PREFIX environment variable.  The system paths can be
-overridden with UDEV_DIR, MODULES_LOAD_DIR, DBUS_DIR, POLKIT_ACTIONS_DIR,
-POLKIT_RULES_DIR, SYSTEMD_SYSTEM_DIR and SYSTEMD_USER_DIR.
+overridden with UDEV_DIR, MODULES_LOAD_DIR, DBUS_DIR, POLKIT_ACTIONS_DIR, SYSTEMD_SYSTEM_DIR and SYSTEMD_USER_DIR.
 EOF
 }
 
@@ -106,7 +104,8 @@ if ((UNINSTALL)); then
     rm -f "$MODULES_LOAD_DIR/ucabled.conf"
     rm -f "$DBUS_DIR/org.ucabled.conf"
     rm -f "$POLKIT_ACTIONS_DIR/org.ucabled.policy"
-    rm -f "$POLKIT_RULES_DIR/50-ucabled-bluez.rules"
+    # Installed by versions that shipped a BlueZ polkit rule.
+    rm -f "${POLKIT_RULES_DIR:-/etc/polkit-1/rules.d}/50-ucabled-bluez.rules"
     for b in "${BINARIES[@]}"; do
         rm -f "$BIN_DIR/$b"
     done
@@ -168,10 +167,6 @@ install -m 0644 -o root -g root "$DIST/org.ucabled.conf" "$DBUS_DIR/org.ucabled.
 install -d -m 0755 "$POLKIT_ACTIONS_DIR"
 install -m 0644 -o root -g root "$DIST/org.ucabled.policy" \
     "$POLKIT_ACTIONS_DIR/org.ucabled.policy"
-
-install -d -m 0755 "$POLKIT_RULES_DIR"
-install -m 0644 -o root -g root "$DIST/50-ucabled-bluez.rules" \
-    "$POLKIT_RULES_DIR/50-ucabled-bluez.rules"
 
 # The unit files bake in the default /usr/local/bin; rewrite them for the
 # chosen prefix.

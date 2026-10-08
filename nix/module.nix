@@ -37,16 +37,20 @@ let
     else
       helperExe;
 
-  # D-Bus system policy: the daemon owns org.ucabled and may call the session
-  # agent back (to a unique name); local users may call the daemon.
+  # D-Bus system policy: the daemon owns org.ucabled and only needs to call
+  # the bus driver, polkit, BlueZ, and the session agents (unique names, so
+  # matched by interface). Signals and requested replies are already allowed
+  # by the default policy; only method calls are opened here.
   dbusPolicy = pkgs.writeTextDir "share/dbus-1/system.d/org.ucabled.conf" ''
     <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
      "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
     <busconfig>
       <policy user="ucabled">
         <allow own="org.ucabled"/>
-        <allow send_destination="*"/>
-        <allow receive_sender="*"/>
+        <allow send_destination="org.freedesktop.DBus" send_type="method_call"/>
+        <allow send_destination="org.freedesktop.PolicyKit1" send_type="method_call"/>
+        <allow send_destination="org.bluez" send_type="method_call"/>
+        <allow send_interface="org.ucabled.Agent1" send_type="method_call"/>
       </policy>
       <policy context="default">
         <allow send_destination="org.ucabled"/>
@@ -149,16 +153,8 @@ in
     services.dbus.packages = [ dbusPolicy ];
     environment.systemPackages = [ polkitAction ];
 
-    # Let the daemon drive the Bluetooth adapter even though it is not part of
-    # an active session.
-    security.polkit.extraConfig = ''
-      polkit.addRule(function(action, subject) {
-        if (action.id.indexOf("org.bluez.") === 0 && subject.user === "ucabled") {
-          return polkit.Result.YES;
-        }
-      });
-    '';
-
+    # BlueZ needs no polkit rule: it registers no polkit actions, and the
+    # D-Bus policy above already grants the daemon access to org.bluez.
     systemd.services.ucabled = {
       description = "Phone Passkey Bridge (virtual FIDO2 device relaying to a phone via caBLE v2)";
       # Wants, not Requires: the daemon must still start without Bluetooth.
