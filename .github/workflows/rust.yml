@@ -1,0 +1,64 @@
+name: Rust
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build and test
+
+    # Pinned rather than ubuntu-latest.  The flake supplies every dependency,
+    # so the image only matters through the host tools Nix itself needs.
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # The flake carries the dependencies the package and the development
+    # shell need, gtk4-layer-shell among them, so CI builds in the same
+    # environment a developer uses instead of assembling one of its own.
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+
+    - name: Build the package
+      run: nix build .#ucabled -L
+
+    # Only a push to master publishes.  A pull request must never be able to
+    # have its own artifact signed and served to everyone else.
+    - name: Publish to Cachix
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      env:
+        CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      run: nix run nixpkgs#cachix -- push ucabled "$(nix build .#ucabled --no-link --print-out-paths)"
+
+    - name: Check formatting
+      run: nix develop --command cargo fmt --all --check
+
+    - name: Lint
+      run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
+
+    - name: Run tests
+      run: nix develop --command cargo test --locked
+
+    - name: Check the libadwaita feature
+      run: nix develop --command cargo check --locked --features adwaita
+
+    - name: Check the experimental l2cap feature
+      run: nix develop --command cargo check --locked --features l2cap
