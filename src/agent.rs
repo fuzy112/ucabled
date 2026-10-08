@@ -330,9 +330,8 @@ fn build_crossroads(
                             Ok(authorized) => authorized,
                             Err(e) => {
                                 tracing::warn!("polkit check failed: {e:#}");
-                                return ctx.reply(Err(MethodErr::failed(
-                                    &"authorization check failed",
-                                )));
+                                return ctx
+                                    .reply(Err(MethodErr::failed(&"authorization check failed")));
                             }
                         };
                         let Some(uid) = authorized else {
