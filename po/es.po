@@ -39,3 +39,9 @@ msgstr "Seguir usando la clave de seguridad"
 
 msgid "Use phone"
 msgstr "Usar el teléfono"
+
+msgid "Scan with your phone\nto authenticate with passkeys"
+msgstr "Escanea con tu teléfono\npara autenticarte con claves de acceso"
+
+msgid "Scan with your phone\nto store a passkey"
+msgstr "Escanea con tu teléfono\npara guardar una clave de acceso"

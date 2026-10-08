@@ -27,14 +27,16 @@ const DIGIT_CHUNK_DIGITS: usize = 17;
 /// Bits in a chunk hold over from the previous chunk (all but the last byte).
 const DIGIT_CHUNK_OVERFLOW_BITS: u32 = 56;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum RequestType {
     MakeCredential,
     GetAssertion,
 }
 
 impl RequestType {
-    fn as_str(self) -> &'static str {
+    /// The wire name used inside the QR contents (CTAP 2.2 §11.5.1, key 5)
+    /// and handed to helpers so they can tell the two commands apart.
+    pub fn as_str(self) -> &'static str {
         match self {
             RequestType::MakeCredential => "mc",
             RequestType::GetAssertion => "ga",

@@ -39,3 +39,9 @@ msgstr "继续使用安全密钥"
 
 msgid "Use phone"
 msgstr "使用手机"
+
+msgid "Scan with your phone\nto authenticate with passkeys"
+msgstr "用手机扫描\n使用通行密钥认证"
+
+msgid "Scan with your phone\nto store a passkey"
+msgstr "用手机扫描\n保存通行密钥"

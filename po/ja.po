@@ -39,3 +39,9 @@ msgstr "セキュリティキーを使い続ける"
 
 msgid "Use phone"
 msgstr "スマートフォンを使用"
+
+msgid "Scan with your phone\nto authenticate with passkeys"
+msgstr "スマートフォンでスキャン\nパスキーで認証します"
+
+msgid "Scan with your phone\nto store a passkey"
+msgstr "スマートフォンでスキャン\nパスキーを保存します"

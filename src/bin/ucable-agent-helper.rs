@@ -49,6 +49,37 @@ fn localedir() -> &'static str {
     option_env!("UCABLED_LOCALEDIR").unwrap_or("/usr/local/share/locale")
 }
 
+/// Which CTAP command the daemon is relaying, as handed over on argv.  It only
+/// decides how the QR page phrases the scan, so a value we do not know — or
+/// none at all — falls back to the plain caption.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestKind {
+    MakeCredential,
+    GetAssertion,
+}
+
+impl RequestKind {
+    /// The contract spells the values `mc` / `ga`, mirroring the request type
+    /// inside the caBLE URL (CTAP 2.2 §11.5.1, key 5).
+    fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "mc" => Some(RequestKind::MakeCredential),
+            "ga" => Some(RequestKind::GetAssertion),
+            _ => None,
+        }
+    }
+}
+
+/// The caption under the QR code: what scanning does, in the terms of the
+/// command that is waiting on the other end.
+fn scan_caption(request_type: Option<RequestKind>) -> &'static str {
+    match request_type {
+        Some(RequestKind::MakeCredential) => "Scan with your phone\nto store a passkey",
+        Some(RequestKind::GetAssertion) => "Scan with your phone\nto authenticate with passkeys",
+        None => "Scan with your phone",
+    }
+}
+
 #[derive(Clone)]
 struct Options {
     select: bool,
@@ -56,6 +87,7 @@ struct Options {
     rp: Option<String>,
     layer_shell: bool,
     url: Option<String>,
+    request_type: Option<RequestKind>,
 }
 
 fn parse_args() -> Options {
@@ -65,6 +97,7 @@ fn parse_args() -> Options {
         rp: None,
         layer_shell: env_truthy("UCABLED_HELPER_LAYER_SHELL"),
         url: None,
+        request_type: None,
     };
 
     let mut args = std::env::args().skip(1);
@@ -77,12 +110,19 @@ fn parse_args() -> Options {
                     opts.timeout = Duration::from_secs(secs);
                 }
             }
+            "--request-type" => {
+                if let Some(value) = args.next() {
+                    opts.request_type = RequestKind::from_wire(&value);
+                }
+            }
             _ => {
                 if let Some(secs) = arg
                     .strip_prefix("--timeout=")
                     .and_then(|v| v.parse::<u64>().ok())
                 {
                     opts.timeout = Duration::from_secs(secs);
+                } else if let Some(value) = arg.strip_prefix("--request-type=") {
+                    opts.request_type = RequestKind::from_wire(value);
                 } else if arg.starts_with("FIDO:/") && opts.url.is_none() {
                     // Historical tolerance; the contract sends the URL on stdin.
                     opts.url = Some(arg);
@@ -412,6 +452,14 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     content.set_margin_start(24);
     content.set_margin_end(24);
 
+    // A normal window names the request in its title bar; only a layer surface,
+    // which draws no title bar at all, needs the card to say it.
+    if layer_shell {
+        let headline = gtk::Label::new(Some(&tr("Passkey request")));
+        headline.add_css_class("title-3");
+        content.append(&headline);
+    }
+
     if let Some(rp) = &opts.rp {
         let rp_label = gtk::Label::new(Some(rp));
         rp_label.add_css_class("title-1");
@@ -431,8 +479,10 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     picture.set_can_shrink(true);
     picture.set_size_request(260, 260);
     qr_page.append(&picture);
-    let caption = gtk::Label::new(Some(&tr("Scan with your phone")));
+    let caption = gtk::Label::new(Some(&tr(scan_caption(opts.request_type))));
     caption.add_css_class("title-3");
+    caption.set_wrap(true);
+    caption.set_justify(gtk::Justification::Center);
     qr_page.append(&caption);
     stack.add_named(&qr_page, Some("qr"));
 
@@ -581,7 +631,15 @@ fn bind_escape(window: &gtk::ApplicationWindow) {
 
 fn activate(app: &gtk::Application, opts: Options) {
     let window = new_app_window(app);
-    window.set_title(Some("ucabled"));
+    // The title is what the compositor and taskbar show. In QR mode it should
+    // say what the window is asking for; a layer surface draws no title bar,
+    // which is why the card carries its own headline there.
+    let title = if opts.select {
+        "ucabled".to_string()
+    } else {
+        tr("Passkey request")
+    };
+    window.set_title(Some(title.as_str()));
     window.set_resizable(false);
 
     bind_escape(&window);
@@ -614,4 +672,34 @@ fn main() {
         .unwrap_or_else(|| "ucable-agent-helper".to_string());
     let code = app.run_with_args(&[argv0]);
     exit(code.get() as i32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caption_names_the_command_being_relayed() {
+        assert_eq!(
+            scan_caption(RequestKind::from_wire("ga")),
+            "Scan with your phone\nto authenticate with passkeys"
+        );
+        assert_eq!(
+            scan_caption(RequestKind::from_wire("mc")),
+            "Scan with your phone\nto store a passkey"
+        );
+    }
+
+    #[test]
+    fn unknown_or_missing_request_type_keeps_the_plain_caption() {
+        assert_eq!(scan_caption(None), "Scan with your phone");
+        assert_eq!(
+            scan_caption(RequestKind::from_wire("")),
+            "Scan with your phone"
+        );
+        assert_eq!(
+            scan_caption(RequestKind::from_wire("weird")),
+            "Scan with your phone"
+        );
+    }
 }

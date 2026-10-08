@@ -3,6 +3,7 @@
 use std::io::Write;
 
 use crate::agent::AgentClient;
+use crate::qr::RequestType;
 
 /// How the daemon asks the user to scan the QR code.
 ///
@@ -49,10 +50,17 @@ impl Notifier {
         }
     }
 
-    pub fn show(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
+    pub fn show(
+        &self,
+        tid: u64,
+        url: &str,
+        rp: Option<String>,
+        timeout_secs: u64,
+        request_type: RequestType,
+    ) {
         match self {
             Notifier::Terminal => print_qr_terminal(url),
-            Notifier::Agent(client) => client.prompt(tid, url, rp, timeout_secs),
+            Notifier::Agent(client) => client.prompt(tid, url, rp, timeout_secs, request_type),
         }
     }
 

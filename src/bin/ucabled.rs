@@ -343,6 +343,7 @@ async fn daemon_loop(
                                                 url,
                                                 rp,
                                                 ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
+                                                request_type,
                                             )
                                         },
                                         move || notifier3.phone_found(),

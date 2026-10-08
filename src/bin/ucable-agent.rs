@@ -143,11 +143,27 @@ fn build_crossroads(
             let prompt_window = qr_window.clone();
             builder.method(
                 "Prompt",
-                ("tid", "url", "rp", "timeout"),
+                ("tid", "url", "rp", "timeout", "request_type"),
                 (),
-                move |_ctx, _: &mut (), (tid, url, rp, timeout): (u64, String, String, u64)| {
+                move |_ctx,
+                      _: &mut (),
+                      (tid, url, rp, timeout, request_type): (
+                    u64,
+                    String,
+                    String,
+                    u64,
+                    String,
+                )| {
                     let rp = (!rp.is_empty()).then_some(rp);
-                    show_window(&prompt_window, &cancel_tx, tid, &url, rp, timeout);
+                    show_window(
+                        &prompt_window,
+                        &cancel_tx,
+                        tid,
+                        &url,
+                        rp,
+                        timeout,
+                        &request_type,
+                    );
                     Ok(())
                 },
             );
@@ -351,6 +367,7 @@ fn show_window(
     url: &str,
     rp: Option<String>,
     timeout_secs: u64,
+    request_type: &str,
 ) {
     let Some(helper) = helper_path() else {
         tracing::warn!("ucable-agent-helper not found next to the agent; cannot show the QR code");
@@ -364,6 +381,11 @@ fn show_window(
         .arg("--timeout")
         .arg(timeout_secs.to_string())
         .stdin(Stdio::piped());
+    if !request_type.is_empty() {
+        // Says which command is being relayed so the helper can phrase the QR
+        // page; a helper that does not know the flag shows a plain caption.
+        command.arg("--request-type").arg(request_type);
+    }
     // The URL carries the transaction secret, so it goes over the pipe.
     let cancel_tx = cancel_tx.clone();
     open_window(

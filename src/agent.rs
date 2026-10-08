@@ -28,6 +28,8 @@ use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use crate::qr::RequestType;
+
 pub const BUS_NAME: &str = "org.ucabled";
 pub const MANAGER_PATH: &str = "/org/ucabled/Manager";
 pub const MANAGER_INTERFACE: &str = "org.ucabled.Manager1";
@@ -96,6 +98,10 @@ pub enum AgentCommand {
         url: String,
         rp: Option<String>,
         timeout_secs: u64,
+        /// Which CTAP command is being relayed.  Not secret, unlike `url`,
+        /// so it may cross to the agent and on to the helper, which phrases
+        /// the QR page with it.
+        request_type: RequestType,
     },
     /// Ask the user to pick the phone when another authenticator is present.
     Select {
@@ -138,13 +144,21 @@ impl AgentClient {
         guard.current.as_ref().map(|_| guard.generation)
     }
 
-    pub fn prompt(&self, tid: u64, url: &str, rp: Option<String>, timeout_secs: u64) {
+    pub fn prompt(
+        &self,
+        tid: u64,
+        url: &str,
+        rp: Option<String>,
+        timeout_secs: u64,
+        request_type: RequestType,
+    ) {
         self.active_tid.store(tid, Ordering::SeqCst);
         let _ = self.tx.send(AgentCommand::Prompt {
             tid,
             url: url.to_string(),
             rp,
             timeout_secs,
+            request_type,
         });
     }
 
@@ -518,12 +532,19 @@ async fn dispatch_commands(
                 url,
                 rp,
                 timeout_secs,
+                request_type,
             } => {
                 proxy
                     .method_call(
                         AGENT_INTERFACE,
                         "Prompt",
-                        (tid, url, rp.unwrap_or_default(), timeout_secs),
+                        (
+                            tid,
+                            url,
+                            rp.unwrap_or_default(),
+                            timeout_secs,
+                            request_type.as_str(),
+                        ),
                     )
                     .await
             }

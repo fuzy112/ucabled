@@ -25,12 +25,14 @@ set -eu
 
 mode=qr
 rp=""
+rtype=""
 timeout_s=300
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --select) mode=select ;;
         --timeout) timeout_s=$2; shift ;;
+        --request-type) rtype=$2; shift ;;
         FIDO:/*) ;; # legacy tolerance: the URL belongs on stdin, ignore
         *) rp=$1 ;;
     esac
@@ -61,7 +63,7 @@ cat <&0 >"$fifo" &
 exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
     bash -c '
         set -u
-        fifo=$1 rp=$2 timeout_s=$3
+        fifo=$1 rp=$2 timeout_s=$3 rtype=${4:-}
         exec 3<"$fifo"
         rm -f "$fifo"
         IFS= read -r url <&3
@@ -78,7 +80,12 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
         clear
         qrencode -t ANSIUTF8 -m 2 -- "$url"
         [ -n "$rp" ] && printf "\n  %s\n" "$rp"
-        printf "\n  Scan with your phone. Press any key to cancel.\n"
+        printf "\n  Scan with your phone\n"
+        case "$rtype" in
+            mc) printf "  to store a passkey\n" ;;
+            ga) printf "  to authenticate with passkeys\n" ;;
+        esac
+        printf "\n  Press any key to cancel.\n"
         (
             while IFS= read -r line <&3; do
                 [ "$line" = found ] &&
@@ -89,4 +96,4 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
         read -rsn1 -t "$timeout_s" || :
         kill "$watcher" 2>/dev/null || :
         exit 1
-    ' _ "$fifo" "$rp" "$timeout_s"
+    ' _ "$fifo" "$rp" "$timeout_s" "$rtype"

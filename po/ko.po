@@ -39,3 +39,9 @@ msgstr "보안 키 계속 사용"
 
 msgid "Use phone"
 msgstr "휴대폰 사용"
+
+msgid "Scan with your phone\nto authenticate with passkeys"
+msgstr "휴대폰으로 스캔하세요\n패스키로 인증합니다"
+
+msgid "Scan with your phone\nto store a passkey"
+msgstr "휴대폰으로 스캔하세요\n패스키를 저장합니다"
