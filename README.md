@@ -46,8 +46,9 @@ title the QR window.
 
 ## Status
 
-- Verified on NixOS + Firefox + iPhone (iCloud Keychain), both registration and
-  sign-in.
+- Verified on NixOS + Firefox + iPhone, both registration and sign-in, with
+  all three tested iOS passkey providers: iCloud Keychain, Google Password
+  Manager and Strongbox.
 - Android (Google Password Manager) speaks the same protocol and is expected to
   work, but has not been tested on real hardware.
 - Requires Linux (`/dev/uhid`), BlueZ/Bluetooth enabled, and a browser that can
@@ -275,7 +276,8 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
 
 ## Known limitations
 
-- **Only iOS has been tested**; Android is untested. State-assisted linking
+- **Only iOS has been tested** (iCloud Keychain, Google Password Manager and
+  Strongbox); Android is untested. State-assisted linking
   ("remember this computer", scan-free reconnect) is not supported on iOS and
   is shelved; see `docs/linking.md`.
 - Only the active local session gets a window; a pure TTY or SSH prompt is out
