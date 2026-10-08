@@ -17,6 +17,8 @@ use anyhow::{Context, Result};
 use p256::SecretKey;
 use rand::rngs::OsRng;
 
+use crate::secure_erase;
+
 pub const IDENTITY_FILE_NAME: &str = "identity.key";
 
 /// Fallback state directory when systemd's `$STATE_DIRECTORY` is unset
@@ -41,15 +43,22 @@ pub fn state_dir() -> PathBuf {
 pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
     let path = dir.join(IDENTITY_FILE_NAME);
     match fs::read(&path) {
-        Ok(bytes) => SecretKey::from_slice(&bytes)
-            .with_context(|| format!("invalid identity key in {}", path.display())),
+        Ok(mut bytes) => {
+            // Do not leave the key in a heap buffer; wipe it once parsed.
+            let key = SecretKey::from_slice(&bytes)
+                .with_context(|| format!("invalid identity key in {}", path.display()));
+            secure_erase(&mut bytes);
+            key
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let key = SecretKey::random(&mut OsRng);
             fs::create_dir_all(dir)
                 .with_context(|| format!("creating state directory {}", dir.display()))?;
-            let bytes = key.to_bytes();
-            write_private(&path, &bytes)
-                .with_context(|| format!("writing identity key to {}", path.display()))?;
+            let mut bytes = key.to_bytes();
+            let written = write_private(&path, &bytes)
+                .with_context(|| format!("writing identity key to {}", path.display()));
+            secure_erase(&mut bytes[..]);
+            written?;
             tracing::info!(path = %path.display(), "generated a new persistent identity key");
             Ok(key)
         }
@@ -59,21 +68,40 @@ pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
 
 /// Write the key atomically (rename into place) with owner-only permissions;
 /// the daemon's UMask is 0077, but do not rely on it.
+///
+/// The temporary file gets a random name so a leftover from a crashed write
+/// cannot wedge every later start with `AlreadyExists`; `create_new` keeps the
+/// `O_EXCL` guarantee against a squatting file or symlink.
 #[cfg(unix)]
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let tmp = path.with_extension("tmp");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&tmp, path)
+    let mut last = None;
+    for _ in 0..16 {
+        let tmp = path.with_extension(format!("tmp.{:016x}", rand::random::<u64>()));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                last = Some(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let write = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let result = write.and_then(|()| fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        return result;
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("no temporary name")))
 }
 
 #[cfg(not(unix))]
@@ -103,6 +131,23 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ignores_a_stale_temporary_file_from_a_crashed_write() {
+        let dir =
+            std::env::temp_dir().join(format!("ucabled-identity-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Both the old fixed temp name and a random-looking leftover must not
+        // stop a fresh key from being created.
+        fs::write(dir.join("identity.tmp"), b"stale").unwrap();
+        fs::write(dir.join("identity.tmp.deadbeef"), b"stale").unwrap();
+
+        let key = load_or_create(&dir).unwrap();
+        assert_eq!(load_or_create(&dir).unwrap().to_bytes(), key.to_bytes());
 
         fs::remove_dir_all(&dir).unwrap();
     }
