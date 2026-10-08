@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::fs::{File, OpenOptions};
-use std::io;
-use std::os::unix::io::AsRawFd;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 
 use tokio::io::unix::AsyncFd;
 
@@ -72,8 +72,8 @@ impl UhidDevice {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
+            .custom_flags(libc::O_NONBLOCK)
             .open("/dev/uhid")?;
-        set_nonblocking(&file)?;
         let dev = Self {
             fd: AsyncFd::new(file)?,
         };
@@ -104,27 +104,16 @@ impl UhidDevice {
         u[CREATE2_RD_DATA_OFFSET..CREATE2_RD_DATA_OFFSET + report_descriptor.len()]
             .copy_from_slice(report_descriptor);
 
-        write_all_blocking(self.fd.get_ref(), &event)
+        write_all(self.fd.get_ref(), &event)
     }
 
     pub async fn next_event(&self) -> io::Result<UhidEvent> {
         let mut buf = [0u8; UHID_EVENT_SIZE];
         loop {
             let mut guard = self.fd.readable().await?;
-            let n = match guard.try_io(|inner| {
-                let raw = unsafe {
-                    libc::read(
-                        inner.as_raw_fd(),
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                    )
-                };
-                if raw < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(raw as usize)
-                }
-            }) {
+            // The fd is O_NONBLOCK, so a WouldBlock error tells try_io to
+            // keep waiting rather than fail the read.
+            let n = match guard.try_io(|inner| inner.get_ref().read(&mut buf)) {
                 Ok(result) => result?,
                 Err(_would_block) => continue,
             };
@@ -169,7 +158,7 @@ impl UhidDevice {
         event[INPUT2_DATA_OFFSET..INPUT2_DATA_OFFSET + report.len()].copy_from_slice(report);
 
         let mut guard = self.fd.writable().await?;
-        match guard.try_io(|inner| write_all_blocking(inner.get_ref(), &event)) {
+        match guard.try_io(|inner| write_all(inner.get_ref(), &event)) {
             Ok(result) => result,
             Err(_would_block) => Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -179,39 +168,11 @@ impl UhidDevice {
     }
 }
 
-fn set_nonblocking(file: &File) -> io::Result<()> {
-    let fd = file.as_raw_fd();
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
-}
-
-fn write_all_blocking(file: &File, mut data: &[u8]) -> io::Result<()> {
-    while !data.is_empty() {
-        let n = unsafe {
-            libc::write(
-                file.as_raw_fd(),
-                data.as_ptr() as *const libc::c_void,
-                data.len(),
-            )
-        };
-        if n < 0 {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(err);
-        }
-        data = &data[n as usize..];
-    }
-    Ok(())
+/// Write the whole event. WouldBlock surfaces as an error: callers either
+/// fail fast (create) or report it (input reports), matching the previous
+/// raw-write behaviour.
+fn write_all(mut file: &File, data: &[u8]) -> io::Result<()> {
+    file.write_all(data)
 }
 
 const _ASSERT_UNION_FITS: () = assert!(UHID_EVENT_SIZE >= 4376);
