@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use dbus::arg::{PropMap, RefArg, Variant};
@@ -52,6 +52,46 @@ const REGISTER_TIMEOUT: Duration = Duration::from_secs(25);
 /// polkit check timeout for the per-Prompt re-check.  Short and fail-closed,
 /// so a hung polkit cannot stall a transaction for long.
 const RECHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Minimum spacing between RegisterAgent attempts from one sender.  Every
+/// attempt costs a polkit round trip and any local uid may call, so an
+/// unauthenticated flood would otherwise spam polkitd.  Legitimate agents
+/// register once per session; the agent's 2s retry loop stays well clear of
+/// this interval.
+const REGISTER_MIN_INTERVAL: Duration = Duration::from_secs(1);
+/// Bound on remembered senders, so a crowd of unique names cannot grow the
+/// limiter without bound; at capacity the oldest entry is evicted.
+const REGISTER_LIMITER_MAX: usize = 64;
+
+/// Per-sender rate limit for RegisterAgent.
+#[derive(Default)]
+struct RegisterLimiter {
+    last: HashMap<String, Instant>,
+}
+
+impl RegisterLimiter {
+    /// Whether `sender` may attempt a registration at `now`; an allowed
+    /// attempt is recorded.
+    fn check(&mut self, sender: &str, now: Instant) -> bool {
+        if let Some(last) = self.last.get(sender) {
+            if now.duration_since(*last) < REGISTER_MIN_INTERVAL {
+                return false;
+            }
+        }
+        if !self.last.contains_key(sender) && self.last.len() >= REGISTER_LIMITER_MAX {
+            if let Some(oldest) = self
+                .last
+                .iter()
+                .min_by_key(|(_, at)| *at)
+                .map(|(name, _)| name.clone())
+            {
+                self.last.remove(&oldest);
+            }
+        }
+        self.last.insert(sender.to_string(), now);
+        true
+    }
+}
 
 /// A registered UI agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +357,7 @@ fn build_crossroads(
     select_tx: mpsc::Sender<(u64, bool)>,
     conn: Arc<SyncConnection>,
 ) -> Crossroads {
+    let limiter = Arc::new(Mutex::new(RegisterLimiter::default()));
     let mut crossroads = Crossroads::new();
     // Registration authorizes through polkit over the async bus API, so the
     // crossroads must be able to spawn the method's future.
@@ -331,6 +372,7 @@ fn build_crossroads(
         move |builder| {
             let register_slot = slot.clone();
             let register_conn = conn.clone();
+            let register_limiter = limiter.clone();
             builder.method_with_cr_async(
                 "RegisterAgent",
                 ("path",),
@@ -338,10 +380,18 @@ fn build_crossroads(
                 move |mut ctx, _cr, (path,): (Path<'static>,)| {
                     let slot = register_slot.clone();
                     let conn = register_conn.clone();
+                    let limiter = register_limiter.clone();
                     async move {
                         let Some(sender) = ctx.message().sender().map(|s| s.to_string()) else {
                             return ctx.reply(Err(MethodErr::failed(&"missing sender")));
                         };
+                        if !limiter.lock().unwrap().check(&sender, Instant::now()) {
+                            tracing::warn!(%sender, "agent registration rate-limited");
+                            return ctx.reply(Err(MethodErr::from((
+                                "org.freedesktop.DBus.Error.LimitsExceeded",
+                                "too many registration attempts",
+                            ))));
+                        }
                         let authorized = match authorize(&conn, &sender, REGISTER_TIMEOUT).await {
                             Ok(authorized) => authorized,
                             Err(e) => {
@@ -785,5 +835,31 @@ mod tests {
             Some(CancelRequest::AgentGone(42))
         ));
         assert!(slot.lock().unwrap().current.is_none());
+    }
+
+    #[test]
+    fn register_limiter_throttles_per_sender() {
+        let mut limiter = RegisterLimiter::default();
+        let t0 = Instant::now();
+        assert!(limiter.check(":1.1", t0));
+        assert!(!limiter.check(":1.1", t0 + Duration::from_millis(100)));
+        // Another sender is unaffected.
+        assert!(limiter.check(":1.2", t0 + Duration::from_millis(100)));
+        // After the interval the same sender may try again, and a denied
+        // attempt does not push the window out.
+        assert!(limiter.check(":1.1", t0 + REGISTER_MIN_INTERVAL));
+    }
+
+    #[test]
+    fn register_limiter_bounds_remembered_senders() {
+        let mut limiter = RegisterLimiter::default();
+        let t0 = Instant::now();
+        for i in 0..REGISTER_LIMITER_MAX {
+            assert!(limiter.check(&format!(":1.{i}"), t0));
+        }
+        assert_eq!(limiter.last.len(), REGISTER_LIMITER_MAX);
+        // A new sender evicts the oldest entry instead of growing the map.
+        assert!(limiter.check(":1.new", t0));
+        assert_eq!(limiter.last.len(), REGISTER_LIMITER_MAX);
     }
 }
