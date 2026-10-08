@@ -218,3 +218,234 @@ fn respond_inner(
         noise.handshake_hash(),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PSK: [u8; 32] = [7u8; 32];
+
+    fn identity() -> (SecretKey, Vec<u8>) {
+        let secret = SecretKey::random(&mut OsRng);
+        let public = uncompressed_point(&secret.public_key());
+        (secret, public)
+    }
+
+    fn qr_initiator(psk: &[u8; 32], identity: &SecretKey) -> (HandshakeInitiator, Vec<u8>) {
+        let mut init = HandshakeInitiator::new_qr(psk, identity);
+        let msg = init.build_initial_message();
+        (init, msg)
+    }
+
+    /// A completed QR handshake: a fresh initiator plus the honest
+    /// responder's reply, not yet consumed by `process_response`.
+    fn qr_init_and_response() -> (HandshakeInitiator, Vec<u8>) {
+        let (secret, public) = identity();
+        let (init, msg) = qr_initiator(&PSK, &secret);
+        let (response, _phone, _hh) = respond_qr(&PSK, &public, &msg).unwrap();
+        (init, response)
+    }
+
+    #[test]
+    fn qr_roundtrip_derives_a_working_channel() {
+        let (secret, public) = identity();
+        let (init, msg) = qr_initiator(&PSK, &secret);
+        let (response, mut phone, hh_phone) = respond_qr(&PSK, &public, &msg).unwrap();
+        let (mut desktop, hh_desktop) = init.process_response(&response).unwrap();
+        assert_eq!(hh_desktop, hh_phone);
+        let ct = desktop.encrypt(b"ping").unwrap();
+        assert_eq!(phone.decrypt(&ct).unwrap(), b"ping");
+        let ct = phone.encrypt(b"pong").unwrap();
+        assert_eq!(desktop.decrypt(&ct).unwrap(), b"pong");
+    }
+
+    #[test]
+    fn paired_roundtrip_derives_a_working_channel() {
+        let (phone_secret, phone_public) = identity();
+        let mut init = HandshakeInitiator::new_paired(&PSK, &phone_public);
+        let msg = init.build_initial_message();
+        let (response, mut phone, hh_phone) = respond_paired(&PSK, &phone_secret, &msg).unwrap();
+        let (mut desktop, hh_desktop) = init.process_response(&response).unwrap();
+        assert_eq!(hh_desktop, hh_phone);
+        let ct = phone.encrypt(b"pong").unwrap();
+        assert_eq!(desktop.decrypt(&ct).unwrap(), b"pong");
+    }
+
+    #[test]
+    fn wrong_psk_fails_whichever_side_has_it() {
+        let wrong = [9u8; 32];
+        // The initial message is encrypted under the psk, so a responder
+        // with a different psk cannot decrypt it — regardless of which
+        // side is the wrong one.
+        let (secret, public) = identity();
+        let (_init, msg) = qr_initiator(&wrong, &secret);
+        assert!(respond_qr(&PSK, &public, &msg).is_none());
+        let (_init, msg) = qr_initiator(&PSK, &secret);
+        assert!(respond_qr(&wrong, &public, &msg).is_none());
+
+        // Same for the paired (NKpsk0) flow.
+        let (phone_secret, phone_public) = identity();
+        let mut init = HandshakeInitiator::new_paired(&wrong, &phone_public);
+        let msg = init.build_initial_message();
+        assert!(respond_paired(&PSK, &phone_secret, &msg).is_none());
+    }
+
+    #[test]
+    fn wrong_identity_public_key_fails_the_responder() {
+        // The QR carries the desktop identity; responding against a
+        // different identity changes the handshake hash and the se key.
+        let (secret, _public) = identity();
+        let (_other, other_public) = identity();
+        let (_init, msg) = qr_initiator(&PSK, &secret);
+        assert!(respond_qr(&PSK, &other_public, &msg).is_none());
+    }
+
+    #[test]
+    fn tampered_initial_message_is_rejected() {
+        let (secret, public) = identity();
+        let (_init, msg) = qr_initiator(&PSK, &secret);
+
+        // Flip a ciphertext byte: the tag no longer verifies.
+        let mut bad = msg.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert!(respond_qr(&PSK, &public, &bad).is_none());
+
+        // Swap in a different *valid* ephemeral point: ee and the hash
+        // change, so decryption still fails.
+        let (_other, other_public) = identity();
+        let mut bad = other_public;
+        bad.extend_from_slice(&msg[P256_X962_LENGTH..]);
+        assert!(respond_qr(&PSK, &public, &bad).is_none());
+    }
+
+    #[test]
+    fn malformed_initial_message_is_rejected() {
+        let (secret, public) = identity();
+        let (_init, msg) = qr_initiator(&PSK, &secret);
+
+        // Shorter than a point.
+        assert!(respond_qr(&PSK, &public, &msg[..P256_X962_LENGTH - 1]).is_none());
+        // A point with no ciphertext at all.
+        assert!(respond_qr(&PSK, &public, &msg[..P256_X962_LENGTH]).is_none());
+        // Extra trailing garbage becomes part of the ciphertext.
+        let mut bad = msg.clone();
+        bad.push(0);
+        assert!(respond_qr(&PSK, &public, &bad).is_none());
+        // Not a curve point at all.
+        let mut bad = vec![0u8; P256_X962_LENGTH];
+        bad.extend_from_slice(&msg[P256_X962_LENGTH..]);
+        assert!(respond_qr(&PSK, &public, &bad).is_none());
+    }
+
+    #[test]
+    fn tampered_response_is_rejected() {
+        // Flip a ciphertext byte.
+        let (init, response) = qr_init_and_response();
+        let mut bad = response.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert!(init.process_response(&bad).is_none());
+
+        // Swap in a different *valid* ephemeral point.
+        let (init, response) = qr_init_and_response();
+        let (_other, other_public) = identity();
+        let mut bad = other_public;
+        bad.extend_from_slice(&response[P256_X962_LENGTH..]);
+        assert!(init.process_response(&bad).is_none());
+
+        // Truncated and extended responses fail the length check.
+        let (init, response) = qr_init_and_response();
+        assert!(init
+            .process_response(&response[..RESPONSE_SIZE - 1])
+            .is_none());
+        let (init, response) = qr_init_and_response();
+        let mut bad = response.clone();
+        bad.push(0);
+        assert!(init.process_response(&bad).is_none());
+
+        // Not a curve point at all.
+        let (init, response) = qr_init_and_response();
+        let mut bad = vec![0u8; P256_X962_LENGTH];
+        bad.extend_from_slice(&response[P256_X962_LENGTH..]);
+        assert!(init.process_response(&bad).is_none());
+    }
+
+    #[test]
+    fn a_response_from_another_transaction_is_rejected() {
+        // Replaying a response into a different initiator must fail: ee
+        // does not match.
+        let (init_a, _response_a) = qr_init_and_response();
+        let (init_b, response_b) = qr_init_and_response();
+        assert!(init_a.process_response(&response_b).is_none());
+        let (init_a, response_a) = qr_init_and_response();
+        assert!(init_b.process_response(&response_a).is_none());
+        let _ = init_a;
+    }
+
+    #[test]
+    fn qr_and_paired_handshakes_do_not_mix() {
+        // The protocol name is hashed in first, so a responder of the
+        // other flow cannot even decrypt the initial message.
+        let (desktop_secret, desktop_public) = identity();
+        let (phone_secret, phone_public) = identity();
+
+        let (_init, qr_msg) = qr_initiator(&PSK, &desktop_secret);
+        assert!(respond_paired(&PSK, &phone_secret, &qr_msg).is_none());
+
+        let mut paired_init = HandshakeInitiator::new_paired(&PSK, &phone_public);
+        let paired_msg = paired_init.build_initial_message();
+        assert!(respond_qr(&PSK, &desktop_public, &paired_msg).is_none());
+    }
+
+    #[test]
+    fn an_initial_message_with_a_payload_is_rejected() {
+        // The handshake messages must encrypt an empty payload. Build a
+        // syntactically valid initial message whose plaintext is not
+        // empty and check the responder refuses it.
+        let (desktop_secret, desktop_public) = identity();
+        let mut noise = Noise::new(KN_PSK0_PROTOCOL_NAME);
+        noise.mix_hash(&[1]);
+        noise.mix_hash(&desktop_public);
+        noise.mix_key_and_hash(&PSK);
+        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral_public = uncompressed_point(&ephemeral.public_key());
+        noise.mix_hash(&ephemeral_public);
+        noise.mix_key(&ephemeral_public);
+        let ct = noise.encrypt_and_hash(b"unexpected");
+        let mut msg = ephemeral_public;
+        msg.extend_from_slice(&ct);
+        let _ = desktop_secret;
+        assert!(respond_qr(&PSK, &desktop_public, &msg).is_none());
+    }
+
+    #[test]
+    fn a_response_with_a_payload_is_rejected() {
+        // Mirror image: an honest responder's state up to the response
+        // encryption, but with a non-empty payload. The initiator must
+        // refuse it.
+        let (desktop_secret, desktop_public) = identity();
+        let (init, msg) = qr_initiator(&PSK, &desktop_secret);
+
+        let (peer_point_bytes, ciphertext) = msg.split_at(P256_X962_LENGTH);
+        let mut noise = Noise::new(KN_PSK0_PROTOCOL_NAME);
+        noise.mix_hash(&[1]);
+        noise.mix_hash(&desktop_public);
+        noise.mix_key_and_hash(&PSK);
+        noise.mix_hash(peer_point_bytes);
+        noise.mix_key(peer_point_bytes);
+        assert_eq!(noise.decrypt_and_hash(ciphertext).unwrap(), b"");
+        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral_public = uncompressed_point(&ephemeral.public_key());
+        noise.mix_hash(&ephemeral_public);
+        noise.mix_key(&ephemeral_public);
+        let ee = ecdh(&ephemeral, peer_point_bytes).unwrap();
+        noise.mix_key(&ee);
+        let se = ecdh(&ephemeral, &desktop_public).unwrap();
+        noise.mix_key(&se);
+        let ct = noise.encrypt_and_hash(b"unexpected");
+        let mut response = ephemeral_public;
+        response.extend_from_slice(&ct);
+        assert!(init.process_response(&response).is_none());
+    }
+}
