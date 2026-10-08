@@ -3,6 +3,11 @@ name = "ucabled"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+description = "Virtual FIDO2 device that relays WebAuthn ceremonies to a phone via caBLE v2 (hybrid transport)"
+repository = "https://github.com/fuzy112/ucabled"
+readme = "README.md"
+keywords = ["fido2", "passkey", "cable", "webauthn", "bluetooth"]
+categories = ["authentication", "os::linux-apis"]
 
 [features]
 default = ["ble"]
@@ -26,6 +31,8 @@ required-features = ["ble"]
 anyhow = "1"
 futures = "0.3"
 hex = "0.4"
+# Pinned to 0.8: p256 0.13 is built on rand_core 0.6, and SecretKey::random
+# takes a rand_core 0.6 RNG, so a rand 0.9+ upgrade would not interoperate.
 rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -37,7 +44,15 @@ hmac = "0.12"
 aes = "0.8"
 aes-gcm = "0.10"
 
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = [
+  "macros",
+  "rt-multi-thread",
+  "time",
+  "sync",
+  "net",
+  "process",
+  "io-util",
+] }
 tokio-tungstenite = { version = "0.30", features = [
   "rustls-tls-webpki-roots",
 ] }
@@ -62,5 +77,4 @@ gtk4-layer-shell = "0.8"
 gettext-rs = "0.8"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
 proptest = "1"

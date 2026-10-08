@@ -11,7 +11,7 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "ucabled";
-  version = "0.1.0";
+  version = (lib.importTOML ../Cargo.toml).package.version;
 
   src = lib.cleanSource ./..;
   cargoLock.lockFile = ../Cargo.lock;
