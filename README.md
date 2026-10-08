@@ -93,6 +93,28 @@ The module configures everything:
 Run `nixos-rebuild switch`, then log out and back in (or run
 `systemctl --user start ucable-agent`) so the agent registers.
 
+### Binary cache
+
+`master` is published to `ucabled.cachix.org`, so Nix substitutes the package
+instead of building it. On NixOS:
+
+```nix
+nix.settings = {
+  extra-substituters = [ "https://ucabled.cachix.org" ];
+  extra-trusted-public-keys = [
+    "ucabled.cachix.org-1:iEDAC8e63hzBZ/HKtMibPzl6kvTnPblcFs4+C50XvwU="
+  ];
+};
+```
+
+Elsewhere `cachix use ucabled` writes the same two settings into
+`$HOME/.config/nix/nix.conf`.
+
+CI fills the cache on every push to `master`. Only the artifacts of this
+repository are cached — dependencies keep coming from `cache.nixos.org` — and
+substitution needs the same commit and the same `flake.lock`, so a locally
+modified tree is built as usual.
+
 ## Install (other distros)
 
 On a systemd distribution, build and run the installer:
