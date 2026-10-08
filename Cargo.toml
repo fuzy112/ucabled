@@ -14,6 +14,14 @@ l2cap = ["ble", "bluer/l2cap"]
 # uses plain GTK4 and stays desktop-neutral.
 adwaita = ["dep:adw"]
 
+# The daemon itself is useless without BLE: its only transaction path goes
+# through relay, which is BLE-gated.  Skip the binary in no-ble builds
+# instead of letting it fail to compile.
+[[bin]]
+name = "ucabled"
+path = "src/bin/ucabled.rs"
+required-features = ["ble"]
+
 [dependencies]
 anyhow = "1"
 futures = "0.3"

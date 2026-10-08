@@ -8,7 +8,6 @@
 //! has no suffix/PSM, the phone did not offer the BLE channel.
 
 use anyhow::Result;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,6 +24,7 @@ async fn run() -> Result<()> {
     use p256::SecretKey;
     use rand::rngs::OsRng;
     use rand::RngCore;
+    use std::time::Duration;
     use ucabled::kdf::{derive, Purpose};
     use ucabled::qr::{self, RequestType};
     use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};

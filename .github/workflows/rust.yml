@@ -57,6 +57,9 @@ jobs:
     - name: Run tests
       run: nix develop --command cargo test --locked
 
+    - name: Check without default features
+      run: nix develop --command cargo check --locked --no-default-features --all-targets
+
     - name: Check the libadwaita feature
       run: nix develop --command cargo check --locked --features adwaita
 
