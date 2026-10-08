@@ -272,10 +272,12 @@ async fn authorize(
     }
 
     let dbus = Proxy::new(DBUS_BUS, DBUS_PATH, Duration::from_secs(5), conn.clone());
+    // A failure here means we cannot tell which user we just authorized; do not
+    // register with a fabricated uid, refuse the registration instead.
     let (uid,): (u32,) = dbus
         .method_call(DBUS_INTERFACE, "GetConnectionUnixUser", (sender,))
         .await
-        .unwrap_or((u32::MAX,));
+        .context("GetConnectionUnixUser")?;
     Ok(Some(uid))
 }
 
@@ -343,7 +345,7 @@ fn build_crossroads(
                         let authorized = match authorize(&conn, &sender, REGISTER_TIMEOUT).await {
                             Ok(authorized) => authorized,
                             Err(e) => {
-                                tracing::warn!("polkit check failed: {e:#}");
+                                tracing::warn!("authorization check failed: {e:#}");
                                 return ctx
                                     .reply(Err(MethodErr::failed(&"authorization check failed")));
                             }
