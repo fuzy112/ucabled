@@ -5,7 +5,7 @@ const LINES = [
   "● ucabled.service — Phone Passkey Bridge",
   "   Active: active (relay) since boot",
   "$ ls -l /dev/uhid && bluetoothctl show | grep Powered",
-  "crw-rw----+ 1 root ucabled  uhid",
+  "crw-rw----+ 1 root root 236, 0 /dev/uhid",
   "   Powered: yes",
   "> load interface .......... 100%",
 ];

@@ -22,6 +22,8 @@
 
 html {
   scroll-behavior: smooth;
+  /* keep section titles clear of the fixed header on anchor jumps */
+  scroll-padding-top: 64px;
 }
 
 body {
