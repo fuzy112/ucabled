@@ -348,6 +348,11 @@ async fn daemon_loop(
                                 // iOS requires rp.name / user.displayName;
                                 // inject them when Firefox omitted them.
                                 let payload = ucabled::ctap::patch_makecredential(&payload);
+                                // OpenSSH reuses one fixed user handle for
+                                // every sk key; give each registration its
+                                // own so the phone does not replace the
+                                // previous passkey.
+                                let payload = ucabled::ctap::dissociate_ssh_user(&payload);
                                 // Firefox tags USB credentials with a
                                 // transports hint that some phones reject.
                                 let payload = ucabled::ctap::strip_transport_hints(&payload);

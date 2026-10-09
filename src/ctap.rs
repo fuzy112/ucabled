@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::cbor;
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 /// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
 /// identity consistent across daemon restarts; the real attestation AAGUID
@@ -461,6 +463,109 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
     result.unwrap_or_else(|| command.to_vec())
 }
 
+/// OpenSSH hardcodes `rp.id = "ssh:"` and the user entity `openssh`/`openssh`
+/// for every sk key. Synced passkey stores (e.g. iCloud Keychain) keep one
+/// passkey per (rpId, userHandle), so a second `ssh-keygen` through the same
+/// phone silently *replaces* the first passkey, orphaning the existing key
+/// handle files. For this fixed RP only, rewrite the user entity with a fresh
+/// random handle and a distinguishable label so each registration lands as a
+/// new passkey. OpenSSH never reads the user handle back, and the user entity
+/// is covered by neither clientDataHash nor attestation, so the rewrite is
+/// transparent. Never touch real WebAuthn RPs: there the user handle is the
+/// account binding. Returns the input unchanged for other RPs, non-parseable
+/// payloads, or a user entity without an "id".
+pub fn dissociate_ssh_user(command: &[u8]) -> Vec<u8> {
+    let Some((&CMD_MAKE_CREDENTIAL, params)) = command.split_first() else {
+        return command.to_vec();
+    };
+
+    let result = (|| -> Option<Vec<u8>> {
+        let mut c = cbor::Decoder::new(params);
+        let pairs = c.map_header()?;
+
+        let mut entries: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
+        let mut rp_is_ssh = false;
+        for _ in 0..pairs {
+            let key = c.uint()?;
+            let start = c.pos();
+            if key == MC_KEY_RP {
+                let inner_pairs = c.map_header()?;
+                for _ in 0..inner_pairs {
+                    let k = c.text()?;
+                    if k == "id" {
+                        rp_is_ssh = c.text()? == "ssh:";
+                    } else {
+                        c.skip_value()?;
+                    }
+                }
+            } else {
+                c.skip_value()?;
+            }
+            entries.push((key, start..c.pos()));
+        }
+        if !rp_is_ssh {
+            return None;
+        }
+
+        let mut handle = [0u8; 32];
+        OsRng.fill_bytes(&mut handle);
+        let label = format!("ssh:{}", hex::encode(&handle[..4]));
+
+        let mut out = vec![CMD_MAKE_CREDENTIAL];
+        cbor::map(&mut out, pairs);
+        let mut changed = false;
+        for (key, span) in entries {
+            cbor::uint(&mut out, key);
+            let value = &params[span.clone()];
+            if key == MC_KEY_USER {
+                let rewritten = rewrite_user_entity(value, &handle, &label);
+                changed |= rewritten.is_some();
+                out.extend_from_slice(rewritten.as_deref().unwrap_or(value));
+            } else {
+                out.extend_from_slice(value);
+            }
+        }
+        // Without a user.id the registration would still replace the stored
+        // passkey; fail safe and leave the request untouched.
+        changed.then_some(out)
+    })();
+
+    result.unwrap_or_else(|| command.to_vec())
+}
+
+/// Rebuild a user entity map with "id" replaced by `handle` and "name" /
+/// "displayName" replaced by `label`, preserving key order and every other
+/// field byte-for-byte. Returns None when the map has no "id".
+fn rewrite_user_entity(data: &[u8], handle: &[u8; 32], label: &str) -> Option<Vec<u8>> {
+    let mut c = cbor::Decoder::new(data);
+    let pairs = c.map_header()?;
+
+    let mut entries: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut has_id = false;
+    for _ in 0..pairs {
+        let k = c.text()?;
+        has_id |= k == "id";
+        let start = c.pos();
+        c.skip_value()?;
+        entries.push((k, start..c.pos()));
+    }
+    if !has_id {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    cbor::map(&mut out, entries.len() as u64);
+    for (k, span) in entries {
+        cbor::text(&mut out, &k);
+        match k.as_str() {
+            "id" => cbor::bytes(&mut out, handle),
+            "name" | "displayName" => cbor::text(&mut out, label),
+            _ => out.extend_from_slice(&data[span]),
+        }
+    }
+    Some(out)
+}
+
 /// Remove the advisory `transports` hint from every credential descriptor in a
 /// getAssertion `allowList` (key 3) or makeCredential `excludeList` (key 5).
 ///
@@ -813,6 +918,114 @@ mod tests {
         // unrelated / empty
         assert!(!request_has_transport_hints(&[0x06, 0x00]));
         assert!(!request_has_transport_hints(&[]));
+    }
+
+    /// Parse the user entity (key 3) of a makeCredential command into
+    /// (id, name, displayName) for assertions on the rewritten requests.
+    fn parse_user_entity(cmd: &[u8]) -> (Vec<u8>, String, String) {
+        let mut c = cbor::Decoder::new(&cmd[1..]);
+        let pairs = c.map_header().unwrap();
+        for _ in 0..pairs {
+            let key = c.uint().unwrap();
+            if key != MC_KEY_USER {
+                c.skip_value().unwrap();
+                continue;
+            }
+            let inner = c.map_header().unwrap();
+            let (mut id, mut name, mut display) = (Vec::new(), String::new(), String::new());
+            for _ in 0..inner {
+                match c.text().unwrap().as_str() {
+                    "id" => id = c.bytes().unwrap().to_vec(),
+                    "name" => name = c.text().unwrap(),
+                    "displayName" => display = c.text().unwrap(),
+                    _ => c.skip_value().unwrap(),
+                }
+            }
+            return (id, name, display);
+        }
+        panic!("no user entity");
+    }
+
+    /// An OpenSSH-style makeCredential: rp {"id": "ssh:"}, user
+    /// {id, name, displayName} all "openssh".
+    fn openssh_make_credential() -> Vec<u8> {
+        let mut cmd = vec![CMD_MAKE_CREDENTIAL];
+        cbor::map(&mut cmd, 3);
+        cbor::uint(&mut cmd, 1);
+        cbor::bytes(&mut cmd, &[0xcc; 32]);
+        cbor::uint(&mut cmd, MC_KEY_RP);
+        cbor::map(&mut cmd, 1);
+        cbor::text(&mut cmd, "id");
+        cbor::text(&mut cmd, "ssh:");
+        cbor::uint(&mut cmd, MC_KEY_USER);
+        cbor::map(&mut cmd, 3);
+        cbor::text(&mut cmd, "id");
+        cbor::bytes(&mut cmd, b"openssh");
+        cbor::text(&mut cmd, "name");
+        cbor::text(&mut cmd, "openssh");
+        cbor::text(&mut cmd, "displayName");
+        cbor::text(&mut cmd, "openssh");
+        cmd
+    }
+
+    #[test]
+    fn dissociate_ssh_user_rewrites_handle_and_label() {
+        let cmd = openssh_make_credential();
+        let out = dissociate_ssh_user(&cmd);
+        assert_ne!(out, cmd);
+        assert_eq!(extract_rp_id(&out).as_deref(), Some("ssh:"));
+        let (id, name, display) = parse_user_entity(&out);
+        assert_eq!(id.len(), 32);
+        let label = format!("ssh:{}", hex::encode(&id[..4]));
+        assert_eq!(name, label);
+        assert_eq!(display, label);
+        // A second registration gets an independent handle.
+        let out2 = dissociate_ssh_user(&cmd);
+        assert_ne!(parse_user_entity(&out2).0, id);
+    }
+
+    #[test]
+    fn dissociate_ssh_user_leaves_other_rps_alone() {
+        // Real WebAuthn RPs: the user handle is the account binding.
+        let mut cmd = vec![CMD_MAKE_CREDENTIAL];
+        cbor::map(&mut cmd, 3);
+        cbor::uint(&mut cmd, 1);
+        cbor::bytes(&mut cmd, &[0xcc; 32]);
+        cbor::uint(&mut cmd, MC_KEY_RP);
+        cbor::map(&mut cmd, 1);
+        cbor::text(&mut cmd, "id");
+        cbor::text(&mut cmd, "example.com");
+        cbor::uint(&mut cmd, MC_KEY_USER);
+        cbor::map(&mut cmd, 3);
+        cbor::text(&mut cmd, "id");
+        cbor::bytes(&mut cmd, b"user-42");
+        cbor::text(&mut cmd, "name");
+        cbor::text(&mut cmd, "user@example.com");
+        cbor::text(&mut cmd, "displayName");
+        cbor::text(&mut cmd, "User 42");
+        assert_eq!(dissociate_ssh_user(&cmd), cmd);
+        // getAssertion is never touched
+        let ga = hex::decode("02a201647373683a025820").unwrap();
+        let mut ga_full = ga.clone();
+        ga_full.extend_from_slice(&[0xaa; 32]);
+        assert_eq!(dissociate_ssh_user(&ga_full), ga_full);
+    }
+
+    #[test]
+    fn dissociate_ssh_user_requires_user_id() {
+        let mut cmd = vec![CMD_MAKE_CREDENTIAL];
+        cbor::map(&mut cmd, 3);
+        cbor::uint(&mut cmd, 1);
+        cbor::bytes(&mut cmd, &[0xcc; 32]);
+        cbor::uint(&mut cmd, MC_KEY_RP);
+        cbor::map(&mut cmd, 1);
+        cbor::text(&mut cmd, "id");
+        cbor::text(&mut cmd, "ssh:");
+        cbor::uint(&mut cmd, MC_KEY_USER);
+        cbor::map(&mut cmd, 1);
+        cbor::text(&mut cmd, "name");
+        cbor::text(&mut cmd, "openssh");
+        assert_eq!(dissociate_ssh_user(&cmd), cmd);
     }
 
     #[test]
