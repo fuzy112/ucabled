@@ -1,4 +1,5 @@
 import Reveal from "../components/Reveal";
+import { RELEASE_URL, VERSION_TAG } from "../lib/version";
 
 export default function Footer() {
   return (
@@ -17,8 +18,8 @@ export default function Footer() {
             <a className="hov" href="https://github.com/fuzy112/ucabled" target="_blank" rel="noreferrer">
               github.com/fuzy112/ucabled ↗
             </a>
-            <a className="hov" href="https://github.com/fuzy112/ucabled/releases/tag/v0.1.1" target="_blank" rel="noreferrer">
-              v0.1.1 — latest release
+            <a className="hov" href={RELEASE_URL} target="_blank" rel="noreferrer">
+              {VERSION_TAG} — latest release
             </a>
             <span>gpl-3.0-or-later</span>
             <span>rust · tokio · bluez · gtk4</span>

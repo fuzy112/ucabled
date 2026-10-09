@@ -1,4 +1,5 @@
 import Reveal from "../components/Reveal";
+import { VERSION_TAG } from "../lib/version";
 
 const DIAGRAM = `      ┌─────────────┐
       │   Browser   │
@@ -24,7 +25,7 @@ const DIAGRAM = `      ┌─────────────┐
   │     QR window       │
   └─────────────────────┘`;
 
-const CHIPS = ["v0.1.1", "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · CTAP 2.2 §11.5"];
+const CHIPS = [VERSION_TAG, "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · CTAP 2.2 §11.5"];
 
 export default function Hero() {
   return (
