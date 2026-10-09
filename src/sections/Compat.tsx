@@ -7,7 +7,7 @@ const ROWS: [Status, string, string][] = [
   ["ok", "ios — google password manager", "registration + sign-in verified"],
   ["ok", "ios — strongbox", "registration + sign-in verified"],
   ["ok", "firefox (native package)", "sees hidraw out of the box; nixos + firefox is the reference setup"],
-  ["ok", "openssh ecdsa-sk", "resident + non-resident keys, login and file signing"],
+  ["ok", "openssh ecdsa-sk", "login and file signing; every key is a discoverable passkey on the phone"],
   ["maybe", "android — google password manager", "speaks the same protocol; expected to work, untested on real hardware"],
   ["maybe", "android — ble data channel (l2cap)", "ctap 2.3, experimental, off by default; build --features l2cap"],
   ["no", "ed25519-sk", "phone passkey providers only sign es256"],

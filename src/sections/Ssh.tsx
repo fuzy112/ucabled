@@ -2,10 +2,12 @@ import Section from "../components/Section";
 import Reveal from "../components/Reveal";
 import CopyButton from "../components/CopyButton";
 
-const SSH = `# non-resident key (default): key handle lives in the .pub file
+const SSH = `# phones have no non-resident mode: every key is a discoverable
+# passkey on the phone; the key handle ssh needs lives in the private key file
 ssh-keygen -t ecdsa-sk -f ~/.ssh/id_ecdsa_sk
 
-# resident (discoverable) key: stored as a passkey on the phone
+# -O resident is accepted but changes little on a phone, since
+# every passkey is already discoverable there
 ssh-keygen -t ecdsa-sk -O resident -f ~/.ssh/id_ecdsa_resident
 
 # deploy + log in
