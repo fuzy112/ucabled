@@ -10,18 +10,24 @@ const SHOTS = [
     fig: "fig. 1",
     caption: "makeCredential prompt — rp: github.com",
     sub: "the qr carries the transaction secret; the passkey glyph sits in the centre patch",
+    w: 394,
+    h: 574,
   },
   {
     src: imgFound,
     fig: "fig. 2",
     caption: "ble advert received → “phone detected”",
     sub: "the code blurs out once the phone's proximity advert arrives",
+    w: 394,
+    h: 574,
   },
   {
     src: imgSelect,
     fig: "fig. 3",
     caption: "select mode — a security key is also connected",
     sub: "firefox can only pick an authenticator by touch, so ucabled asks itself",
+    w: 414,
+    h: 274,
   },
 ];
 
@@ -43,8 +49,11 @@ export default function Shots() {
                 <img
                   src={s.src}
                   alt={s.caption}
+                  width={s.w}
+                  height={s.h}
+                  loading="lazy"
+                  decoding="async"
                   className="max-h-[420px] w-auto"
-                  style={{ imageRendering: "auto" }}
                 />
               </div>
               <figcaption className="mt-4 border-t pt-3" style={{ borderColor: "var(--phos-12)" }}>

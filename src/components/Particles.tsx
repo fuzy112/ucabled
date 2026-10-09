@@ -45,10 +45,18 @@ export default function Particles() {
       }
       raf = requestAnimationFrame(tick);
     };
+    // rAF already stops in a hidden tab, but be explicit so the canvas
+    // never spins while off-screen in a visible-but-backgrounded state.
+    const onVisibility = () => {
+      cancelAnimationFrame(raf);
+      if (!document.hidden) raf = requestAnimationFrame(tick);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("resize", onResize);
     };
   }, []);
