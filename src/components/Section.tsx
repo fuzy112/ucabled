@@ -12,7 +12,7 @@ export default function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="sec-rule relative mx-auto max-w-6xl px-5 sm:px-8 py-16 sm:py-24 ml-2 sm:ml-6">
+    <section id={id} className="sec-rule relative mx-auto max-w-6xl px-5 sm:px-8 py-16 sm:py-24">
       <span className="sec-bar absolute -left-[2px] top-16 sm:top-24 h-10 w-[2px]" />
       <Reveal>
         <div className="mb-10 flex items-baseline gap-4">
