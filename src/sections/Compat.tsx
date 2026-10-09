@@ -27,7 +27,7 @@ export default function Compat() {
       <Reveal>
         <div className="notch p-2 sm:p-4">
           <div className="px-3 py-2 text-[10px] uppercase tracking-widest" style={{ color: "var(--phos-40)" }}>
-            status as of v0.1.0 · verified means real hardware, not theory
+            status as of v0.1.1 · verified means real hardware, not theory
           </div>
           {ROWS.map(([st, name, note]) => (
             <div key={name} className="trow grid grid-cols-[64px_1fr] sm:grid-cols-[80px_minmax(180px,1fr)_1.2fr] items-baseline gap-x-4 px-3 py-2.5 text-[12.5px]">

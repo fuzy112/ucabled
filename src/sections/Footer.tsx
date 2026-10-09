@@ -17,8 +17,8 @@ export default function Footer() {
             <a className="hov" href="https://github.com/fuzy112/ucabled" target="_blank" rel="noreferrer">
               github.com/fuzy112/ucabled ↗
             </a>
-            <a className="hov" href="https://github.com/fuzy112/ucabled/releases/tag/v0.1.0" target="_blank" rel="noreferrer">
-              v0.1.0 — initial release
+            <a className="hov" href="https://github.com/fuzy112/ucabled/releases/tag/v0.1.1" target="_blank" rel="noreferrer">
+              v0.1.1 — latest release
             </a>
             <span>gpl-3.0-or-later</span>
             <span>rust · tokio · bluez · gtk4</span>

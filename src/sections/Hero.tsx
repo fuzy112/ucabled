@@ -24,7 +24,7 @@ const DIAGRAM = `      ┌─────────────┐
   │     QR window       │
   └─────────────────────┘`;
 
-const CHIPS = ["v0.1.0", "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · CTAP 2.2 §11.5"];
+const CHIPS = ["v0.1.1", "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · CTAP 2.2 §11.5"];
 
 export default function Hero() {
   return (
