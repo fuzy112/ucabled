@@ -209,10 +209,13 @@ or `ssh-keygen -Y sign` in the active session pops the same QR window, and the
 phone asks for its passcode/biometric (user verification) before answering.
 
 ```bash
-# Non-resident key (the default): the key handle lives in the .pub file.
+# Create a key. Phones have no non-resident mode: every key is a
+# discoverable passkey on the phone; the key handle ssh needs to
+# select it lives in the private key file.
 ssh-keygen -t ecdsa-sk -f ~/.ssh/id_ecdsa_sk
 
-# Resident (discoverable) key: stored as a passkey on the phone.
+# -O resident is accepted but changes little on a phone, since every
+# passkey is already discoverable there.
 ssh-keygen -t ecdsa-sk -O resident -f ~/.ssh/id_ecdsa_resident
 
 # Install the public key on a server and log in.
@@ -225,15 +228,15 @@ printf '%s %s\n' "$USER" "$(cat ~/.ssh/id_ecdsa_sk.pub)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./file
 ```
 
-Each of these opens the QR window; run it in the active session. Adding a
-resident key that already exists on the phone asks before overwriting it.
+Each of these opens the QR window; run it in the active session. Re-enrolling
+over a passkey that already exists on the phone asks before overwriting it.
 
 - Use `ecdsa-sk`. `ed25519-sk` is **not** supported: phone passkey providers
   only sign ES256, so the phone closes the session when asked for an Ed25519
   credential.
-- Resident keys (`ssh-keygen -t ecdsa-sk -O resident`) work; the credential is
-  stored as a discoverable passkey on the phone and can be re-enrolled
-  (overwritten) as usual.
+- Phone passkey providers ignore `rk=false` and always create discoverable
+  credentials, so there is no true non-resident key here; `-O resident`
+  changes little beyond the enrollment flow.
 - Downloading resident keys with `ssh-keygen -K` is **not** supported: it uses
   the CTAP credential-management commands, which phone passkey providers do not
   expose. Keep the private key file written at enrollment (or enroll again).
