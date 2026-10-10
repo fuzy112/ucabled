@@ -310,6 +310,12 @@ nix build .#ucabled
 nix flake check
 ```
 
+Releasing (on `master`, inside the dev shell): `admin/release.sh X.Y.Z`
+bumps the version, stamps the changelog, commits, and creates the signed tag
+`vX.Y.Z`; pushing the tag runs `.github/workflows/release.yml`, which verifies
+tag/manifest/changelog consistency and the tag signature, then publishes the
+GitHub release with the changelog section as its notes.
+
 The bundled GTK4 helper is part of the default build, so a plain
 `cargo build` needs GTK4 development headers (plus the wlr-layer-shell bindings)
 and gettext; the Nix dev shell provides them. Add `--features adwaita` for
