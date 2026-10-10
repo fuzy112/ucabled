@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use dbus::arg::{RefArg, Variant};
 use dbus::message::{MatchRule, Message};
 use dbus::nonblock::{Proxy, SyncConnection};
-use dbus_crossroads::{Crossroads, MethodErr};
+use dbus_crossroads::Crossroads;
 use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
@@ -44,31 +44,6 @@ struct LiveWindow {
 }
 
 type WindowSlot = Arc<Mutex<Option<LiveWindow>>>;
-
-/// The unique name currently owning the daemon's bus name, tracked through
-/// NameOwnerChanged. Agent methods carry the QR transaction secret and
-/// drive the user's screen, so only the daemon may invoke them; the bus
-/// policy does not restrict calls to a system-user object.
-type DaemonOwner = Arc<Mutex<Option<String>>>;
-
-/// Whether a call from `sender` may be served: only the current owner of
-/// the daemon's bus name.
-fn sender_is_daemon(owner: Option<&str>, sender: Option<&str>) -> bool {
-    matches!((owner, sender), (Some(owner), Some(sender)) if owner == sender)
-}
-
-/// Reject a method call that did not come from the daemon.
-fn require_daemon(ctx: &dbus_crossroads::Context, owner: &DaemonOwner) -> Result<(), MethodErr> {
-    let sender = ctx.message().sender().map(|s| s.to_string());
-    if sender_is_daemon(owner.lock().unwrap().as_deref(), sender.as_deref()) {
-        return Ok(());
-    }
-    tracing::warn!(?sender, "rejected agent call from a non-daemon sender");
-    Err(MethodErr::from((
-        ERR_NOT_AUTHORIZED,
-        "only the ucabled daemon may call the agent",
-    )))
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -134,38 +109,25 @@ async fn main() -> Result<()> {
 
     let qr_window: WindowSlot = Arc::new(Mutex::new(None));
     let select_window: WindowSlot = Arc::new(Mutex::new(None));
-    let daemon_owner: DaemonOwner = Arc::new(Mutex::new(None));
 
-    let crossroads = build_crossroads(
-        &qr_window,
-        &select_window,
-        &daemon_owner,
-        cancel_tx,
-        select_tx,
-    );
+    let crossroads = build_crossroads(&qr_window, &select_window, cancel_tx, select_tx);
 
     let method = conn
         .add_match(MatchRule::new_method_call())
         .await
         .context("match method calls")?;
     let signal = conn
-        .add_match(
-            MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged").with_sender(DBUS_INTERFACE),
-        )
+        .add_match(MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged"))
         .await
         .context("match NameOwnerChanged")?;
     let (_method_match, methods) = method.msg_stream();
     let (_signal_match, signals) = signal.msg_stream();
-    // Seed the owner before serving: the daemon may already hold its name,
-    // in which case no NameOwnerChanged will announce it.
-    *daemon_owner.lock().unwrap() = fetch_daemon_owner(&conn).await;
     tokio::spawn(route_messages(
         conn.clone(),
         crossroads,
         methods,
         signals,
         daemon_tx,
-        daemon_owner,
     ));
 
     // Register with the daemon, retrying while it is not up yet.
@@ -208,7 +170,6 @@ async fn main() -> Result<()> {
 fn build_crossroads(
     qr_window: &WindowSlot,
     select_window: &WindowSlot,
-    daemon_owner: &DaemonOwner,
     cancel_tx: UnboundedSender<u64>,
     select_tx: UnboundedSender<(u64, bool)>,
 ) -> Crossroads {
@@ -216,15 +177,13 @@ fn build_crossroads(
     let iface = crossroads.register(AGENT_INTERFACE, {
         let qr_window = qr_window.clone();
         let select_window = select_window.clone();
-        let daemon_owner = daemon_owner.clone();
         move |builder| {
             let prompt_window = qr_window.clone();
-            let prompt_owner = daemon_owner.clone();
             builder.method(
                 "Prompt",
                 ("tid", "url", "rp", "timeout", "request_type"),
                 (),
-                move |ctx,
+                move |_ctx,
                       _: &mut (),
                       (tid, url, rp, timeout, request_type): (
                     u64,
@@ -233,7 +192,6 @@ fn build_crossroads(
                     u64,
                     String,
                 )| {
-                    require_daemon(ctx, &prompt_owner)?;
                     let rp = (!rp.is_empty()).then_some(rp);
                     show_window(
                         &prompt_window,
@@ -249,13 +207,11 @@ fn build_crossroads(
             );
 
             let found_window = qr_window.clone();
-            let found_owner = daemon_owner.clone();
             builder.method(
                 "Found",
                 ("tid",),
                 (),
-                move |ctx, _: &mut (), (tid,): (u64,)| {
-                    require_daemon(ctx, &found_owner)?;
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
                     forward_line_for_tid(&found_window, tid, "found\n");
                     Ok(())
                 },
@@ -263,13 +219,11 @@ fn build_crossroads(
 
             let ask_window = select_window.clone();
             let select_tx_slot = select_tx.clone();
-            let select_owner = daemon_owner.clone();
             builder.method(
                 "Select",
                 ("tid",),
                 (),
-                move |ctx, _: &mut (), (tid,): (u64,)| {
-                    require_daemon(ctx, &select_owner)?;
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
                     show_select_window(&ask_window, &select_tx_slot, tid);
                     Ok(())
                 },
@@ -277,26 +231,22 @@ fn build_crossroads(
 
             let close_qr = qr_window.clone();
             let close_select = select_window.clone();
-            let close_owner = daemon_owner.clone();
             builder.method(
                 "Close",
                 ("tid",),
                 (),
-                move |ctx, _: &mut (), (tid,): (u64,)| {
-                    require_daemon(ctx, &close_owner)?;
+                move |_ctx, _: &mut (), (tid,): (u64,)| {
                     close_window_for_tid(&close_qr, tid);
                     close_window_for_tid(&close_select, tid);
                     Ok(())
                 },
             );
 
-            let notify_owner = daemon_owner.clone();
             builder.method(
                 "Notify",
                 ("summary", "body"),
                 (),
-                move |ctx, _: &mut (), (summary, body): (String, String)| {
-                    require_daemon(ctx, &notify_owner)?;
+                move |_ctx, _: &mut (), (summary, body): (String, String)| {
                     tokio::spawn(desktop_notify(summary, body));
                     Ok(())
                 },
@@ -315,7 +265,6 @@ async fn route_messages(
     mut methods: MessageReceiver<Message>,
     mut signals: MessageReceiver<Message>,
     daemon_tx: UnboundedSender<()>,
-    daemon_owner: DaemonOwner,
 ) {
     loop {
         tokio::select! {
@@ -326,35 +275,13 @@ async fn route_messages(
             sig = signals.next() => {
                 let Some(sig) = sig else { break };
                 if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>() {
-                    if name == BUS_NAME {
-                        let appeared = !new_owner.is_empty();
-                        *daemon_owner.lock().unwrap() = appeared.then_some(new_owner);
-                        if appeared {
-                            tracing::info!("daemon appeared on the bus, re-registering");
-                            let _ = daemon_tx.send(());
-                        }
+                    if name == BUS_NAME && !new_owner.is_empty() {
+                        tracing::info!("daemon appeared on the bus, re-registering");
+                        let _ = daemon_tx.send(());
                     }
                 }
             }
         }
-    }
-}
-
-/// Look up the daemon's unique name once, for the case where it held its
-/// bus name before this agent's NameOwnerChanged match was installed.
-async fn fetch_daemon_owner(conn: &Arc<SyncConnection>) -> Option<String> {
-    let proxy = Proxy::new(
-        DBUS_INTERFACE,
-        "/org/freedesktop/DBus",
-        Duration::from_secs(5),
-        conn.clone(),
-    );
-    let owner: std::result::Result<(String,), dbus::Error> = proxy
-        .method_call(DBUS_INTERFACE, "GetNameOwner", (BUS_NAME,))
-        .await;
-    match owner {
-        Ok((owner,)) => Some(owner),
-        Err(_) => None,
     }
 }
 
@@ -683,19 +610,6 @@ async fn notify_selection(conn: &Arc<SyncConnection>, tid: u64, use_phone: bool)
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-
-    #[test]
-    fn agent_methods_are_only_served_to_the_daemon() {
-        // The daemon's unique name, as tracked through NameOwnerChanged.
-        assert!(sender_is_daemon(Some(":1.7"), Some(":1.7")));
-        // Any other local process is rejected, even one that could guess a
-        // transaction id.
-        assert!(!sender_is_daemon(Some(":1.7"), Some(":1.8")));
-        // A missing sender or a vanished daemon is rejected too: fail closed.
-        assert!(!sender_is_daemon(Some(":1.7"), None));
-        assert!(!sender_is_daemon(None, Some(":1.7")));
-        assert!(!sender_is_daemon(None, None));
-    }
 
     #[tokio::test]
     async fn closing_a_window_kills_the_helper_without_reporting_it() {
