@@ -94,6 +94,7 @@ pub async fn run_qr_transaction(
         identity: identity.clone(),
         plaintext_eid: advert.plaintext_eid,
         supports_linking,
+        handshake_timeout: crate::session::HANDSHAKE_RESPONSE_TIMEOUT,
     };
     let result = flow.run(ctap_command).await?;
     Ok(result.ctap_reply)

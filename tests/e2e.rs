@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
+use ucabled::error::TransactionError;
 use ucabled::phone;
 use ucabled::qr::{self, RequestType};
 use ucabled::session::DesktopFlow;
@@ -149,6 +150,7 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
         identity,
         plaintext_eid,
         supports_linking: false,
+        handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
     };
     let result = flow.run(&[0x04]).await?;
 
@@ -156,6 +158,82 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
 
     assert_eq!(result.ctap_reply[0], 0x00, "expected CTAP success status");
     assert!(!result.post_handshake.is_empty());
+    Ok(())
+}
+
+/// A phone (or tunnel server) that connects but never answers the handshake
+/// must not hold the transaction forever: the desktop gives up after its
+/// handshake timeout.
+#[tokio::test]
+async fn a_stalled_handshake_times_out() -> Result<()> {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let base = format!("ws://{addr}");
+    tokio::spawn(run_relay(listener));
+
+    let identity = SecretKey::random(&mut OsRng);
+    let compressed = identity.public_key().to_encoded_point(true);
+    let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
+    let mut qr_secret = [0u8; 16];
+    OsRng.fill_bytes(&mut qr_secret);
+
+    let qr_url = qr::encode_qr_url(
+        compressed,
+        &qr_secret,
+        2,
+        false,
+        RequestType::GetAssertion,
+        &[qr::TRANSPORT_WEBSOCKET],
+    );
+    let parsed = qr::parse_qr_url(&qr_url).unwrap();
+
+    let (eid_tx, eid_rx) = oneshot::channel::<[u8; 16]>();
+    let phone_base = base.clone();
+    let phone_task = tokio::spawn(async move {
+        let r = async {
+            let (outcome, _ws, _psk) =
+                phone::phone_setup(&phone_base, &parsed.secret, None).await?;
+            eid_tx
+                .send(outcome.plaintext_eid)
+                .map_err(|_| anyhow::anyhow!("eid send"))?;
+            // Stall: hold the tunnel open but never answer the handshake.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(e) = &r {
+            eprintln!("phone task failed: {e:#}");
+        }
+        r
+    });
+
+    let plaintext_eid = eid_rx.await?;
+    let flow = DesktopFlow {
+        tunnel_base: Some(base),
+        channel: ucabled::session::Channel::Websocket,
+        qr_secret,
+        identity,
+        plaintext_eid,
+        supports_linking: false,
+        handshake_timeout: std::time::Duration::from_millis(500),
+    };
+
+    let start = std::time::Instant::now();
+    let result = flow.run(&[0x04]).await;
+    let elapsed = start.elapsed();
+    phone_task.abort();
+
+    let outcome = result.as_ref().map(|_| ()).map_err(|e| e.to_string());
+    assert!(
+        matches!(result, Err(TransactionError::Timeout)),
+        "a stalled handshake must time out, got {outcome:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the stall was not bounded by the handshake timeout: {elapsed:?}"
+    );
     Ok(())
 }
 
@@ -250,6 +328,7 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
         identity,
         plaintext_eid,
         supports_linking: false,
+        handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
     };
 
     let start = std::time::Instant::now();

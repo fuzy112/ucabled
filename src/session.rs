@@ -11,6 +11,10 @@ use crate::kdf::{derive, Purpose};
 use crate::phone::{CableLink, CableTransport, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
 use crate::tunnel::{self, decode_tunnel_server_domain};
 
+/// The phone sends the handshake response immediately after the tunnel
+/// connects, so a stall means a dead phone or a malicious tunnel server;
+/// without a bound the HID channel would stay busy until the user cancels.
+pub const HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The phone sends the post-handshake message right after the handshake.
 const POST_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound for the phone's answer to one CTAP command; the user may still
@@ -44,6 +48,9 @@ pub struct DesktopFlow {
     /// those messages means staying on the tunnel after the CTAP reply, which
     /// must never delay that reply, so this defaults to false.
     pub supports_linking: bool,
+    /// How long to wait for the phone's handshake response; a field so that
+    /// tests can shrink it.
+    pub handshake_timeout: Duration,
 }
 
 /// Result of a completed desktop-side caBLE session.
@@ -81,9 +88,9 @@ impl DesktopFlow {
             .await
             .map_err(TransactionError::transport)?;
 
-        let response = transport
-            .recv()
+        let response = tokio::time::timeout(self.handshake_timeout, transport.recv())
             .await
+            .map_err(|_| TransactionError::Timeout)?
             .map_err(TransactionError::transport)?;
         let (crypter, handshake_hash) = handshake
             .process_response(&response)
