@@ -57,6 +57,20 @@ cargo test --locked
 git commit -qam "Release $version"
 git tag -s "v$version" -m "ucabled $version"
 
+# Bump the website version in place when the website branch is checked out
+# as a worktree; otherwise just remind.
+website_wt=$(git worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/website$/{print p}')
+if [ -n "$website_wt" ] && [ -f "$website_wt/src/lib/version.ts" ]; then
+    sed -i "s/^export const VERSION = \".*\";$/export const VERSION = \"$version\";/" \
+        "$website_wt/src/lib/version.ts"
+    website_note="Bumped VERSION to $version in $website_wt/src/lib/version.ts
+  — commit and push the website branch to redeploy the site."
+else
+    website_note="Reminder: bump the website too — edit VERSION in src/lib/version.ts
+  on the website branch; pushing it redeploys the site."
+fi
+
 cat <<EOF
 
 Created commit "Release $version" and signed tag v$version.
@@ -65,4 +79,6 @@ Review, then publish with:
   git push origin master v$version
 
 The Release workflow verifies the tag and publishes the GitHub release.
+
+$website_note
 EOF
