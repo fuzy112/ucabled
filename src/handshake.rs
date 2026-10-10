@@ -58,8 +58,12 @@ impl HandshakeInitiator {
     }
 
     /// Paired handshake (NKpsk0): peer identity known from linking info.
+    ///
+    /// Returns `None` when `peer_identity_x962` is not a valid curve point:
+    /// the static-shared secret is what authenticates the paired peer, so
+    /// mixing it must not be skipped silently.
     #[allow(dead_code)]
-    pub fn new_paired(psk: &[u8; 32], peer_identity_x962: &[u8]) -> Self {
+    pub fn new_paired(psk: &[u8; 32], peer_identity_x962: &[u8]) -> Option<Self> {
         let mut noise = Noise::new(NK_PSK0_PROTOCOL_NAME);
         noise.mix_hash(&[0]);
         noise.mix_hash(peer_identity_x962);
@@ -70,17 +74,16 @@ impl HandshakeInitiator {
         noise.mix_hash(&ephemeral_public);
         noise.mix_key(&ephemeral_public);
 
-        if let Some(es) = ecdh(&ephemeral, peer_identity_x962) {
-            noise.mix_key(&es);
-        }
+        let es = ecdh(&ephemeral, peer_identity_x962)?;
+        noise.mix_key(&es);
 
-        Self {
+        Some(Self {
             noise,
             identity: None,
             peer_identity: Some(peer_identity_x962.to_vec()),
             ephemeral: Some(ephemeral),
             ephemeral_public,
-        }
+        })
     }
 
     pub fn build_initial_message(&mut self) -> Vec<u8> {
@@ -247,6 +250,16 @@ mod tests {
     }
 
     #[test]
+    fn paired_initiator_rejects_an_invalid_peer_identity() {
+        // Not a curve point: the static-shared secret authenticates the
+        // paired peer, so the initiator must fail rather than continue
+        // without it.
+        assert!(HandshakeInitiator::new_paired(&PSK, &[0u8; P256_X962_LENGTH]).is_none());
+        // Truncated point.
+        assert!(HandshakeInitiator::new_paired(&PSK, &[4u8; 20]).is_none());
+    }
+
+    #[test]
     fn qr_roundtrip_derives_a_working_channel() {
         let (secret, public) = identity();
         let (init, msg) = qr_initiator(&PSK, &secret);
@@ -262,7 +275,7 @@ mod tests {
     #[test]
     fn paired_roundtrip_derives_a_working_channel() {
         let (phone_secret, phone_public) = identity();
-        let mut init = HandshakeInitiator::new_paired(&PSK, &phone_public);
+        let mut init = HandshakeInitiator::new_paired(&PSK, &phone_public).unwrap();
         let msg = init.build_initial_message();
         let (response, mut phone, hh_phone) = respond_paired(&PSK, &phone_secret, &msg).unwrap();
         let (mut desktop, hh_desktop) = init.process_response(&response).unwrap();
@@ -285,7 +298,7 @@ mod tests {
 
         // Same for the paired (NKpsk0) flow.
         let (phone_secret, phone_public) = identity();
-        let mut init = HandshakeInitiator::new_paired(&wrong, &phone_public);
+        let mut init = HandshakeInitiator::new_paired(&wrong, &phone_public).unwrap();
         let msg = init.build_initial_message();
         assert!(respond_paired(&PSK, &phone_secret, &msg).is_none());
     }
@@ -393,7 +406,7 @@ mod tests {
         let (_init, qr_msg) = qr_initiator(&PSK, &desktop_secret);
         assert!(respond_paired(&PSK, &phone_secret, &qr_msg).is_none());
 
-        let mut paired_init = HandshakeInitiator::new_paired(&PSK, &phone_public);
+        let mut paired_init = HandshakeInitiator::new_paired(&PSK, &phone_public).unwrap();
         let paired_msg = paired_init.build_initial_message();
         assert!(respond_qr(&PSK, &desktop_public, &paired_msg).is_none());
     }
