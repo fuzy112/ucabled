@@ -342,11 +342,6 @@ async fn route_messages(
 
 /// Look up the daemon's unique name once, for the case where it held its
 /// bus name before this agent's NameOwnerChanged match was installed.
-///
-/// `None` on `NameHasNoOwner` is fine: the daemon is not up and its
-/// appearance signal will seed the owner later. A *transient* failure while
-/// the daemon holds the name would leave the agent rejecting every call
-/// with no signal to recover it, so those are retried before giving up.
 async fn fetch_daemon_owner(conn: &Arc<SyncConnection>) -> Option<String> {
     let proxy = Proxy::new(
         DBUS_INTERFACE,
@@ -354,20 +349,13 @@ async fn fetch_daemon_owner(conn: &Arc<SyncConnection>) -> Option<String> {
         Duration::from_secs(5),
         conn.clone(),
     );
-    for attempt in 1..=3 {
-        let owner: std::result::Result<(String,), dbus::Error> = proxy
-            .method_call(DBUS_INTERFACE, "GetNameOwner", (BUS_NAME,))
-            .await;
-        match owner {
-            Ok((owner,)) => return Some(owner),
-            Err(e) if e.name() == Some("org.freedesktop.DBus.Error.NameHasNoOwner") => return None,
-            Err(e) => {
-                tracing::warn!("GetNameOwner failed (attempt {attempt}/3): {e}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
+    let owner: std::result::Result<(String,), dbus::Error> = proxy
+        .method_call(DBUS_INTERFACE, "GetNameOwner", (BUS_NAME,))
+        .await;
+    match owner {
+        Ok((owner,)) => Some(owner),
+        Err(_) => None,
     }
-    None
 }
 
 /// Locate the UI helper executable.
