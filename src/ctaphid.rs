@@ -491,6 +491,26 @@ mod tests {
     }
 
     #[test]
+    fn completing_a_relay_frees_the_busy_slot() {
+        // The daemon refuses a relayed command that arrives while a
+        // transaction is pending by completing it with an error status;
+        // that must free the channel so the host is not wedged.
+        let mut t = Transport::new([0u8; 16]);
+        let (_, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        assert!(matches!(action, Some(CtapAction::Relay(_))));
+        assert_eq!(t.busy_channel(), Some(1));
+
+        let reports = t.complete_relay(1, &[crate::ctap::CTAP1_ERR_CHANNEL_BUSY]);
+        assert_eq!(reports[0][4], CMD_CBOR);
+        assert_eq!(reports[0][7], crate::ctap::CTAP1_ERR_CHANNEL_BUSY);
+        assert_eq!(t.busy_channel(), None);
+
+        // The channel serves the next command normally.
+        let (_, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x02, 0xa4]));
+        assert!(matches!(action, Some(CtapAction::Relay(_))));
+    }
+
+    #[test]
     fn makecredential_triggers_relay() {
         let mut t = Transport::new([0u8; 16]);
         let (resp, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));

@@ -8,8 +8,9 @@ use tokio::task::AbortHandle;
 
 use ucabled::agent::CancelRequest;
 use ucabled::ctap::{
-    CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_TIMEOUT, CTAP2_ERR_INVALID_OPTION,
-    CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_PIN_NOT_SET,
+    CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_CHANNEL_BUSY, CTAP1_ERR_TIMEOUT,
+    CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS,
+    CTAP2_ERR_PIN_NOT_SET,
 };
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
@@ -243,6 +244,18 @@ async fn daemon_loop(
                             Some(CtapAction::Relay(payload)) => {
                                 let Some(cid) = transport.busy_channel() else { continue };
                                 if pending.is_some() {
+                                    // The CTAPHID layer rejects a second
+                                    // command while one is pending, so this
+                                    // should be unreachable; but a dropped
+                                    // command would wedge the busy channel
+                                    // until the host's own timeout. Refuse it
+                                    // and free the slot instead.
+                                    tracing::warn!(
+                                        "relay requested while a transaction is pending; refusing"
+                                    );
+                                    let reports = transport
+                                        .complete_relay(cid, &[CTAP1_ERR_CHANNEL_BUSY]);
+                                    write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
                                 // Follow-up to a faked preflight response that

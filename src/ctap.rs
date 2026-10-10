@@ -19,6 +19,7 @@ pub const CMD_GET_NEXT_ASSERTION: u8 = 0x08;
 pub const CTAP2_OK: u8 = 0x00;
 pub const CTAP1_ERR_INVALID_COMMAND: u8 = 0x01;
 pub const CTAP1_ERR_TIMEOUT: u8 = 0x05;
+pub const CTAP1_ERR_CHANNEL_BUSY: u8 = 0x06;
 pub const CTAP2_ERR_CBOR_UNEXPECTED_TYPE: u8 = 0x11;
 pub const CTAP2_ERR_INVALID_OPTION: u8 = 0x2c;
 pub const CTAP2_ERR_KEEPALIVE_CANCEL: u8 = 0x2d;
