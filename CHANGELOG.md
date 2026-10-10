@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Time out transactions when the phone connects but never answers the
+  handshake, instead of waiting until the user cancels.
+- Refuse requests arriving mid-transaction instead of leaving the
+  channel stuck.
+- Erase the EID key (which decrypts the phone's advertisement) from
+  memory once it is no longer needed.
+
 ## [0.1.1] - 2026-10-09
 
 ### Fixed
