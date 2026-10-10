@@ -77,7 +77,11 @@ pub async fn run_qr_transaction(
     let mut eid_key = [0u8; eid::EID_KEY_SIZE];
     derive(&qr_secret, &[], Purpose::EidKey, &mut eid_key);
 
-    let advert = match crate::ble::await_advert_full(&eid_key, BLE_ADVERT_TIMEOUT).await {
+    // The EID key decrypts only the advertisement, so erase it once the
+    // advert wait is over — on every outcome, like the QR secret and PSK.
+    let advert = crate::ble::await_advert_full(&eid_key, BLE_ADVERT_TIMEOUT).await;
+    crate::secure_erase(&mut eid_key);
+    let advert = match advert {
         Ok(advert) => advert,
         Err(BleError::Timeout) => return Err(TransactionError::Timeout),
         Err(BleError::Backend(e)) => return Err(TransactionError::transport(e)),
