@@ -27,6 +27,15 @@ const EXIT_DECLINE: i32 = 1;
 /// the same order, so both window kinds end up looking alike.
 const CARD_RADIUS: i32 = 12;
 
+/// CSS class toggled on the QR picture when the daemon reports `found`.
+const FOUND_CSS_CLASS: &str = "blurred";
+
+/// The blur rule behind [`FOUND_CSS_CLASS`]: once the phone is detected the
+/// code must stay visible but unscannable.
+fn blur_css() -> String {
+    format!(".{FOUND_CSS_CLASS} {{ filter: blur(12px); opacity: 0.55; }}")
+}
+
 /// Pixels per QR module in the rendered bitmap.
 const QR_MODULE_PX: i32 = 10;
 /// Quiet zone around the code, in modules.
@@ -391,6 +400,17 @@ fn round_window(window: &gtk::ApplicationWindow) {
     );
 }
 
+/// Install the blur rule for [`FOUND_CSS_CLASS`]; needed on every window kind.
+fn install_blur_css(window: &gtk::ApplicationWindow) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&blur_css());
+    gtk::style_context_add_provider_for_display(
+        &gtk::prelude::WidgetExt::display(window),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
 /// Attach the page to the window, with or without window chrome.
 ///
 /// A wlr-layer-shell surface gets no header bar: the compositor places it and
@@ -442,17 +462,10 @@ fn maybe_layer_shell(window: &gtk::ApplicationWindow, requested: bool) -> bool {
 // UI
 // --------------------------------------------------------------------------
 
-fn status_page(title: &str, subtitle: &str, spinner: bool) -> gtk::Box {
+fn status_page(title: &str, subtitle: &str) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.set_halign(gtk::Align::Center);
     page.set_valign(gtk::Align::Center);
-
-    if spinner {
-        let spin = gtk::Spinner::new();
-        spin.set_size_request(48, 48);
-        spin.start();
-        page.append(&spin);
-    }
 
     let title_label = gtk::Label::new(Some(title));
     title_label.add_css_class("title-2");
@@ -512,17 +525,8 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
 
     stack.add_named(
         &status_page(
-            &tr("Phone detected"),
-            &tr("Confirm the sign-in on your phone"),
-            true,
-        ),
-        Some("found"),
-    );
-    stack.add_named(
-        &status_page(
             &tr("Code expired"),
             &tr("Close this window and start again."),
-            false,
         ),
         Some("expired"),
     );
@@ -531,7 +535,7 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     content.append(&stack);
     set_window_content(window, &content, layer_shell);
 
-    watch_stdin(picture, stack.clone(), opts.url.clone());
+    watch_stdin(picture, caption, stack.clone(), opts.url.clone());
 
     if !opts.timeout.is_zero() {
         let stack = stack.clone();
@@ -541,9 +545,24 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     }
 }
 
-/// Fill the QR once the URL arrives on stdin, and switch pages when the daemon
-/// reports `found`.
-fn watch_stdin(picture: gtk::Picture, stack: gtk::Stack, initial_url: Option<String>) {
+/// Caption for the phone-detected state: the strings are the same msgids the
+/// gettext catalogs already carry, so existing translations keep applying.
+fn found_caption() -> String {
+    format!(
+        "{}\n{}",
+        tr("Phone detected"),
+        tr("Confirm the sign-in on your phone")
+    )
+}
+
+/// Fill the QR once the URL arrives on stdin, and blur the code when the
+/// daemon reports `found`.
+fn watch_stdin(
+    picture: gtk::Picture,
+    caption: gtk::Label,
+    stack: gtk::Stack,
+    initial_url: Option<String>,
+) {
     let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     {
@@ -580,7 +599,8 @@ fn watch_stdin(picture: gtk::Picture, stack: gtk::Stack, initial_url: Option<Str
                     stack.set_visible_child_name("qr");
                 }
             } else if line == "found" {
-                stack.set_visible_child_name("found");
+                picture.add_css_class(FOUND_CSS_CLASS);
+                caption.set_label(&found_caption());
             }
         }
         glib::ControlFlow::Continue
@@ -667,6 +687,7 @@ fn activate(app: &gtk::Application, opts: Options) {
     window.set_resizable(false);
 
     bind_escape(&window);
+    install_blur_css(&window);
 
     // Layer-shell must be decided before the window is realized/presented; it
     // also decides whether the window carries a header bar.
@@ -692,8 +713,9 @@ fn main() {
                      \x20                            [--timeout SECS] [--request-type mc|ga]\n\
                      \n\
                      The caBLE URL is read from the first stdin line; a later\n\
-                     \"found\" line switches to the phone-detected page. In --select\n\
-                     mode the exit status answers: 0 = use the phone, 1 = decline.\n\
+                     \"found\" line blurs the code and asks to confirm on the\n\
+                     phone. In --select mode the exit status answers:\n\
+                     \x20 0 = use the phone, 1 = decline.\n\
                      \n\
                      Environment:\n\
                      \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
@@ -772,5 +794,16 @@ mod tests {
             scan_caption(RequestKind::from_wire("weird")),
             "Scan with your phone"
         );
+    }
+
+    #[test]
+    fn found_state_blurs_the_code_with_the_translated_caption() {
+        // The class toggled on `found` must have a matching blur rule.
+        assert!(blur_css().contains(&format!(".{FOUND_CSS_CLASS}")));
+        assert!(blur_css().contains("blur("));
+        // The caption reuses msgids the gettext catalogs already carry.
+        let caption = found_caption();
+        assert!(caption.contains("Phone detected"));
+        assert!(caption.contains("Confirm the sign-in on your phone"));
     }
 }
