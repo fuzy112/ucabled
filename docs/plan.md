@@ -204,8 +204,17 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
   7/8（`maxCredentialCountInList=64`、`maxCredentialIdLength=1024`）避免分块，
   `fake_silent_assertion` 回带 `numberOfCredentials` 与全部凭证，并对随后的
   `authenticatorGetNextAssertion`（0x08）逐个补齐，从而让真实请求保留完整
-  `allowList`。伪造响应只在本地、只回显浏览器自己给的公开凭证 id，不含任何密钥
+   `allowList`。伪造响应只在本地、只回显浏览器自己给的公开凭证 id，不含任何密钥
   材料；真实断言仍由手机签名。
+- **U2F AppID 探测必须拒绝，不能伪造**：站点请求 `appid` 扩展时，Firefox 会先
+  用 `up=false` 静默探测「本设备是否持有该 AppID 的 U2F 凭证」，这次探测的
+  **RP ID 就是 AppID（一个 URL）**而非 WebAuthn 域名；若设备应答持有，Firefox
+  会把真实请求的 RP ID 改成该 AppID（见 authenticator-rs `sign`）。daemon 无法
+  真答，但绝不能伪造成功——手机只按 WebAuthn RP ID 存 passkey，改成 AppID 后
+  手机会报「找不到通行密钥」（X/Twitter 即此现象：Chromium 不发该探测，
+  rpId 保持 `x.com`，成功；Firefox 发探测，被伪造成 AppID URL，失败）。
+  `ucabled::ctap::is_u2f_appid` 识别 URL 形式的 RP ID，daemon 对这类探测回
+  `CTAP2_ERR_NO_CREDENTIALS`，Firefox 遂保留 WebAuthn RP ID。
 
 ### 5.4 模块与选型
 
