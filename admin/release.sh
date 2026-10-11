@@ -29,6 +29,23 @@ if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
 fi
 grep -q '^## \[Unreleased\]' CHANGELOG.md || die "CHANGELOG.md has no [Unreleased] section"
 
+# The website is a separate orphan branch, normally checked out as a worktree.
+# Make sure it exists (at ./website when absent) and is clean, so a release
+# never bumps the site on top of uncommitted work.
+website_wt=$(git worktree list --porcelain \
+    | awk '/^worktree /{p=$2} /^branch refs\/heads\/website$/{print p}')
+if [ -z "$website_wt" ]; then
+    if [ -e website ]; then
+        die "./website exists but is not the website worktree"
+    fi
+    git worktree add website website >/dev/null 2>&1 \
+        || git worktree add -b website website origin/website >/dev/null
+    website_wt=$PWD/website
+fi
+[ -f "$website_wt/src/lib/version.ts" ] || die "$website_wt has no src/lib/version.ts"
+[ -z "$(git -C "$website_wt" status --porcelain)" ] \
+    || die "website worktree is not clean: $website_wt"
+
 today=$(date +%F)
 
 # The first version = line is the package's own (workspace has none).
@@ -62,19 +79,12 @@ check cargo test --locked
 git commit -qam "Release $version" -m "Bump the version and stamp the changelog."
 git tag -s "v$version" -m "ucabled $version"
 
-# Bump the website version in place when the website branch is checked out
-# as a worktree; otherwise just remind.
-website_wt=$(git worktree list --porcelain \
-    | awk '/^worktree /{p=$2} /^branch refs\/heads\/website$/{print p}')
-if [ -n "$website_wt" ] && [ -f "$website_wt/src/lib/version.ts" ]; then
-    sed -i "s/^export const VERSION = \".*\";$/export const VERSION = \"$version\";/" \
-        "$website_wt/src/lib/version.ts"
-    website_note="Bumped VERSION to $version in $website_wt/src/lib/version.ts
-  — commit and push the website branch to redeploy the site."
-else
-    website_note="Reminder: bump the website too — edit VERSION in src/lib/version.ts
-  on the website branch; pushing it redeploys the site."
-fi
+# Bump the website version and commit it in its worktree.  Never push: the
+# release prepares everything, you review and push both branches afterwards.
+sed -i "s/^export const VERSION = \".*\";$/export const VERSION = \"$version\";/" \
+    "$website_wt/src/lib/version.ts"
+git -C "$website_wt" commit -qam "Bump the website version to $version" \
+    -m "Track the ucabled $version release."
 
 # The checks printed far more than the release summary needs.  On a clean run
 # wipe the screen (and scrollback) so the summary stands alone; a warning keeps
@@ -84,14 +94,27 @@ if [ -t 1 ] && ! grep -qE '^(warning|error)(\[|:)' "$check_log"; then
     clear 2>/dev/null || printf '\033[3J\033[H\033[2J'
 fi
 
+# Highlight the publish command on a terminal; plain text when redirected.
+if [ -t 1 ]; then
+    push_style=$(printf '\033[1;92m')
+    style_reset=$(printf '\033[0m')
+else
+    push_style=
+    style_reset=
+fi
+
 cat <<EOF
 
-Created commit "Release $version" and signed tag v$version.
+Release $version is ready:
+
+  - Bumped Cargo.toml and Cargo.lock to $version.
+  - Stamped CHANGELOG.md with the [$version] - $today section.
+  - Committed "Release $version" on master and signed tag v$version.
+  - Committed the VERSION bump on the website branch ($website_wt).
 
 Review, then publish with:
-  git push origin master v$version
+  ${push_style}git push origin refs/heads/master refs/heads/website refs/tags/v$version${style_reset}
 
-The Release workflow verifies the tag and publishes the GitHub release.
-
-$website_note
+The Release workflow verifies the tag and publishes the GitHub release
+with the changelog section as its notes.
 EOF
