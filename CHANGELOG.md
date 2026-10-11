@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The QR window now blurs the code in place once the phone is
+  detected, instead of switching to a separate status page.
 - nixpkgs flake input now points to the official channel tarball
   rather than the github branch.
 
