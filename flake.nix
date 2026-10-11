@@ -1,7 +1,7 @@
 {
   description = "Phone Passkey Bridge: virtual FIDO2 device that relays WebAuthn ceremonies to a phone over caBLE v2";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs.nixpkgs.url = "https://channels.nixos.org/nixos-26.05/nixexprs.tar.zst";
 
   outputs =
     { self, nixpkgs }:
