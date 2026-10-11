@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- nixpkgs flake input now points to the official channel tarball
+  rather than the github branch.
+
 ## [0.1.2] - 2026-10-11
 
 ### Fixed
