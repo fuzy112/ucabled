@@ -2,6 +2,7 @@ import { useState } from "react";
 import Section from "../components/Section";
 import Reveal from "../components/Reveal";
 import CopyButton from "../components/CopyButton";
+import { useCopy } from "../lib/i18n";
 
 const NIXOS = `{
   inputs.ucabled.url = "github:fuzy112/ucabled/master";
@@ -50,21 +51,14 @@ function Panel({
 }
 
 export default function Install() {
+  const c = useCopy();
   const [showCache, setShowCache] = useState(false);
   return (
-    <Section num="04" id="install" title="install">
+    <Section num="04" id="install" title={c.install.title}>
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-2">
-          <Panel
-            label="flake.nix — nixos (recommended)"
-            code={NIXOS}
-            note="the module wires everything: dedicated ucabled user, udev ACL on /dev/uhid, uhid kernel module, bluetooth, systemd system + user services, D-Bus policy and the polkit action. nixos-rebuild switch, then log out and back in."
-          />
-          <Panel
-            label="any systemd distro"
-            code={OTHER}
-            note="installs the three binaries (ucabled, ucable-agent, ucable-agent-helper), creates the service account and places the udev, D-Bus, polkit and systemd files, then enables the daemon and the session agent."
-          />
+          <Panel label={c.install.nixos.label} code={NIXOS} note={c.install.nixos.note} />
+          <Panel label={c.install.other.label} code={OTHER} note={c.install.other.note} />
         </div>
       </Reveal>
       <Reveal delay={100}>
@@ -74,23 +68,18 @@ export default function Install() {
             className="hov text-[11px] uppercase tracking-widest"
             style={{ color: "var(--phos-55)" }}
           >
-            {showCache ? "▾" : "▸"} binary cache: skip the rust build (cachix)
+            {showCache ? "▾" : "▸"} {c.install.cacheToggle}
           </button>
           {showCache && (
             <div className="mt-3">
-              <Panel
-                label="nix.conf — master is published to ucabled.cachix.org"
-                code={CACHIX}
-                note="CI fills the cache on every push to master. only this repo's artifacts are cached; dependencies still come from cache.nixos.org."
-              />
+              <Panel label={c.install.cache.label} code={CACHIX} note={c.install.cache.note} />
             </div>
           )}
         </div>
       </Reveal>
       <Reveal delay={140}>
         <p className="mt-6 text-[12px]" style={{ color: "var(--phos-40)" }}>
-          requirements: linux with /dev/uhid · bluez/bluetooth on · a browser that can see hidraw
-          (flatpak/snap browsers need extra udev configuration; native packages work out of the box)
+          {c.install.req}
         </p>
       </Reveal>
     </Section>

@@ -1,36 +1,26 @@
 import Section from "../components/Section";
 import Reveal from "../components/Reveal";
 import { VERSION_TAG } from "../lib/version";
+import { useCopy, type CompatStatus } from "../lib/i18n";
 
-type Status = "ok" | "maybe" | "no";
-const ROWS: [Status, string, string][] = [
-  ["ok", "ios — icloud keychain", "registration + sign-in verified on real hardware"],
-  ["ok", "ios — google password manager", "registration + sign-in verified"],
-  ["ok", "ios — strongbox", "registration + sign-in verified"],
-  ["ok", "firefox (native package)", "sees hidraw out of the box; nixos + firefox is the reference setup"],
-  ["ok", "openssh ecdsa-sk", "login and file signing; every key is a discoverable passkey on the phone"],
-  ["maybe", "android — google password manager", "speaks the same protocol; expected to work, untested on real hardware"],
-  ["maybe", "android — ble data channel (l2cap)", "ctap 2.3, experimental, off by default; build --features l2cap"],
-  ["no", "ed25519-sk", "phone passkey providers only sign es256"],
-  ["no", "ssh-keygen -K", "credential-management commands are not exposed by phones"],
-  ["no", "remote / ssh sessions", "refused by construction — active local session only"],
-];
-
-const TAG: Record<Status, [string, string]> = {
+const TAG: Record<CompatStatus, [string, string]> = {
   ok: ["[ ok ]", "var(--phos-hi)"],
   maybe: ["[ ?? ]", "var(--phos-55)"],
   no: ["[ no ]", "var(--phos-40)"],
 };
 
 export default function Compat() {
+  const c = useCopy();
   return (
-    <Section num="06" id="compat" title="compatibility">
+    <Section num="06" id="compat" title={c.compat.title}>
       <Reveal>
         <div className="notch p-2 sm:p-4">
           <div className="px-3 py-2 text-[10px] uppercase tracking-widest" style={{ color: "var(--phos-40)" }}>
-            status as of {VERSION_TAG} · verified means real hardware, not theory
+            {c.compat.notePrefix}
+            {VERSION_TAG}
+            {c.compat.noteSuffix}
           </div>
-          {ROWS.map(([st, name, note]) => (
+          {c.compat.rows.map(([st, name, note]) => (
             <div key={name} className="trow grid grid-cols-[64px_1fr] sm:grid-cols-[80px_minmax(180px,1fr)_1.2fr] items-baseline gap-x-4 px-3 py-2.5 text-[12.5px]">
               <span className="font-bold" style={{ color: TAG[st][1] }}>
                 {TAG[st][0]}

@@ -1,21 +1,14 @@
 import { useEffect, useState } from "react";
-
-const LINES = [
-  "$ systemctl status ucabled",
-  "● ucabled.service — Phone Passkey Bridge",
-  "   Active: active (relay) since boot",
-  "$ ls -l /dev/uhid && bluetoothctl show | grep Powered",
-  "crw-rw----+ 1 root root 236, 0 /dev/uhid",
-  "   Powered: yes",
-  "> load interface .......... 100%",
-];
+import { useCopy } from "../lib/i18n";
 
 export default function Boot({ onDone }: { onDone: () => void }) {
+  const c = useCopy();
+  const lines = c.boot.lines;
   const [text, setText] = useState("");
   const [gone, setGone] = useState(false);
 
   useEffect(() => {
-    const full = LINES.join("\n");
+    const full = lines.join("\n");
     let i = 0;
     let cancelled = false;
 
@@ -48,7 +41,7 @@ export default function Boot({ onDone }: { onDone: () => void }) {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [onDone]);
+  }, [onDone, lines]);
 
   return (
     <div id="boot" className={gone ? "done" : ""} aria-hidden>
@@ -60,7 +53,7 @@ export default function Boot({ onDone }: { onDone: () => void }) {
         {!gone && <span className="cursor" />}
       </pre>
       <div className="absolute bottom-6 right-8 text-[10px] uppercase tracking-widest" style={{ color: "var(--phos-25)" }}>
-        press any key to skip
+        {c.boot.skip}
       </div>
     </div>
   );

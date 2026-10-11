@@ -1,6 +1,8 @@
 import Section from "../components/Section";
 import Reveal from "../components/Reveal";
+import Rich from "../components/Rich";
 import CopyButton from "../components/CopyButton";
+import { useCopy } from "../lib/i18n";
 
 const SSH = `# phones have no non-resident mode: every key is a discoverable
 # passkey on the phone; the key handle ssh needs lives in the private key file
@@ -19,21 +21,19 @@ ssh-keygen -Y sign -f ~/.ssh/id_ecdsa_sk -n file ./file
 ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./file`;
 
 export default function Ssh() {
+  const c = useCopy();
   return (
-    <Section num="05" id="ssh" title="ssh security keys too">
+    <Section num="05" id="ssh" title={c.ssh.title}>
       <Reveal>
         <p className="mb-6 max-w-3xl text-[13px] leading-relaxed" style={{ color: "var(--phos-55)" }}>
-          openssh's fido <span style={{ color: "var(--phos)" }}>sk</span> key types talk to the virtual device directly —
-          no browser needed. each operation pops the same QR window, and the phone asks for its
-          passcode or biometric (user verification) before answering. works for login and for
-          file signing.
+          <Rich text={c.ssh.intro} />
         </p>
       </Reveal>
       <Reveal delay={80}>
         <div className="notch p-5 sm:p-6">
           <div className="mb-4 flex items-center justify-between">
             <span className="text-[10px] uppercase tracking-widest" style={{ color: "var(--phos-40)" }}>
-              ~/.ssh — each command opens the qr window
+              {c.ssh.label}
             </span>
             <CopyButton text={SSH} />
           </div>
@@ -42,8 +42,7 @@ export default function Ssh() {
       </Reveal>
       <Reveal delay={140}>
         <p className="mt-5 text-[12px]" style={{ color: "var(--phos-40)" }}>
-          note: ecdsa-sk only — phone passkey providers don't sign ed25519, and ssh-keygen -K
-          (resident-key download) uses credential-management commands phones don't expose.
+          {c.ssh.note}
         </p>
       </Reveal>
     </Section>

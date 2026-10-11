@@ -5,9 +5,12 @@ import '@fontsource/jetbrains-mono/700.css'
 import '@fontsource/jetbrains-mono/800.css'
 import './index.css'
 import App from './App.tsx'
+import LangProvider from './lib/LangProvider.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <LangProvider>
+      <App />
+    </LangProvider>
   </StrictMode>,
 )
