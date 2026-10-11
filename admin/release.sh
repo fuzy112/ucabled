@@ -49,10 +49,15 @@ else
 fi
 
 # Refresh the lockfile's ucabled version entry, then the standard checks.
-cargo check --quiet
-cargo fmt --all -- --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+# Tee their output to a log so the clear below can tell a clean run from one
+# that merely survived (a warning does not abort, unlike an error under set -e).
+check_log=$(mktemp)
+trap 'rm -f "$check_log"' EXIT
+check() { "$@" 2>&1 | tee -a "$check_log"; }
+check cargo check --quiet
+check cargo fmt --all -- --check
+check cargo clippy --all-targets --locked -- -D warnings
+check cargo test --locked
 
 git commit -qam "Release $version" -m "Bump the version and stamp the changelog."
 git tag -s "v$version" -m "ucabled $version"
@@ -69,6 +74,14 @@ if [ -n "$website_wt" ] && [ -f "$website_wt/src/lib/version.ts" ]; then
 else
     website_note="Reminder: bump the website too — edit VERSION in src/lib/version.ts
   on the website branch; pushing it redeploys the site."
+fi
+
+# The checks printed far more than the release summary needs.  On a clean run
+# wipe the screen (and scrollback) so the summary stands alone; a warning keeps
+# the output around instead of hiding it.  Only when stdout is a terminal, so
+# redirected or piped runs are not littered with escape codes.
+if [ -t 1 ] && ! grep -qE '^(warning|error)(\[|:)' "$check_log"; then
+    clear 2>/dev/null || printf '\033[3J\033[H\033[2J'
 fi
 
 cat <<EOF
