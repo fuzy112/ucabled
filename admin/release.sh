@@ -54,7 +54,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 
-git commit -qam "Release $version"
+git commit -qam "Release $version" -m "Bump the version and stamp the changelog."
 git tag -s "v$version" -m "ucabled $version"
 
 # Bump the website version in place when the website branch is checked out
