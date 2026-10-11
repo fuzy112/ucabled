@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Sign-in with Firefox on sites that request the legacy U2F `appid`
+  extension (e.g. X/Twitter) no longer fails with "no passkeys for this
+  website": the daemon declines Firefox's AppID discovery probe so it
+  keeps the WebAuthn RP ID the phone stored the passkey under.
 - Time out transactions when the phone connects but never answers the
   handshake, instead of waiting until the user cancels.
 - Refuse requests arriving mid-transaction instead of leaving the
