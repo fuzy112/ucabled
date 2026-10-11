@@ -142,7 +142,8 @@ pub fn mock_getinfo_response() -> Vec<u8> {
 }
 
 /// Extract the RP ID from a makeCredential (key 2 -> rp map -> "id") or
-/// getAssertion (key 1 -> string) request payload, for UI display only.
+/// getAssertion (key 1 -> string) request payload. Used for UI display, and
+/// to tell a U2F AppID probe apart from a normal one via [`is_u2f_appid`].
 /// Returns None on any parse irregularity; callers must tolerate that.
 pub fn extract_rp_id(command: &[u8]) -> Option<String> {
     let (&cmd, params) = command.split_first()?;
@@ -174,6 +175,22 @@ pub fn extract_rp_id(command: &[u8]) -> Option<String> {
         }
     }
     rp_id
+}
+
+/// Whether a getAssertion RP ID is a legacy U2F AppID rather than a WebAuthn
+/// RP ID.
+///
+/// WebAuthn RP IDs are bare domains (`x.com`); U2F AppIDs are URLs
+/// (`https://api.x.com/1.1/onboarding/x_u2f_trusted_facets.json`). When a site
+/// requests the `appid` client extension, Firefox probes an up=false
+/// getAssertion with the AppID *as the RP ID* to discover U2F credentials and,
+/// if the device reports one, rewrites the real request to address the AppID
+/// instead of the WebAuthn RP ID (see `sign` in Mozilla's authenticator-rs).
+/// The phone stores passkeys under the WebAuthn RP ID only, so such a probe
+/// must be declined; otherwise Firefox switches to the AppID and the phone
+/// finds no passkey ("no passkeys for this website").
+pub fn is_u2f_appid(rp_id: &str) -> bool {
+    rp_id.starts_with("https://") || rp_id.starts_with("http://")
 }
 
 /// Rebuild a CBOR map of text keys adding `add_key`/`add_value` if absent,
@@ -818,6 +835,16 @@ mod tests {
         cmd.push(0x61);
         cmd.extend_from_slice(b"u");
         assert_eq!(extract_rp_id(&cmd).as_deref(), Some("webauthn.io"));
+    }
+
+    #[test]
+    fn u2f_appid_detection() {
+        assert!(is_u2f_appid(
+            "https://api.x.com/1.1/onboarding/x_u2f_trusted_facets.json"
+        ));
+        assert!(is_u2f_appid("http://localhost/appid"));
+        assert!(!is_u2f_appid("x.com"));
+        assert!(!is_u2f_appid("ssh:"));
     }
 
     #[test]

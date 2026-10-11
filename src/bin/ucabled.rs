@@ -277,30 +277,55 @@ async fn daemon_loop(
                                 }
                                 // Firefox probes with getAssertion up=false to
                                 // filter the allowList to credentials present on
-                                // this device. Answer locally with a fake success
-                                // echoing the credential ID, so Firefox proceeds
-                                // to the real interactive request without a
-                                // pointless QR scan. (Error answers make Firefox
-                                // drop the device from the transaction entirely.)
+                                // this device. For a normal RP ID, answer locally
+                                // with a fake success echoing the credential ID,
+                                // so Firefox proceeds to the real interactive
+                                // request without a pointless QR scan; an error
+                                // answer here would make Firefox drop the device
+                                // from the transaction entirely. The AppID probe
+                                // below is the exception, where declining is
+                                // instead the expected signal.
                                 // Report *all* credentials and stash the rest for
                                 // `getNextAssertion`: claiming only the first
                                 // would narrow the real allowList to it.
                                 if ucabled::ctap::is_silent_probe(&payload) {
                                     fake_assertions = None;
-                                    let (response, rest) =
+                                    // Firefox also sends this probe with the
+                                    // legacy U2F AppID as the RP ID to discover
+                                    // U2F credentials for the `appid` extension.
+                                    // Claiming one would make Firefox address the
+                                    // AppID for the real request, where the phone
+                                    // (which stores passkeys by WebAuthn RP ID)
+                                    // finds nothing. Decline so Firefox keeps the
+                                    // WebAuthn RP ID.
+                                    let appid_probe = ucabled::ctap::extract_rp_id(&payload)
+                                        .as_deref()
+                                        .is_some_and(ucabled::ctap::is_u2f_appid);
+                                    let response = if appid_probe {
+                                        tracing::info!("U2F AppID probe (up=false), declining");
+                                        vec![CTAP2_ERR_NO_CREDENTIALS]
+                                    } else {
                                         match ucabled::ctap::fake_silent_assertion(&payload) {
-                                            Some((response, rest)) => (response, rest),
-                                            None => (vec![CTAP2_ERR_NO_CREDENTIALS], Vec::new()),
-                                        };
-                                    tracing::info!(
-                                        credentials = rest.len() + 1,
-                                        "silent probe (up=false), answering locally"
-                                    );
-                                    if !rest.is_empty() {
-                                        let rp = ucabled::ctap::extract_rp_id(&payload)
-                                            .unwrap_or_default();
-                                        fake_assertions = Some((rp, rest.into()));
-                                    }
+                                            Some((response, rest)) => {
+                                                tracing::info!(
+                                                    credentials = rest.len() + 1,
+                                                    "silent probe (up=false), answering locally"
+                                                );
+                                                if !rest.is_empty() {
+                                                    let rp = ucabled::ctap::extract_rp_id(&payload)
+                                                        .unwrap_or_default();
+                                                    fake_assertions = Some((rp, rest.into()));
+                                                }
+                                                response
+                                            }
+                                            None => {
+                                                tracing::info!(
+                                                    "silent probe (up=false), declining"
+                                                );
+                                                vec![CTAP2_ERR_NO_CREDENTIALS]
+                                            }
+                                        }
+                                    };
                                     let reports = transport.complete_relay(cid, &response);
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
