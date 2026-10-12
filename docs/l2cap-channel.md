@@ -1,10 +1,12 @@
 # BLE L2CAP 数据通道（CTAP 2.3 hybrid）
 
 > 状态：桌面侧已实现（实验性，Cargo feature `l2cap`，运行时
-> `UCABLED_BLE_CHANNEL=1`，默认仍走 WebSocket）。**2026-10-02 用 iPhone 实测：
-> 即使 QR 提供 `Key 6=[0,1]`，iPhone 的 caBLE advert 仍只有 20 字节、无
-> advertisement suffix/PSM**，即 iOS 不支持该 BLE/L2CAP 通道。故该特性目前只对
-> （据 Chromium/Google 已实现的）Android 有意义；iOS 若日后支持则无需改协议。
+> `UCABLED_BLE_CHANNEL=1`，默认仍走 WebSocket）。**iPhone 实测（2026-10-02
+> 初测、2026-10-13 严格复测，iOS 27.0）不支持该通道**：联网时 advert 只有 20 字节、
+> 无 suffix/PSM；飞行模式（仅蓝牙）下 iOS 必须先连隧道拿 routing ID 才能
+> 广播，离线时连广播都发不出，手机转圈后报"操作无法完成"——它设计场景
+> （离线）下完全无法开始流程。故该特性目前只对 Android 有意义；iOS 若日后
+> 支持则无需改协议。
 
 ## 1. 结论
 
@@ -73,18 +75,32 @@
 | 2 | **extended advertising 后缀** | 后缀要求 LE 扩展广播。BlueZ 会解析扩展广播报告，理论上会进 `Device1.ServiceData`，但必须真机确认 `payload.len() > 20`。这是 go/no-go 点。 |
 | 3 | **消息分帧** | 实现按「一 SDU = 一条 caBLE 消息」假设（规范示例用 `WriteMessage(BinaryMessage)`）；若对拷不符，需要自定义长度前缀。Chromium 尚未落地、Android 闭源，需真机对拷验证。 |
 | 4 | **insecure CoC 免配对** | 规范明说 insecure，需确认内核允许不 bonding、安全等级可低，以及随机地址轮换下的连通性（Chromium 作者早提过未配对时 L2CAP 在 MAC 轮换下不稳定）。 |
-| 5 | **手机支持面** | **iPhone 实测（2026-10-02）不支持**：QR 带 `Key 6=[0,1]` 时其 advert 仍是 20 字节、无 suffix/PSM（用 `cargo run --bin cable-advert-probe` 观测，trial-decrypt 成功）。Android 据 Chromium issue `493286564` 已实现、待实测；Chromium 桌面端仍在开发中。 |
+| 5 | **手机支持面** | **iPhone 实测不支持**（见 §5，含离线场景与 90s 重广播监听）。Android 据 Chromium issue `493286564` 已实现、待实测；Chromium 桌面端仍在开发中。 |
 
 ## 5. 已做的验证与剩余
 
-已做：iPhone（2026-10-02）用 `cargo run --bin cable-advert-probe` 观测——QR 提供
-`Key 6=[0,1]` 时 advert 仍为 20 字节、无 PSM，trial-decrypt 成功，即 iOS 不支持。
+已做：iPhone 真机观测（`cargo run --bin cable-advert-probe`，QR 提供
+`Key 6=[0,1]`）——
+
+- 2026-10-02 与 2026-10-13（联网，iOS 27.0）：advert 均为 20 字节、无
+  suffix/PSM，trial-decrypt 成功。
+- 2026-10-13（iOS 27.0，飞行模式、仅蓝牙、WiFi 确认关闭）：**300 秒内完全没有
+  advert**。原因：advert 的明文 EID 嵌着隧道服务器分配的 3 字节 routing
+  ID，手机必须先连上隧道才能广播；离线时连隧道失败，手机转圈后报
+  "操作无法完成"。支持 BLE 通道的手机此时应改用 dummy routing ID +
+  PSM suffix 广播（routing ID 在 BLE 路径下用不到），故"离线无广播"
+  本身就是无 BLE 通道的签名。
+- 首次匹配后继续监听 90 秒（不限地址，覆盖 RPA 轮换）：无任何带 suffix
+  的重广播。
 
 剩余（需 Android 或未来 iOS）：
 
-1. 对 Android 确认 advert 出现 `payload.len() > 20` 且 PSM 解析正确。
-2. 完成一次完整往返；若握手后收不到消息，多半是 CoC 模式（LEB/ECFC）或分帧
-   假设不符，按 §4 调整 `l2cap.rs`。
+1. 对 Android 确认 advert 出现 `payload.len() > 20` 且 PSM 解析正确；若
+   Android 也只见到 20 字节，需先用 btmon（需 root）排除桌面侧 BlueZ 丢
+   extended-advertising 后缀的可能（§4 #2，iPhone 实验未能覆盖此点）。
+2. 完成一次完整往返（可用 `tests/l2cap.rs` 的双设备 mock-phone 对先验证
+   分帧/MTU 假设）；若握手后收不到消息，多半是 CoC 模式（LEB/ECFC）或
+   分帧假设不符，按 §4 调整 `l2cap.rs`。
 
 ## 6. 参考
 

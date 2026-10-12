@@ -88,5 +88,65 @@ async fn run() -> Result<()> {
         Some(psm) => println!("BLE L2CAP: offered (server PSM 0x{psm:04x})"),
         None => println!("BLE L2CAP: not offered (no advertisement suffix / PSM)"),
     }
+
+    // The phone may re-advertise with a suffix later (e.g. only after its
+    // tunnel connection fails), possibly from a rotated address. Keep
+    // trial-decrypting every fff9 advert for a while and report any match
+    // whose payload is longer than the plain 20-byte EID.
+    const WATCH_SECS: u64 = 90;
+    println!("\nwatching {WATCH_SECS}s for re-advertisements with a suffix...");
+    watch_for_suffix(&eid_key, Duration::from_secs(WATCH_SECS)).await?;
+    println!("no suffixed advert seen during the watch window");
+    Ok(())
+}
+
+/// Scan for caBLE adverts that trial-decrypt with `eid_key` and carry more
+/// than the plain 20-byte EID, until `timeout` expires.
+#[cfg(feature = "ble")]
+async fn watch_for_suffix(
+    eid_key: &[u8; ucabled::eid::EID_KEY_SIZE],
+    timeout: std::time::Duration,
+) -> Result<()> {
+    use bluer::AdapterEvent;
+    use futures::StreamExt;
+    use ucabled::eid;
+
+    let session = bluer::Session::new().await?;
+    let adapter = session.default_adapter().await?;
+    let uuid: bluer::Uuid = ucabled::CABLE_BLE_UUID.parse()?;
+    adapter
+        .set_discovery_filter(bluer::DiscoveryFilter {
+            transport: bluer::DiscoveryTransport::Le,
+            duplicate_data: true,
+            ..Default::default()
+        })
+        .await?;
+
+    let mut events = adapter.discover_devices_with_changes().await?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.next()).await {
+        let AdapterEvent::DeviceAdded(address) = event else {
+            continue;
+        };
+        let Ok(device) = adapter.device(address) else {
+            continue;
+        };
+        let Ok(Some(service_data)) = device.service_data().await else {
+            continue;
+        };
+        for (data_uuid, payload) in service_data {
+            if data_uuid != uuid || payload.len() <= eid::ADVERT_SIZE {
+                continue;
+            }
+            if ucabled::eid::decrypt(&payload[..eid::ADVERT_SIZE], eid_key).is_some() {
+                println!("suffixed advert from {address}: {} bytes", payload.len());
+                println!("  raw: {}", hex::encode(&payload));
+                match ucabled::advert::parse_psm(&payload[eid::ADVERT_SIZE..]) {
+                    Some(psm) => println!("  BLE L2CAP: offered (server PSM 0x{psm:04x})"),
+                    None => println!("  suffix present but no PSM parsed"),
+                }
+            }
+        }
+    }
     Ok(())
 }
