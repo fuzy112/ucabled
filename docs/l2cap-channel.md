@@ -75,7 +75,7 @@
 | 2 | **extended advertising 后缀** | 后缀要求 LE 扩展广播。BlueZ 会解析扩展广播报告，理论上会进 `Device1.ServiceData`，但必须真机确认 `payload.len() > 20`。这是 go/no-go 点。 |
 | 3 | **消息分帧** | 实现按「一 SDU = 一条 caBLE 消息」假设（规范示例用 `WriteMessage(BinaryMessage)`）；若对拷不符，需要自定义长度前缀。Chromium 尚未落地、Android 闭源，需真机对拷验证。 |
 | 4 | **insecure CoC 免配对** | 规范明说 insecure，需确认内核允许不 bonding、安全等级可低，以及随机地址轮换下的连通性（Chromium 作者早提过未配对时 L2CAP 在 MAC 轮换下不稳定）。 |
-| 5 | **手机支持面** | **iPhone 实测不支持**（见 §5，含离线场景与 90s 重广播监听）。Android 据 Chromium issue `493286564` 已实现、待实测；Chromium 桌面端仍在开发中。 |
+| 5 | **手机/平台支持面** | **iPhone 实测不支持**（见 §5，含离线场景与 90s 重广播监听；iOS 27.0）。且 iOS 上第三方应用无法设置 BLE service data（fido-dev 邮件组），只有 Apple 能实现。Android 侧 Google 已官宣（安全工程博客 "Hybrid Transport Goes Offline!"，2026-03-04），GMS Core 闭源无法直接验证。**Chromium 桌面端未落地**：唯一 CL 7845133（仅 macOS、flag `FidoBleL2cap` 默认关）自 2026-05-13 卡在 tryjob 未合并；main 分支 `device/fido/cable/` 无任何 L2CAP/suffix/Key 6 代码。 |
 
 ## 5. 已做的验证与剩余
 
@@ -106,8 +106,12 @@
 
 - FIDO CTAP 2.3 §11.5.1.1（data transfer channel）、§11.5.1.1.2（BLE）与
   §11.5.1.2（Data Transfer / Noise / 消息类型）
-- Chromium issue `493286564`（BLE as a data transport channel for FIDO Hybrid；
-  含 L2CAP CoC 与 `advertisement suffix` 实现要点）
-- FIDO `fido-2-specs` PR `#1668`（offline BLE channel）
+- Chromium issue `493286564`（BLE as a data transport channel for FIDO Hybrid）与
+  CL `7845133`（桌面端唯一实现尝试，macOS-only，2026-05-13 起停滞）
+- Google 安全工程博客 "Hybrid Transport Goes Offline!"（2026-03-04，Android
+  侧官宣）
+- fido-dev 邮件组：iOS 应用无法设置 BLE service data，hybrid 只能由平台实现
+- FIDO `fido-2-specs` PR `#1668`（offline BLE channel）；2026-07 起 hybrid 章节
+  拆分为独立的 PXP（Proximity Exchange Protocol）工作草案
 - `bluer` `l2cap` 模块与示例 `l2cap_client.rs`
 - `inabajunmr/hbtp-simple`（单文件 Go 版 hybrid，含 suffix PSM 解析，仍走 WS）
