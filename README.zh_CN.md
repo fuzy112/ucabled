@@ -125,7 +125,9 @@ sudo ./install.sh            # --prefix DIR 安装到其他位置
 systemd 文件，并启用守护进程和会话代理。`sudo ./install.sh --uninstall`
 可撤销；`./install.sh --help` 列出可覆盖的路径。
 
+<details><summary>
 如果愿意，也可以手动执行等效步骤：
+</summary>
 
 ```bash
 cargo build --release
@@ -162,6 +164,7 @@ cp dist/ucable-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ucable-agent
 ```
+</details>
 
 重新加载 udev 规则（`sudo udevadm trigger --subsystem-match=misc`）并注销/
 登录一次。如果二进制在别处，调整 `ExecStart` 路径。

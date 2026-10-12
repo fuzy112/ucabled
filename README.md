@@ -132,7 +132,9 @@ the udev, D-Bus, polkit and systemd files, and enables the daemon and session
 agent.  `sudo ./install.sh --uninstall` reverses it; `./install.sh --help`
 lists the overridable paths.
 
+<details><summary>
 The equivalent manual steps, if you prefer:
+</summary>
 
 ```bash
 cargo build --release
@@ -169,6 +171,7 @@ cp dist/ucable-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ucable-agent
 ```
+</details>
 
 Reload the udev rule (`sudo udevadm trigger --subsystem-match=misc`) and log
 out/in once.  Adjust the `ExecStart` paths if the binaries live elsewhere.
