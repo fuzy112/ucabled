@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
         // stay on the tunnel after the reply to catch update messages.
         supports_linking: true,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
+        connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
     let result = flow.run(&cmd).await?;
 

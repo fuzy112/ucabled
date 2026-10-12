@@ -12,6 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   detected, instead of switching to a separate status page.
 - nixpkgs flake input now points to the official channel tarball
   rather than the GitHub branch.
+- Experimental BLE data channel (`l2cap` feature): the L2CAP connect
+  now has a timeout and falls back to the WebSocket tunnel when it
+  fails, instead of hanging the transaction.
 
 ## [0.1.2] - 2026-10-11
 

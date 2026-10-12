@@ -1,96 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+mod common;
 
-use anyhow::Result;
-use futures::{SinkExt, StreamExt};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
 
+use anyhow::Result;
+use common::run_relay;
 use ucabled::error::TransactionError;
 use ucabled::phone;
 use ucabled::qr::{self, RequestType};
 use ucabled::session::DesktopFlow;
-
-type ServerWs = WebSocketStream<TcpStream>;
-type PendingTunnels = Arc<Mutex<HashMap<String, ServerWs>>>;
-
-#[allow(clippy::result_large_err)] // signature dictated by tungstenite's callback
-async fn run_relay(listener: TcpListener) {
-    let pending: PendingTunnels = Arc::new(Mutex::new(HashMap::new()));
-    loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        let pending = pending.clone();
-        tokio::spawn(async move {
-            let mut path = String::new();
-            let ws = match tokio_tungstenite::accept_hdr_async(
-                stream,
-                |req: &Request, mut resp: Response| {
-                    path = req.uri().path().to_string();
-                    resp.headers_mut()
-                        .insert("X-caBLE-Routing-Id", "02aa55".parse().unwrap());
-                    if req.headers().get("Sec-WebSocket-Protocol").is_some() {
-                        resp.headers_mut().insert(
-                            "Sec-WebSocket-Protocol",
-                            ucabled::WS_SUBPROTOCOL.parse().unwrap(),
-                        );
-                    }
-                    Ok(resp)
-                },
-            )
-            .await
-            {
-                Ok(ws) => ws,
-                Err(e) => {
-                    eprintln!("relay accept failed: {e}");
-                    return;
-                }
-            };
-
-            if let Some(id) = path.strip_prefix("/cable/new/") {
-                pending.lock().unwrap().insert(id.to_string(), ws);
-            } else if let Some(rest) = path.strip_prefix("/cable/connect/") {
-                let id = rest.split('/').nth(1).unwrap_or("").to_string();
-                let other = pending.lock().unwrap().remove(&id);
-                match other {
-                    Some(other) => pipe(ws, other).await,
-                    None => eprintln!("relay: unknown tunnel {id}"),
-                }
-            } else {
-                eprintln!("relay: unexpected path {path}");
-            }
-        });
-    }
-}
-
-async fn pipe(a: ServerWs, b: ServerWs) {
-    let (a_tx, a_rx) = a.split();
-    let (b_tx, b_rx) = b.split();
-    let fwd = |mut rx: futures::stream::SplitStream<ServerWs>,
-               mut tx: futures::stream::SplitSink<ServerWs, Message>| async move {
-        while let Some(msg) = rx.next().await {
-            match msg {
-                Ok(m) => {
-                    if tx.send(m).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        // Propagate teardown so the peer sees a close instead of hanging.
-        let _ = tx.send(Message::Close(None)).await;
-    };
-    tokio::join!(fwd(a_rx, b_tx), fwd(b_rx, a_tx));
-}
 
 #[tokio::test]
 async fn full_roundtrip_over_local_relay() -> Result<()> {
@@ -151,6 +75,7 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
         plaintext_eid,
         supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
+        connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
     let result = flow.run(&[0x04]).await?;
 
@@ -218,6 +143,7 @@ async fn a_stalled_handshake_times_out() -> Result<()> {
         plaintext_eid,
         supports_linking: false,
         handshake_timeout: std::time::Duration::from_millis(500),
+        connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
 
     let start = std::time::Instant::now();
@@ -329,6 +255,7 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
         plaintext_eid,
         supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
+        connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
 
     let start = std::time::Instant::now();

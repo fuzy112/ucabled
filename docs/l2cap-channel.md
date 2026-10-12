@@ -9,8 +9,9 @@
 ## 1. 结论
 
 1. CTAP 2.3 给 hybrid（§11.5）新增了 **BLE 数据通道**，走 insecure L2CAP
-   CoC，把 CTAP 流量完全从隧道服务器上拿走。WebSocket 仍是默认与回退通道，
-   两者二选一、不并发。
+   CoC，把 CTAP 流量完全从隧道服务器上拿走。手机可从双方支持集的交集中
+   并行尝试多个通道，任一通道建立后放弃其余（不支持并发传输）；
+   WebSocket 是双方都应支持的回退通道。
 2. 它与 §11.4 的 FIDO GATT service（`0xFFFD`）**无关**；GATT 与本项目手机的
    关系见 `docs/gatt-data-channel.md`。
 3. 桌面侧是在现有 caBLE 代码上的**增量**：Noise 握手、消息加解密
@@ -56,9 +57,13 @@
   `SOCK_SEQPACKET`（LE Credit Based，约定一 SDU = 一条 caBLE 消息）；连上后把
   安全等级设为 Sdp（insecure）、recv MTU 开到最大。
 - **`relay.rs`**：advert 带 PSM 且已启用时选 L2CAP，否则 WebSocket。
+- **`session.rs`**：L2CAP connect 带与 WebSocket dial 相同的 20s 超时；
+  connect 失败或超时都回落 WebSocket 通道（规范允许手机同时等多条通道；
+  若手机只听 BLE，回落由 dial 超时兜底）。握手阶段失败不回落。
 - **复用**：`handshake.rs`（Noise）与 `crypter.rs`（消息加解密）未改。
 - **测试**：suffix/PSM 与 QR `Key 6` 有单测；`tests/l2cap.rs` 有自环回 L2CAP
-  测试（需蓝牙适配器，默认 `#[ignore]`）。
+  测试与完整 mock-phone 往返（握手/消息层/CTAP 回合，需蓝牙适配器，默认
+  `#[ignore]`）。
 
 ## 4. 未决问题（按风险排序）
 

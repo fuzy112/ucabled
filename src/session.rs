@@ -51,6 +51,9 @@ pub struct DesktopFlow {
     /// How long to wait for the phone's handshake response; a field so that
     /// tests can shrink it.
     pub handshake_timeout: Duration,
+    /// Budget for establishing the BLE L2CAP channel before falling back to
+    /// the WebSocket channel; a field so that tests can shrink it.
+    pub connect_timeout: Duration,
 }
 
 /// Result of a completed desktop-side caBLE session.
@@ -169,26 +172,7 @@ impl DesktopFlow {
         tunnel_id: &[u8; 16],
     ) -> Result<CableTransport, TransactionError> {
         match &self.channel {
-            Channel::Websocket => {
-                let domain = decode_tunnel_server_domain(components.tunnel_server_domain)
-                    .ok_or_else(|| {
-                        TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain"))
-                    })?;
-                let tunnel_base = self
-                    .tunnel_base
-                    .clone()
-                    .unwrap_or_else(|| format!("wss://{domain}"));
-                let url = format!(
-                    "{tunnel_base}/cable/connect/{}/{}",
-                    hex::encode(components.routing_id),
-                    hex::encode(tunnel_id)
-                );
-                tracing::info!("connecting caBLE tunnel");
-                let (ws, _response) = tunnel::dial(&url)
-                    .await
-                    .map_err(TransactionError::transport)?;
-                Ok(CableTransport::Websocket(Box::new(ws)))
-            }
+            Channel::Websocket => self.connect_websocket(components, tunnel_id).await,
             #[cfg(feature = "l2cap")]
             Channel::L2cap {
                 address,
@@ -196,12 +180,59 @@ impl DesktopFlow {
                 psm,
             } => {
                 tracing::info!(%address, psm, "connecting caBLE L2CAP channel");
-                let stream = crate::l2cap::connect(*address, *address_type, *psm)
-                    .await
-                    .map_err(TransactionError::transport)?;
-                Ok(CableTransport::L2cap(stream))
+                // A phone that advertised a PSM but never answers (stale
+                // address, moved out of range) must not hold the transaction
+                // until the host times out.
+                let connect = tokio::time::timeout(
+                    self.connect_timeout,
+                    crate::l2cap::connect(*address, *address_type, *psm),
+                )
+                .await;
+                match connect {
+                    Ok(Ok(stream)) => Ok(CableTransport::L2cap(stream)),
+                    // The spec lets the authenticator attempt more than one
+                    // channel from the QR intersection, so a WebSocket retry
+                    // can still succeed. It is bounded by the dial timeout if
+                    // the phone only listens on BLE.
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            "L2CAP connect failed ({e:#}); trying the WebSocket channel"
+                        );
+                        self.connect_websocket(components, tunnel_id).await
+                    }
+                    Err(_) => {
+                        tracing::warn!("L2CAP connect timed out; trying the WebSocket channel");
+                        self.connect_websocket(components, tunnel_id).await
+                    }
+                }
             }
         }
+    }
+
+    /// The default channel: the tunnel server over WebSockets.
+    async fn connect_websocket(
+        &self,
+        components: &eid::EidComponents,
+        tunnel_id: &[u8; 16],
+    ) -> Result<CableTransport, TransactionError> {
+        let domain =
+            decode_tunnel_server_domain(components.tunnel_server_domain).ok_or_else(|| {
+                TransactionError::failed(anyhow::anyhow!("unknown tunnel server domain"))
+            })?;
+        let tunnel_base = self
+            .tunnel_base
+            .clone()
+            .unwrap_or_else(|| format!("wss://{domain}"));
+        let url = format!(
+            "{tunnel_base}/cable/connect/{}/{}",
+            hex::encode(components.routing_id),
+            hex::encode(tunnel_id)
+        );
+        tracing::info!("connecting caBLE tunnel");
+        let (ws, _response) = tunnel::dial(&url)
+            .await
+            .map_err(TransactionError::transport)?;
+        Ok(CableTransport::Websocket(Box::new(ws)))
     }
 }
 
