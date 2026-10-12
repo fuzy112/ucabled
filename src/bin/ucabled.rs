@@ -244,12 +244,16 @@ async fn daemon_loop(
                             Some(CtapAction::Relay(payload)) => {
                                 let Some(cid) = transport.busy_channel() else { continue };
                                 if pending.is_some() {
-                                    // The CTAPHID layer rejects a second
-                                    // command while one is pending, so this
-                                    // should be unreachable; but a dropped
-                                    // command would wedge the busy channel
-                                    // until the host's own timeout. Refuse it
-                                    // and free the slot instead.
+                                    // A second single-frame CBOR command is
+                                    // already rejected by the CTAPHID layer,
+                                    // but a host can restart a multi-frame
+                                    // assembly on the same channel: that
+                                    // overwrites the pending one and, on
+                                    // completion, clears `busy` first, so the
+                                    // command reaches us while a transaction is
+                                    // still pending. Refuse it and free the
+                                    // slot, rather than dropping it and wedging
+                                    // the channel until the host times out.
                                     tracing::warn!(
                                         "relay requested while a transaction is pending; refusing"
                                     );
