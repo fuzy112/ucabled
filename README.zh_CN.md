@@ -307,6 +307,10 @@ libadwaita，以维持桌面中立。
 - `src/bin/cable-advert-probe.rs`：显示一个提供 BLE 数据通道的 caBLE 二维码，
   并报告手机是否广播了 L2CAP PSM
 
+翻译目录位于 `po/`。新增或修改 helper 字符串后，在 dev shell 里运行
+`admin/update-pot.sh` 重新生成 `po/ucable-agent-helper-gtk.pot`，并把新的
+msgid 合并进每个目录。helper 是唯一被翻译的组件。
+
 可选的 CTAP 2.3 BLE 数据通道（L2CAP CoC）是实验性的，默认关闭：用
 `--features l2cap` 构建并设置 `UCABLED_BLE_CHANNEL=1`。iPhone 不提供它
 （已验证）；它面向 Android。
