@@ -12,6 +12,7 @@ pub mod handshake;
 pub mod identity;
 pub mod kdf;
 pub mod noise;
+pub mod notify;
 pub mod phone;
 pub mod qr;
 #[cfg(feature = "ble")]

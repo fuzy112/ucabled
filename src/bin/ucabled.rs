@@ -193,6 +193,21 @@ async fn daemon_loop(
     let identity = ucabled::identity::load_or_create(&ucabled::identity::state_dir())
         .context("failed to load the persistent identity key")?;
     let mut transport = Transport::new(ucabled::ctap::AAGUID);
+
+    // systemd readiness, plus a keepalive when the unit sets WatchdogSec=: a
+    // hung daemon is then restarted instead of silently wedging the HID
+    // channel.
+    ucabled::notify::ready();
+    if let Some(interval) = ucabled::notify::watchdog_interval() {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                ucabled::notify::watchdog();
+            }
+        });
+    }
     let (result_tx, mut result_rx) =
         mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
     let mut pending: Option<Pending> = None;

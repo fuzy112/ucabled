@@ -6,10 +6,14 @@ Wants=bluetooth.target
 After=bluetooth.target
 
 [Service]
+Type=notify
 ExecStart=/usr/local/bin/ucabled
 User=ucabled
 Group=ucabled
 Restart=on-failure
+# The daemon sends READY=1 once the device is registered and a keepalive at
+# half this interval; a hung daemon is then restarted.
+WatchdogSec=30s
 # Persistent caBLE identity key lives in /var/lib/ucabled.
 StateDirectory=ucabled
 

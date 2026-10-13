@@ -142,6 +142,10 @@ in
         User = "ucabled";
         Group = "ucabled";
         Restart = "on-failure";
+        # The daemon reports readiness once the device is registered and
+        # keeps this watchdog fed at half the interval.
+        Type = "notify";
+        WatchdogSec = "30s";
         # Persistent caBLE identity key lives in /var/lib/ucabled.
         StateDirectory = "ucabled";
         # The daemon only needs /dev/uhid plus the system bus and the network.
