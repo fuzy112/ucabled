@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::fmt;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures::{SinkExt, StreamExt};
@@ -9,7 +10,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{Response, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
+};
 
 use crate::WS_SUBPROTOCOL;
 
@@ -66,6 +69,33 @@ fn frame_config() -> WebSocketConfig {
     config.max_message_size = Some(MAX_FRAME_SIZE);
     config.max_frame_size = Some(MAX_FRAME_SIZE);
     config
+}
+
+/// Client TLS config for the tunnel: Mozilla roots, TLS 1.3 floor.
+///
+/// rustls is built without its default `tls12` feature, but feature
+/// unification is fragile — any crate in the graph enabling rustls's
+/// defaults would silently re-add TLS 1.2 — so the version floor is pinned
+/// explicitly instead of resting on the feature set.  The roots are
+/// compiled in and the config is immutable, so build it once.
+fn tls_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let config =
+                rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                    .with_root_certificates(root_store())
+                    .with_no_client_auth();
+            Arc::new(config)
+        })
+        .clone()
+}
+
+/// Mozilla's compiled-in roots, as rustls expects them.
+fn root_store() -> rustls::RootCertStore {
+    rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    }
 }
 
 /// The (scheme, host, port) of a tunnel URL.
@@ -186,7 +216,12 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
             .insert("Sec-WebSocket-Protocol", WS_SUBPROTOCOL.parse().unwrap());
         match tokio::time::timeout(
             DIAL_TIMEOUT,
-            connect_async_with_config(request, Some(frame_config()), false),
+            connect_async_tls_with_config(
+                request,
+                Some(frame_config()),
+                false,
+                Some(Connector::Rustls(tls_config())),
+            ),
         )
         .await
         {
@@ -334,6 +369,15 @@ mod tests {
         let config = frame_config();
         assert_eq!(config.max_message_size, Some(MAX_FRAME_SIZE));
         assert_eq!(config.max_frame_size, Some(MAX_FRAME_SIZE));
+    }
+
+    #[test]
+    fn tls_config_uses_the_compiled_in_roots() {
+        // The compiled-in Mozilla roots must actually be loaded, and building
+        // the client config (with the ring provider and TLS 1.3 only) must
+        // not panic.
+        assert!(root_store().roots.len() > 1);
+        let _ = tls_config();
     }
 
     #[test]

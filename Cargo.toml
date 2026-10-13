@@ -60,6 +60,9 @@ rustls = { version = "0.23", default-features = false, features = [
   "ring",
   "std",
 ] }
+# Mozilla root store for the tunnel's client TLS config (built explicitly so
+# the protocol version floor does not depend on rustls's default features).
+webpki-roots = "0.26"
 qrcode = { version = "0.14", default-features = false }
 
 bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }
