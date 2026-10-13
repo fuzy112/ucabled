@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: read
+  # The seen job lists earlier runs of this workflow.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,8 +22,37 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # A commit that already passed this workflow on another branch (say next,
+  # now fast-forwarded to master) needs no re-run: the checks are identical
+  # and the artifact is already in the shared Cachix cache.  Only earlier
+  # push runs count — a pull request run never publishes — and an explicit
+  # workflow_dispatch always runs.
+  seen:
+    name: Skip already-tested commits
+    runs-on: ubuntu-24.04
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+    - name: Look for a successful push run of this commit
+      id: check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        skip=false
+        if [ "$GITHUB_EVENT_NAME" = push ]; then
+          wid=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          found=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=100" \
+            --jq "[.workflow_runs[] | select(.workflow_id == $wid and .id != $GITHUB_RUN_ID)] | length")
+          [ "$found" -eq 0 ] || skip=true
+        fi
+        echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and test
+
+    needs: seen
+    if: needs.seen.outputs.skip != 'true'
 
     # Pinned rather than ubuntu-latest.  The flake supplies every dependency,
     # so the image only matters through the host tools Nix itself needs.
