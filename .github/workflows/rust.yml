@@ -5,8 +5,37 @@ on:
     # next is the experimental branch; it publishes to the same cache so
     # testers can substitute instead of building.
     branches: ["master", "next"]
+    # Only run when something the checks consume changes.  package.nix
+    # limits its src to the same set, so a commit elsewhere (docs, site)
+    # cannot change the output path and its Cachix entry stays valid.
+    # Keep in sync with nix/package.nix and the pull_request filter below.
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "flake.nix"
+      - "flake.lock"
+      - "shell.nix"
+      - "nix/**"
+      - "po/**"
+      - "dist/**"
+      - "admin/check-po.sh"
+      - ".github/workflows/rust.yml"
   pull_request:
     branches: ["master"]
+    # The same filter as on push above.
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "flake.nix"
+      - "flake.lock"
+      - "shell.nix"
+      - "nix/**"
+      - "po/**"
+      - "dist/**"
+      - "admin/check-po.sh"
+      - ".github/workflows/rust.yml"
   workflow_dispatch:
 
 permissions:
