@@ -14,7 +14,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
   rather than the GitHub branch.
 - Experimental BLE data channel (`l2cap` feature): the L2CAP connect
   now has a timeout and falls back to the WebSocket tunnel when it
-  fails, instead of hanging the transaction.
+  fails or when the negotiated MTU cannot carry the command, instead
+  of hanging the transaction.
+
+### Fixed
+
+- Close the device-selection window as soon as the host cancels the
+  transaction, instead of leaving it up until its own timeout.
+
+### Security
+
+- Cap tunnel WebSocket frames before allocation, pin the tunnel TLS
+  version to 1.3 instead of relying on defaults, and erase the raw
+  ECDH outputs once the handshake keys are derived.
 
 ## [0.1.2] - 2026-10-11
 
