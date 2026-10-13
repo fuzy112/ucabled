@@ -1,6 +1,6 @@
 [package]
 name = "ucabled"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 # Lowest toolchain the locked dependencies build with (gtk4 0.11 needs 1.92).
 rust-version = "1.92"
