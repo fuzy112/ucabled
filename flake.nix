@@ -45,6 +45,14 @@
           installPhase = "touch $out";
           doCheck = false;
         });
+        # rustdoc warnings are errors too, so a broken intra-doc link or a
+        # malformed code block cannot land unnoticed.
+        doc = self.packages.${pkgs.stdenv.hostPlatform.system}.ucabled.overrideAttrs (old: {
+          pname = "ucabled-doc-check";
+          buildPhase = "RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps";
+          installPhase = "touch $out";
+          doCheck = false;
+        });
       });
       devShells = forAllSystems (pkgs: {
         default = import ./shell.nix { inherit pkgs; };
