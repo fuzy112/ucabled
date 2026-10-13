@@ -100,15 +100,19 @@ impl HandshakeInitiator {
         let (peer_point_bytes, ciphertext) = response.split_at(P256_X962_LENGTH);
 
         let ephemeral = self.ephemeral.take()?;
-        let shared_ee = ecdh(&ephemeral, peer_point_bytes)?;
+        let mut shared_ee = ecdh(&ephemeral, peer_point_bytes)?;
 
         self.noise.mix_hash(peer_point_bytes);
         self.noise.mix_key(peer_point_bytes);
         self.noise.mix_key(&shared_ee);
+        // The raw ECDH output is a plain array, not a zeroizing type, so
+        // wipe it once it is mixed in.
+        crate::secure_erase(&mut shared_ee);
 
         if let Some(identity) = &self.identity {
-            let shared_se = ecdh(identity, peer_point_bytes)?;
+            let mut shared_se = ecdh(identity, peer_point_bytes)?;
             self.noise.mix_key(&shared_se);
+            crate::secure_erase(&mut shared_se);
         }
 
         let plaintext = self.noise.decrypt_and_hash(ciphertext)?;
@@ -189,8 +193,9 @@ fn respond_inner(
     parse_point(peer_point_bytes)?;
 
     if let Some(id) = &identity {
-        let es = ecdh(id, peer_point_bytes)?;
+        let mut es = ecdh(id, peer_point_bytes)?;
         noise.mix_key(&es);
+        crate::secure_erase(&mut es);
     }
 
     let plaintext = noise.decrypt_and_hash(ciphertext)?;
@@ -202,12 +207,14 @@ fn respond_inner(
     noise.mix_hash(&ephemeral_public);
     noise.mix_key(&ephemeral_public);
 
-    let shared_ee = ecdh(&ephemeral, peer_point_bytes)?;
+    let mut shared_ee = ecdh(&ephemeral, peer_point_bytes)?;
     noise.mix_key(&shared_ee);
+    crate::secure_erase(&mut shared_ee);
 
     if let Some(peer) = peer_identity {
-        let shared_se = ecdh(&ephemeral, peer)?;
+        let mut shared_se = ecdh(&ephemeral, peer)?;
         noise.mix_key(&shared_se);
+        crate::secure_erase(&mut shared_se);
     }
 
     let my_ciphertext = noise.encrypt_and_hash(&[]);
