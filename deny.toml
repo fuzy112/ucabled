@@ -1,0 +1,38 @@
+# cargo-deny policy.  Run locally with:
+#   nix develop --command cargo deny check
+# and in CI by .github/workflows/audit.yml.
+
+[advisories]
+# Report yanked crates but do not fail the build on them.
+yanked = "warn"
+
+[licenses]
+# Permissive and weak-copyleft licenses the dependency tree already uses.
+# GPL-3.0-or-later is this project's own license.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# crates whose license text the scanner cannot classify
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate majors are normal in a Rust graph; only hard errors matter here.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

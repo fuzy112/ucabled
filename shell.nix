@@ -9,6 +9,8 @@ pkgs.mkShell {
     # Dependency advisory scanner, pinned through flake.lock like the rest of
     # the toolchain (CI runs it as `cargo audit`).
     cargo-audit
+    # License, source and ban policy for the same lockfile (CI runs `cargo deny`).
+    cargo-deny
     gcc
     pkg-config
     dbus

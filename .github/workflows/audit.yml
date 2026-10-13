@@ -6,10 +6,10 @@ name: Audit
 on:
   push:
     branches: ["master", "next"]
-    paths: ["Cargo.lock", "Cargo.toml"]
+    paths: ["Cargo.lock", "Cargo.toml", "deny.toml"]
   # Catch a vulnerable dependency in the pull request, before it merges.
   pull_request:
-    paths: ["Cargo.lock", "Cargo.toml"]
+    paths: ["Cargo.lock", "Cargo.toml", "deny.toml"]
   schedule:
     - cron: "24 3 * * 1"
   workflow_dispatch:
@@ -37,3 +37,8 @@ jobs:
     # scanner itself comes from the flake-locked dev shell, not the registry.
     - name: Audit the locked dependencies
       run: nix develop --command cargo audit
+
+    # License, source and ban policy on top of the advisory database; the
+    # rules live in deny.toml.
+    - name: Check the dependency policy
+      run: nix develop --command cargo deny check
