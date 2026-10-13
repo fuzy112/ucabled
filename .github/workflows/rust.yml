@@ -63,5 +63,8 @@ jobs:
     - name: Check the libadwaita feature
       run: nix develop --command cargo check --locked --features adwaita
 
-    - name: Check the experimental l2cap feature
-      run: nix develop --command cargo check --locked --features l2cap
+    # The l2cap tests are feature-gated, so a plain `cargo test` never
+    # compiles them; run them here.  The hardware-independent fallback test
+    # runs everywhere, the two-device ones stay ignored without a peer.
+    - name: Test the experimental l2cap feature
+      run: nix develop --command cargo test --locked --features l2cap
