@@ -1,0 +1,45 @@
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UCABLED 1 "2026-10-13" "ucabled" "User Commands"
+.SH NAME
+ucabled \- virtual FIDO2 device that relays WebAuthn to a phone
+.SH SYNOPSIS
+.B ucabled
+.RB [ \-\-no\-ui ]
+.SH DESCRIPTION
+.B ucabled
+creates a virtual FIDO2/U2F HID device through the kernel's
+.B /dev/uhid
+interface and relays each WebAuthn ceremony to a phone over the caBLE v2
+hybrid transport (the same QR\-then\-Bluetooth flow browsers use).
+It normally runs as a systemd system service and is triggered by the kernel
+on behalf of a client, so it is not meant to be run by hand.
+.PP
+When a ceremony starts, the daemon asks the per\-user
+.BR ucable\-agent (1)
+to show a QR code window; the user scans it with their phone and confirms
+the request there.
+.SH OPTIONS
+.TP
+.B \-\-no\-ui
+Print the QR code on the terminal instead of asking the session agent.
+Useful on machines without a graphical session.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Tracing filter, defaulting to
+.BR info .
+.SH FILES
+.TP
+.I dist/ucabled.service
+The systemd unit that runs the daemon as the
+.I ucabled
+service account.
+.SH SEE ALSO
+.BR ucable\-agent (1),
+.BR ucable\-agent\-helper (1)

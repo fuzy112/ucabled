@@ -1,0 +1,28 @@
+.\" SPDX-License-Identifier: GPL-3.0-or-later
+.TH UCABLE-AGENT 1 "2026-10-13" "ucabled" "User Commands"
+.SH NAME
+ucable\-agent \- per\-user session agent for ucabled
+.SH SYNOPSIS
+.B ucable\-agent
+.SH DESCRIPTION
+.B ucable\-agent
+registers with the system daemon over D\-Bus and, on request, spawns the UI
+helper to show the QR code or the device\-selection window.
+It is normally started by systemd as a user service
+.RB ( ucable\-agent.service )
+and takes no options.
+.SH ENVIRONMENT
+.TP
+.B UCABLED_HELPER
+UI helper to spawn: an absolute path, or a bare name resolved through
+.BR PATH .
+Defaults to the bundled
+.BR ucable\-agent\-helper .
+.TP
+.B RUST_LOG
+Tracing filter, defaulting to
+.BR info .
+.SH SEE ALSO
+.BR ucabled (1),
+.BR ucable\-agent\-helper (1),
+.I docs/helper-contract.md

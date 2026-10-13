@@ -46,6 +46,17 @@ rustPlatform.buildRustPackage (finalAttrs: {
       mkdir -p "$out/share/locale/$lang/LC_MESSAGES"
       msgfmt "$po" -o "$out/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
     done
+
+    # Manual pages and shell completions.
+    install -Dm644 dist/man/ucabled.1 "$out/share/man/man1/ucabled.1"
+    install -Dm644 dist/man/ucable-agent.1 "$out/share/man/man1/ucable-agent.1"
+    install -Dm644 dist/man/ucable-agent-helper.1 "$out/share/man/man1/ucable-agent-helper.1"
+    install -Dm644 dist/completions/ucabled.bash "$out/share/bash-completion/completions/ucabled"
+    install -Dm644 dist/completions/ucable-agent-helper.bash "$out/share/bash-completion/completions/ucable-agent-helper"
+    install -Dm644 dist/completions/_ucabled "$out/share/zsh/site-functions/_ucabled"
+    install -Dm644 dist/completions/_ucable-agent-helper "$out/share/zsh/site-functions/_ucable-agent-helper"
+    install -Dm644 dist/completions/ucabled.fish "$out/share/fish/vendor_completions.d/ucabled.fish"
+    install -Dm644 dist/completions/ucable-agent-helper.fish "$out/share/fish/vendor_completions.d/ucable-agent-helper.fish"
   '';
 
   meta = {

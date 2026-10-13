@@ -127,6 +127,15 @@ if ((UNINSTALL)); then
         lang="$(basename "$po" .po)"
         rm -f "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
     done
+    rm -f "$PREFIX/share/man/man1/ucabled.1" \
+        "$PREFIX/share/man/man1/ucable-agent.1" \
+        "$PREFIX/share/man/man1/ucable-agent-helper.1"
+    rm -f "$PREFIX/share/bash-completion/completions/ucabled" \
+        "$PREFIX/share/bash-completion/completions/ucable-agent-helper"
+    rm -f "$PREFIX/share/zsh/site-functions/_ucabled" \
+        "$PREFIX/share/zsh/site-functions/_ucable-agent-helper"
+    rm -f "$PREFIX/share/fish/vendor_completions.d/ucabled.fish" \
+        "$PREFIX/share/fish/vendor_completions.d/ucable-agent-helper.fish"
 
     systemctl daemon-reload || true
     systemctl reload dbus 2>/dev/null || true
@@ -174,6 +183,27 @@ install -d -m 0755 "$BIN_DIR"
 for b in "${BINARIES[@]}"; do
     install -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
 done
+
+# Manual pages and shell completions.
+install -d -m 0755 "$PREFIX/share/man/man1"
+for m in "${BINARIES[@]}"; do
+    install -m 0644 -o root -g root "$DIST/man/$m.1" "$PREFIX/share/man/man1/$m.1"
+done
+install -d -m 0755 "$PREFIX/share/bash-completion/completions"
+install -m 0644 -o root -g root "$DIST/completions/ucabled.bash" \
+    "$PREFIX/share/bash-completion/completions/ucabled"
+install -m 0644 -o root -g root "$DIST/completions/ucable-agent-helper.bash" \
+    "$PREFIX/share/bash-completion/completions/ucable-agent-helper"
+install -d -m 0755 "$PREFIX/share/zsh/site-functions"
+install -m 0644 -o root -g root "$DIST/completions/_ucabled" \
+    "$PREFIX/share/zsh/site-functions/_ucabled"
+install -m 0644 -o root -g root "$DIST/completions/_ucable-agent-helper" \
+    "$PREFIX/share/zsh/site-functions/_ucable-agent-helper"
+install -d -m 0755 "$PREFIX/share/fish/vendor_completions.d"
+install -m 0644 -o root -g root "$DIST/completions/ucabled.fish" \
+    "$PREFIX/share/fish/vendor_completions.d/ucabled.fish"
+install -m 0644 -o root -g root "$DIST/completions/ucable-agent-helper.fish" \
+    "$PREFIX/share/fish/vendor_completions.d/ucable-agent-helper.fish"
 
 # Gettext catalogs for the GTK4 helper, which looks them up relative to its
 # own location (<prefix>/share/locale).

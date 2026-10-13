@@ -1,0 +1,6 @@
+#compdef ucabled
+# SPDX-License-Identifier: GPL-3.0-or-later
+_arguments \
+    '--no-ui[print the QR code on the terminal]' \
+    '(-h --help)'{-h,--help}'[print help]' \
+    '(-V --version)'{-V,--version}'[print version]'
