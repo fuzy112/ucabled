@@ -7,8 +7,9 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{Response, Uri};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
 use crate::WS_SUBPROTOCOL;
 
@@ -52,6 +53,20 @@ pub const MAX_FRAME_SIZE: usize = 64 * 1024;
 
 /// How long to wait for the tunnel websocket handshake (per redirect hop).
 pub const DIAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Websocket read limits for the tunnel connection.
+///
+/// [`read_binary`] rejects an oversized frame, but only after tungstenite has
+/// already buffered it.  Without a limit at the parser the untrusted tunnel
+/// server could make the daemon allocate up to tungstenite's 64 MiB default
+/// before the check ever runs, which is exactly what [`MAX_FRAME_SIZE`] is
+/// meant to prevent.  The defaults for the other fields are fine.
+fn frame_config() -> WebSocketConfig {
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(MAX_FRAME_SIZE);
+    config.max_frame_size = Some(MAX_FRAME_SIZE);
+    config
+}
 
 /// The (scheme, host, port) of a tunnel URL.
 ///
@@ -169,7 +184,12 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
         request
             .headers_mut()
             .insert("Sec-WebSocket-Protocol", WS_SUBPROTOCOL.parse().unwrap());
-        match tokio::time::timeout(DIAL_TIMEOUT, connect_async(request)).await {
+        match tokio::time::timeout(
+            DIAL_TIMEOUT,
+            connect_async_with_config(request, Some(frame_config()), false),
+        )
+        .await
+        {
             Ok(Ok(ok)) => return Ok(ok),
             Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
                 let status = response.status();
@@ -304,6 +324,16 @@ mod tests {
         ] {
             assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
         }
+    }
+
+    #[test]
+    fn frame_config_caps_incoming_messages() {
+        // The parser limit must be in place *before* read_binary's
+        // post-allocation check, so an oversized message is refused while
+        // being read rather than after it is buffered.
+        let config = frame_config();
+        assert_eq!(config.max_message_size, Some(MAX_FRAME_SIZE));
+        assert_eq!(config.max_frame_size, Some(MAX_FRAME_SIZE));
     }
 
     #[test]
