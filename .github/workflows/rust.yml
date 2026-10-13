@@ -39,6 +39,18 @@ jobs:
         extra_nix_config: |
           experimental-features = nix-command flakes
 
+    # Keep the declared MSRV honest: the toolchain the shell pins must never
+    # be older than the minimum Cargo.toml promises.
+    - name: Check the MSRV declaration
+      run: |
+        set -euo pipefail
+        declared=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+        [ -n "$declared" ] || { echo "Cargo.toml has no rust-version"; exit 1; }
+        have=$(nix develop --command rustc --version | awk '{print $2}')
+        oldest=$(printf '%s\n%s\n' "$declared" "$have" | sort -V | head -n1)
+        [ "$oldest" = "$declared" ] \
+          || { echo "toolchain $have is older than the declared MSRV $declared"; exit 1; }
+
     - name: Build the package
       run: nix build .#ucabled -L
 
