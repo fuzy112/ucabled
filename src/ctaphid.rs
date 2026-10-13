@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::ctap::{
@@ -90,7 +89,6 @@ pub struct Transport {
     /// Channel currently assembling or processing a multi-frame message.
     busy: Option<u32>,
     assembly: Option<Assembly>,
-    pub channels: HashMap<u32, ()>,
 }
 
 impl Transport {
@@ -100,7 +98,6 @@ impl Transport {
             aaguid,
             busy: None,
             assembly: None,
-            channels: HashMap::new(),
         }
     }
 
@@ -192,7 +189,6 @@ impl Transport {
                 } else {
                     cid
                 };
-                self.channels.insert(new_cid, ());
                 let mut resp = Vec::with_capacity(INIT_RESPONSE_LEN);
                 resp.extend_from_slice(payload); // nonce echo
                 resp.extend_from_slice(&new_cid.to_be_bytes());
@@ -296,13 +292,12 @@ impl Transport {
         true
     }
 
-    /// Forget all host-visible state: an unfinished assembly, a stuck busy
-    /// slot and the allocated channel ids.  Used when the last hidraw
-    /// handle closes so a fresh opener starts clean.
+    /// Forget all host-visible state: an unfinished assembly and a stuck
+    /// busy slot.  Used when the last hidraw handle closes so a fresh opener
+    /// starts clean.
     pub fn reset(&mut self) {
         self.busy = None;
         self.assembly = None;
-        self.channels.clear();
     }
 }
 
@@ -363,7 +358,7 @@ mod tests {
         assert_eq!(resp[0][4], CMD_INIT);
         assert_eq!(&resp[0][7..15], &[1, 2, 3, 4, 5, 6, 7, 8]);
         let new_cid = u32::from_be_bytes(resp[0][15..19].try_into().unwrap());
-        assert!(t.channels.contains_key(&new_cid));
+        assert_ne!(new_cid, BROADCAST_CID);
         assert_eq!(resp[0][19], 0x02); // protocol version
         assert_eq!(resp[0][23], CAP_WINK | CAP_CBOR);
     }
@@ -569,9 +564,7 @@ mod tests {
         ));
         let _ = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
         assert!(t.busy_channel().is_some());
-        assert!(!t.channels.is_empty());
         t.reset();
         assert_eq!(t.busy_channel(), None);
-        assert!(t.channels.is_empty());
     }
 }
