@@ -102,9 +102,18 @@ impl Transport {
     }
 
     fn alloc_cid(&mut self) -> u32 {
-        let cid = self.next_cid;
-        self.next_cid = self.next_cid.wrapping_add(1).max(1);
-        cid
+        // CID 0 and the broadcast CID are reserved and must never name a real
+        // channel, so skip them if the counter wraps or reaches them.
+        loop {
+            let cid = self.next_cid;
+            self.next_cid = self.next_cid.wrapping_add(1);
+            if self.next_cid == 0 {
+                self.next_cid = 1;
+            }
+            if cid != 0 && cid != BROADCAST_CID {
+                return cid;
+            }
+        }
     }
 
     /// Feed one 64-byte input report. Returns response reports to write back,
@@ -301,13 +310,20 @@ impl Transport {
     }
 }
 
+/// Build the report sequence for a CTAPHID response.
+///
+/// # Panics
+///
+/// Panics when `payload` is longer than `u16::MAX`: the initial report carries
+/// the payload length in a 16-bit field.  Callers stay within [`MAX_PAYLOAD`].
 pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
     let mut reports = Vec::new();
     let mut first = vec![0u8; REPORT_SIZE];
     first[0..CID_LEN].copy_from_slice(&cid.to_be_bytes());
     first[INIT_CMD_OFFSET] = cmd;
-    first[INIT_LEN_OFFSET..INIT_LEN_OFFSET + 2]
-        .copy_from_slice(&(payload.len() as u16).to_be_bytes());
+    let len = u16::try_from(payload.len())
+        .expect("CTAPHID response payload exceeds the 16-bit length field");
+    first[INIT_LEN_OFFSET..INIT_LEN_OFFSET + 2].copy_from_slice(&len.to_be_bytes());
     let first_take = payload.len().min(INIT_DATA_SIZE);
     first[INIT_DATA_OFFSET..INIT_DATA_OFFSET + first_take].copy_from_slice(&payload[..first_take]);
     reports.push(first);
@@ -343,6 +359,23 @@ mod tests {
         r[5..7].copy_from_slice(&(payload.len() as u16).to_be_bytes());
         r[7..7 + payload.len()].copy_from_slice(payload);
         r
+    }
+
+    #[test]
+    fn alloc_cid_skips_reserved_ids() {
+        let mut t = Transport::new([0u8; 16]);
+        t.next_cid = BROADCAST_CID;
+        assert_eq!(t.alloc_cid(), 1);
+        t.next_cid = u32::MAX - 1;
+        assert_eq!(t.alloc_cid(), u32::MAX - 1);
+        assert_eq!(t.alloc_cid(), 1);
+        assert_eq!(t.alloc_cid(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "16-bit length field")]
+    fn response_payload_over_16_bits_panics() {
+        let _ = build_response(1, CMD_PING, &vec![0u8; u16::MAX as usize + 1]);
     }
 
     #[test]
