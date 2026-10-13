@@ -5,7 +5,8 @@
 > getAssertion 两种仪式均无"记住这台电脑"选项，事务后也不发 linking
 > update 消息——iOS 当前不支持 linking。Android（Google Password Manager）
 > 按 Chromium 实现推断支持，但无设备未验证。待有 Android 真机后按本文档
-> 从 L1 继续。
+> 从 L1 继续。代码侧已删除从未可达的 linking 分支（等待 update 消息的
+> 会话路径及相应 HKDF 用途），恢复时需按本文档重新实现。
 
 > 目标：手机与桌面第一次通过 QR 建立联系后互相"记住"对方，后续操作免扫码——
 > 桌面通过隧道服务器经 FCM/APNs 推送唤醒手机，BLE 广播仍作 proximity proof。
