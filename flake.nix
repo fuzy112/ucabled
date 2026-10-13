@@ -53,6 +53,35 @@
           installPhase = "touch $out";
           doCheck = false;
         });
+        # Boot the module for real, so the udev ACL, the polkit action, the
+        # daemon's readiness/watchdog handshake and its bus name are all
+        # exercised rather than merely evaluated.
+        nixos-module = pkgs.testers.nixosTest {
+          name = "ucabled-module";
+          nodes.machine = {
+            imports = [ self.nixosModules.ucabled ];
+            services.ucabled.enable = true;
+          };
+          testScript = ''
+            machine.wait_for_unit("multi-user.target")
+
+            # Dedicated service account and its /dev/uhid ACL.
+            machine.succeed("getent passwd ucabled")
+            machine.succeed("getent group ucabled")
+            machine.succeed("grep -rq 'u:ucabled:rw /dev/uhid' /etc/udev/rules.d/")
+            machine.succeed("test -c /dev/uhid")
+
+            # The polkit action ships in the system profile.
+            machine.succeed(
+                "test -f /run/current-system/sw/share/polkit-1/actions/org.ucabled.policy"
+            )
+
+            # The daemon registers the virtual device, reports readiness
+            # (Type=notify) and owns its bus name.
+            machine.wait_for_unit("ucabled.service")
+            machine.succeed("busctl --system status org.ucabled")
+          '';
+        };
       });
       devShells = forAllSystems (pkgs: {
         default = import ./shell.nix { inherit pkgs; };
