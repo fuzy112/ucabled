@@ -4,7 +4,15 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 
 const PADDING_GRANULARITY: usize = 32;
+/// AES-GCM authentication tag appended to every ciphertext.
+const TAG_SIZE: usize = 16;
 const MAX_SEQUENCE: u32 = (1 << 24) - 1;
+
+/// Plaintext size after zero padding to the granularity: one length byte is
+/// always added, so even an empty message occupies one whole block.
+fn padded_size(message_len: usize) -> usize {
+    (message_len + 1 + PADDING_GRANULARITY - 1) & !(PADDING_GRANULARITY - 1)
+}
 
 pub struct Crypter {
     read_key: [u8; 32],
@@ -36,9 +44,15 @@ impl Crypter {
         Some(nonce)
     }
 
+    /// The ciphertext length [`Crypter::encrypt`] produces for a plaintext of
+    /// `message_len` bytes.  Used to check a message against the L2CAP send
+    /// MTU before committing to that channel.
+    pub fn encrypted_size(message_len: usize) -> usize {
+        padded_size(message_len) + TAG_SIZE
+    }
+
     pub fn encrypt(&mut self, message: &[u8]) -> Option<Vec<u8>> {
-        let padded_size =
-            (message.len() + 1 + PADDING_GRANULARITY - 1) & !(PADDING_GRANULARITY - 1);
+        let padded_size = padded_size(message.len());
         let num_zeros = padded_size - message.len() - 1;
         let mut padded = vec![0u8; padded_size];
         padded[..message.len()].copy_from_slice(message);
@@ -116,6 +130,19 @@ mod tests {
             Crypter::nonce(1).unwrap(),
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
         );
+    }
+
+    #[test]
+    fn encrypted_size_matches_the_ciphertext() {
+        let (mut a, _b) = pair();
+        for len in [0usize, 1, 30, 31, 32, 33, 63, 64, 65, 7609] {
+            let msg = vec![0u8; len];
+            assert_eq!(
+                a.encrypt(&msg).unwrap().len(),
+                Crypter::encrypted_size(len),
+                "len {len}"
+            );
+        }
     }
 
     #[test]

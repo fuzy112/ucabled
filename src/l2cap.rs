@@ -50,3 +50,10 @@ pub async fn recv(stream: &SeqPacket) -> Result<Vec<u8>> {
     buf.truncate(n);
     Ok(buf)
 }
+
+/// The largest caBLE message this channel may send, from the peer's
+/// negotiated receive MTU.  `None` when the kernel does not report one, in
+/// which case the caller proceeds and lets the send fail if it must.
+pub fn send_mtu(stream: &SeqPacket) -> Option<usize> {
+    stream.send_mtu().ok()
+}
