@@ -94,6 +94,19 @@ install_unit() {
     chmod 0644 "$dest"
 }
 
+# Copy the udev rule, baking in the setfacl path found on this system.  The
+# rule is otherwise installed verbatim, and distributions disagree on where
+# setfacl lives, so a hardcoded /usr/bin/setfacl silently fails elsewhere and
+# leaves the daemon unable to open /dev/uhid.
+install_udev_rule() {
+    local src="$1" dest="$2" content acl
+    content="$(<"$src")"
+    # '&' is special in the replacement, so escape it.
+    acl="${SETFACL//&/\\&}"
+    printf '%s\n' "${content//\/usr\/bin\/setfacl/$acl}" >"$dest"
+    chmod 0644 "$dest"
+}
+
 if ((UNINSTALL)); then
     systemctl disable --now ucabled.service 2>/dev/null || true
     systemctl --global disable ucable-agent.service 2>/dev/null || true
@@ -148,8 +161,8 @@ if ((${#missing[@]})); then
 build them first as your normal user with:  cargo build --release"
 fi
 
-command -v setfacl >/dev/null ||
-    printf 'warning: setfacl not found; the udev rule needs the "acl" package\n' >&2
+SETFACL="$(command -v setfacl)" ||
+    die 'setfacl not found; install the "acl" package (the udev rule needs it)'
 
 # Dedicated service account; the human user only needs the hidraw node.
 getent group ucabled >/dev/null || groupadd --system ucabled
@@ -183,7 +196,7 @@ chmod 0644 "$MODULES_LOAD_DIR/ucabled.conf"
 modprobe uhid || true
 
 install -d -m 0755 "$UDEV_DIR"
-install -m 0644 -o root -g root "$DIST/90-ucabled.rules" "$UDEV_DIR/90-ucabled.rules"
+install_udev_rule "$DIST/90-ucabled.rules" "$UDEV_DIR/90-ucabled.rules"
 
 install -d -m 0755 "$DBUS_DIR"
 install -m 0644 -o root -g root "$DIST/org.ucabled.conf" "$DBUS_DIR/org.ucabled.conf"
