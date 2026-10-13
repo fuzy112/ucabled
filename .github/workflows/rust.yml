@@ -80,3 +80,8 @@ jobs:
     # runs everywhere, the two-device ones stay ignored without a peer.
     - name: Test the experimental l2cap feature
       run: nix develop --command cargo test --locked --features l2cap
+
+    # Catch a helper string that was added without regenerating the catalogs
+    # (it would silently fall back to English).
+    - name: Check the translation catalogs
+      run: nix develop --command admin/check-po.sh

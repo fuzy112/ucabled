@@ -2,8 +2,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: ucable-agent-helper-gtk 0.1.0\n"
-"Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-03 00:00+0800\n"
+"Report-Msgid-Bugs-To: i@fuzy.me\n"
+"POT-Creation-Date: 2026-10-13 18:06+0800\n"
 "PO-Revision-Date: 2026-10-03 00:00+0800\n"
 "Last-Translator: \n"
 "Language-Team: Japanese\n"
@@ -13,35 +13,57 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
+#: src/bin/ucable-agent-helper.rs:114
+msgid ""
+"Scan with your phone\n"
+"to store a passkey"
+msgstr ""
+"スマートフォンでスキャン\n"
+"パスキーを保存します"
+
+#: src/bin/ucable-agent-helper.rs:116
+msgid ""
+"Scan with your phone\n"
+"to authenticate with passkeys"
+msgstr ""
+"スマートフォンでスキャン\n"
+"パスキーで認証します"
+
+#: src/bin/ucable-agent-helper.rs:118
 msgid "Scan with your phone"
 msgstr "スマートフォンでスキャン"
 
-msgid "Phone detected"
-msgstr "スマートフォンを検出しました"
-
-msgid "Confirm the sign-in on your phone"
-msgstr "スマートフォンでサインインを確認してください"
-
-msgid "Code expired"
-msgstr "コードの有効期限が切れました"
-
-msgid "Close this window and start again."
-msgstr "このウィンドウを閉じて、もう一度やり直してください。"
-
+#: src/bin/ucable-agent-helper.rs:505 src/bin/ucable-agent-helper.rs:635
+#: src/bin/ucable-agent-helper.rs:694
 msgid "Passkey request"
 msgstr "パスキーのリクエスト"
 
-msgid "A security key is also connected. Use your phone's passkey instead?"
-msgstr "セキュリティキーも接続されています。代わりにスマートフォンのパスキーを使いますか？"
+#: src/bin/ucable-agent-helper.rs:538
+msgid "Code expired"
+msgstr "コードの有効期限が切れました"
 
+#: src/bin/ucable-agent-helper.rs:539
+msgid "Close this window and start again."
+msgstr "このウィンドウを閉じて、もう一度やり直してください。"
+
+#: src/bin/ucable-agent-helper.rs:563
+msgid "Phone detected"
+msgstr "スマートフォンを検出しました"
+
+#: src/bin/ucable-agent-helper.rs:564
+msgid "Confirm the sign-in on your phone"
+msgstr "スマートフォンでサインインを確認してください"
+
+#: src/bin/ucable-agent-helper.rs:640
+msgid "A security key is also connected. Use your phone's passkey instead?"
+msgstr ""
+"セキュリティキーも接続されています。代わりにスマートフォンのパスキーを使いま"
+"すか？"
+
+#: src/bin/ucable-agent-helper.rs:650
 msgid "Keep using the security key"
 msgstr "セキュリティキーを使い続ける"
 
+#: src/bin/ucable-agent-helper.rs:654
 msgid "Use phone"
 msgstr "スマートフォンを使用"
-
-msgid "Scan with your phone\nto authenticate with passkeys"
-msgstr "スマートフォンでスキャン\nパスキーで認証します"
-
-msgid "Scan with your phone\nto store a passkey"
-msgstr "スマートフォンでスキャン\nパスキーを保存します"

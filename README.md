@@ -330,6 +330,11 @@ Helper tools in the repo (not shipped in the package):
 - `src/bin/cable-advert-probe.rs`: show a caBLE QR offering the BLE data
   channel and report whether the phone advertised an L2CAP PSM
 
+Translation catalogs live in `po/`.  After adding or changing a helper
+string, run `admin/update-pot.sh` (from the dev shell) to regenerate
+`po/ucable-agent-helper-gtk.pot` and fold the new msgids into every
+catalog.  The helper is the only translated component.
+
 The optional CTAP 2.3 BLE data channel (L2CAP CoC) is experimental and off by
 default: build with `--features l2cap` and set `UCABLED_BLE_CHANNEL=1`.  iPhones
 do not offer it (verified); it targets Android.

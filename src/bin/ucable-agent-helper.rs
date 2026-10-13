@@ -101,11 +101,21 @@ impl RequestKind {
 
 /// The caption under the QR code: what scanning does, in the terms of the
 /// command that is waiting on the other end.
+/// Marks a literal for translation extraction without translating it here:
+/// the caller passes the value to [`tr`].  `xgettext` is told about it with
+/// `--keyword=n_` (see `admin/update-pot.sh`), which a plain `tr()` around
+/// these literals could not be, because the function returns a `&'static str`.
+const fn n_(msgid: &'static str) -> &'static str {
+    msgid
+}
+
 fn scan_caption(request_type: Option<RequestKind>) -> &'static str {
     match request_type {
-        Some(RequestKind::MakeCredential) => "Scan with your phone\nto store a passkey",
-        Some(RequestKind::GetAssertion) => "Scan with your phone\nto authenticate with passkeys",
-        None => "Scan with your phone",
+        Some(RequestKind::MakeCredential) => n_("Scan with your phone\nto store a passkey"),
+        Some(RequestKind::GetAssertion) => {
+            n_("Scan with your phone\nto authenticate with passkeys")
+        }
+        None => n_("Scan with your phone"),
     }
 }
 
