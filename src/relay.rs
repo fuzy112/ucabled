@@ -57,8 +57,7 @@ pub async fn run_qr_transaction(
     OsRng.fill_bytes(&mut qr_secret);
 
     // Linking is shelved (iOS does not implement it, see docs/linking.md), so
-    // do not advertise it and do not stay on the tunnel after the reply.
-    let supports_linking = false;
+    // do not advertise it.
     let offer_ble = ble_channel_enabled();
     let mut channels = vec![qr::TRANSPORT_WEBSOCKET];
     if offer_ble {
@@ -68,7 +67,7 @@ pub async fn run_qr_transaction(
         compressed,
         &qr_secret,
         NUM_ASSIGNED_TUNNEL_DOMAINS,
-        supports_linking,
+        false,
         request_type,
         &channels,
     );
@@ -97,7 +96,6 @@ pub async fn run_qr_transaction(
         qr_secret,
         identity: identity.clone(),
         plaintext_eid: advert.plaintext_eid,
-        supports_linking,
         handshake_timeout: crate::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: crate::tunnel::DIAL_TIMEOUT,
     };

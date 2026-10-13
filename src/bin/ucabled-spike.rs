@@ -116,9 +116,6 @@ async fn main() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
-        // The spike advertises linking (for L0 testing), so it is willing to
-        // stay on the tunnel after the reply to catch update messages.
-        supports_linking: true,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
@@ -135,12 +132,5 @@ async fn main() -> Result<()> {
         result.ctap_reply.len(),
         hex::encode(&result.ctap_reply)
     );
-    println!(
-        "update messages received after shutdown: {}",
-        result.updates.len()
-    );
-    for (i, u) in result.updates.iter().enumerate() {
-        println!("  update[{i}] ({} bytes): {}", u.len(), hex::encode(u));
-    }
     Ok(())
 }

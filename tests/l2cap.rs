@@ -162,7 +162,6 @@ async fn l2cap_connect_failure_falls_back_to_websocket() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
-        supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: std::time::Duration::from_millis(500),
     };
@@ -205,7 +204,6 @@ async fn desktop_flow_over_l2cap() -> Result<()> {
         qr_secret: QR_SECRET,
         identity: desktop_identity(),
         plaintext_eid: PLAINTEXT_EID,
-        supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };

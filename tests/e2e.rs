@@ -73,7 +73,6 @@ async fn full_roundtrip_over_local_relay() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
-        supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
@@ -141,7 +140,6 @@ async fn a_stalled_handshake_times_out() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
-        supports_linking: false,
         handshake_timeout: std::time::Duration::from_millis(500),
         connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
@@ -253,7 +251,6 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
         qr_secret,
         identity,
         plaintext_eid,
-        supports_linking: false,
         handshake_timeout: ucabled::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: ucabled::tunnel::DIAL_TIMEOUT,
     };
@@ -264,10 +261,9 @@ async fn reply_is_not_delayed_by_a_lingering_phone() -> Result<()> {
     phone_task.abort();
 
     assert_eq!(result.ctap_reply[0], 0x00, "expected CTAP success status");
-    assert!(result.updates.is_empty());
     assert!(
         elapsed < std::time::Duration::from_secs(5),
-        "CTAP reply was delayed by post-shutdown listening: {elapsed:?}"
+        "CTAP reply waited for the lingering phone: {elapsed:?}"
     );
     Ok(())
 }

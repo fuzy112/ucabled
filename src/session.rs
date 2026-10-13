@@ -43,11 +43,6 @@ pub struct DesktopFlow {
     pub qr_secret: [u8; 16],
     pub identity: SecretKey,
     pub plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE],
-    /// True only when the QR advertised `supports_linking`, i.e. the phone may
-    /// send linking data in update messages after the transaction. Collecting
-    /// those messages means staying on the tunnel after the CTAP reply, which
-    /// must never delay that reply, so this defaults to false.
-    pub supports_linking: bool,
     /// How long to wait for the phone's handshake response; a field so that
     /// tests can shrink it.
     pub handshake_timeout: Duration,
@@ -63,8 +58,6 @@ pub struct DesktopResult {
     /// First CTAP reply payload (status byte + CBOR) received from the phone.
     pub ctap_reply: Vec<u8>,
     pub handshake_hash: [u8; 32],
-    /// Update messages received after the CTAP reply (linking data etc.).
-    pub updates: Vec<Vec<u8>>,
 }
 
 impl DesktopFlow {
@@ -150,20 +143,10 @@ impl DesktopFlow {
 
         link.send_shutdown().await.ok();
 
-        // Only when linking was advertised is it worth staying on the tunnel
-        // to catch update messages; the CTAP reply above is already complete
-        // and is returned as soon as this function returns.
-        let updates = if self.supports_linking {
-            collect_updates(&mut link, std::time::Duration::from_secs(15)).await
-        } else {
-            Vec::new()
-        };
-
         Ok(DesktopResult {
             post_handshake,
             ctap_reply,
             handshake_hash,
-            updates,
         })
     }
 
@@ -265,22 +248,6 @@ impl DesktopFlow {
             .map_err(TransactionError::transport)?;
         Ok(CableTransport::Websocket(Box::new(ws)))
     }
-}
-
-async fn collect_updates(link: &mut CableLink, window: std::time::Duration) -> Vec<Vec<u8>> {
-    let mut updates = Vec::new();
-    let deadline = tokio::time::Instant::now() + window;
-    loop {
-        match tokio::time::timeout_at(deadline, link.recv_message()).await {
-            Ok(Ok((MSG_UPDATE, payload))) => {
-                tracing::info!(len = payload.len(), "received update message");
-                updates.push(payload);
-            }
-            Ok(Ok(_)) => {}
-            _ => break,
-        }
-    }
-    updates
 }
 
 async fn recv_raw(link: &mut CableLink) -> Result<Vec<u8>> {

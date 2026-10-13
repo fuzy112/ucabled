@@ -9,12 +9,6 @@ pub enum Purpose {
     EidKey = 1,
     TunnelId = 2,
     Psk = 3,
-    #[allow(dead_code)]
-    PairedSecret = 4,
-    #[allow(dead_code)]
-    IdentityKeySeed = 5,
-    #[allow(dead_code)]
-    PerContactIdSecret = 6,
 }
 
 /// Derive `out` bytes from `secret` for `purpose` (HKDF-SHA256).
