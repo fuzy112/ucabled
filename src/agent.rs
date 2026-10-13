@@ -205,6 +205,11 @@ impl AgentClient {
     /// Ask the agent to show the "use the phone instead?" prompt. The answer
     /// comes back through the `select` channel passed to [`start`].
     pub fn select(&self, tid: u64) {
+        // Remember the transaction like `prompt` does: `close` tears the
+        // window down by tid, and the selection window is a window too.  A
+        // host cancellation (the user touched another key) closes it through
+        // this path before the helper's own timeout.
+        self.active_tid.store(tid, Ordering::SeqCst);
         let _ = self.tx.send(AgentCommand::Select { tid });
     }
 
@@ -759,6 +764,27 @@ mod tests {
         assert!(client.available());
         assert!(clear_if_matches(&slot, Some(":1.7")).is_some());
         assert!(!client.available());
+    }
+
+    #[test]
+    fn select_records_its_transaction_for_a_later_close() {
+        let slot = Arc::new(Mutex::new(AgentSlot::default()));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let client = AgentClient {
+            tx,
+            slot,
+            active_tid: Arc::new(AtomicU64::new(0)),
+        };
+
+        client.select(7);
+        assert_eq!(client.active_tid.load(Ordering::SeqCst), 7);
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Select { tid: 7 })));
+
+        // The close that follows a host cancellation now carries the
+        // selection's tid, so the agent closes the selection window instead
+        // of leaving it to its own timeout.
+        client.close();
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Close { tid: 7 })));
     }
 
     #[test]
