@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{Response, Uri};
+use tokio_tungstenite::tungstenite::http::{HeaderMap, Response, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{
@@ -199,6 +199,21 @@ pub fn connect_url(domain: &str, routing_id: &[u8; 3], tunnel_id: &[u8; 16]) -> 
     )
 }
 
+// We advertise the caBLE subprotocol; a server that does not echo it back
+// is not the endpoint we expect, and the framing is undefined, so refuse
+// the connection.
+fn check_subprotocol(headers: &HeaderMap) -> Result<()> {
+    match headers
+        .get("Sec-WebSocket-Protocol")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(p) if p == WS_SUBPROTOCOL => Ok(()),
+        other => Err(anyhow!(
+            "tunnel server did not select subprotocol {WS_SUBPROTOCOL:?} (got {other:?})"
+        )),
+    }
+}
+
 pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
     ensure_crypto_provider();
     // The spec requires following HTTP redirects; tokio-tungstenite does not,
@@ -225,7 +240,10 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
         )
         .await
         {
-            Ok(Ok(ok)) => return Ok(ok),
+            Ok(Ok((ws, response))) => {
+                check_subprotocol(response.headers())?;
+                return Ok((ws, response));
+            }
             Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
                 let status = response.status();
                 let location = response
@@ -378,6 +396,16 @@ mod tests {
         // not panic.
         assert!(root_store().roots.len() > 1);
         let _ = tls_config();
+    }
+
+    #[test]
+    fn subprotocol_must_be_echoed() {
+        let mut headers = HeaderMap::new();
+        assert!(check_subprotocol(&headers).is_err());
+        headers.insert("Sec-WebSocket-Protocol", "chat".parse().unwrap());
+        assert!(check_subprotocol(&headers).is_err());
+        headers.insert("Sec-WebSocket-Protocol", WS_SUBPROTOCOL.parse().unwrap());
+        assert!(check_subprotocol(&headers).is_ok());
     }
 
     #[test]
