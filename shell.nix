@@ -6,6 +6,9 @@ pkgs.mkShell {
     rustc
     rustfmt
     clippy
+    # Dependency advisory scanner, pinned through flake.lock like the rest of
+    # the toolchain (CI runs it as `cargo audit`).
+    cargo-audit
     gcc
     pkg-config
     dbus
