@@ -54,17 +54,9 @@ jobs:
     - name: Build the package
       run: nix build .#ucabled -L
 
-    # Only a push to master or next publishes.  A pull request must never be
-    # able to have its own artifact signed and served to everyone else.
-    - name: Publish to Cachix
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/next')
-      env:
-        CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      run: nix run nixpkgs#cachix -- push ucabled "$(nix build .#ucabled --no-link --print-out-paths)"
-
-    # Flake checks cover the package build (including its tests), cargo fmt
-    # and cargo clippy, matching what a developer can run locally.  The
-    # package itself is already built and cached by the steps above.
+    # Flake checks cover the package build (including its tests), cargo fmt,
+    # cargo clippy and cargo doc, matching what a developer can run locally.
+    # The package itself is already built and cached by the steps above.
     - name: Run flake checks
       run: nix flake check -L
 
@@ -85,3 +77,12 @@ jobs:
     # (it would silently fall back to English).
     - name: Check the translation catalogs
       run: nix develop --command admin/check-po.sh
+
+    # Publish only once every check above has passed, so a broken revision is
+    # never cached.  Only a push to master or next publishes; a pull request
+    # must never be able to sign and serve its own artifact to everyone else.
+    - name: Publish to Cachix
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/next')
+      env:
+        CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      run: nix run nixpkgs#cachix -- push ucabled "$(nix build .#ucabled --no-link --print-out-paths)"
