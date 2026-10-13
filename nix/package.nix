@@ -13,7 +13,23 @@ rustPlatform.buildRustPackage (finalAttrs: {
   pname = "ucabled";
   version = (lib.importTOML ../Cargo.toml).package.version;
 
-  src = lib.cleanSource ./..;
+  # Only the files the build consumes: the crate, the gettext catalogs
+  # compiled in postInstall and the manual pages/completions installed from
+  # dist.  A change anywhere else in the repo (docs, site, CI) leaves this
+  # source and thus the output path unchanged, so the Cachix entry an
+  # earlier push published stays valid and the workflow's path filter can
+  # skip such commits.  Keep this in sync with the paths filter in
+  # .github/workflows/rust.yml.
+  src = lib.fileset.toSource {
+    root = ./..;
+    fileset = lib.fileset.unions [
+      ../src
+      ../Cargo.toml
+      ../Cargo.lock
+      ../po
+      ../dist
+    ];
+  };
   cargoLock.lockFile = ../Cargo.lock;
 
   # libadwaita is deliberately left out here to keep the helper
