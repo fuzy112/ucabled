@@ -378,7 +378,10 @@ fn open_window(
         }
     };
     let Some(pid) = child.id() else {
+        // A child that has no pid is already reaped, but make sure it is not
+        // left running before giving up on the window.
         tracing::warn!("helper has no pid");
+        let _ = child.start_kill();
         return false;
     };
 
