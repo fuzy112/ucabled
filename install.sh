@@ -179,9 +179,10 @@ getent passwd ucabled >/dev/null ||
     useradd --system --gid ucabled --no-create-home \
         --home-dir /nonexistent --shell "$nologin" ucabled
 
+# -s strips the symbol table; cargo's release profile leaves it in.
 install -d -m 0755 "$BIN_DIR"
 for b in "${BINARIES[@]}"; do
-    install -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
+    install -s -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
 done
 
 # Manual pages and shell completions.

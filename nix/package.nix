@@ -7,6 +7,8 @@
   gtk4,
   gtk4-layer-shell,
   gettext,
+  # Set to false to keep the symbol table (e.g. for profiling builds).
+  stripBinaries ? true,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -48,6 +50,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
     gtk4
     gtk4-layer-shell
   ];
+
+  # Rust release builds carry no DWARF debug info, so stdenv's default
+  # `strip -S` removes nothing and the symbol table ships in the output.
+  # Strip all symbols from the installed binaries instead.
+  stripAllList = lib.optionals stripBinaries [ "bin" ];
 
   postInstall = ''
     # Only ship the daemon and its QR helpers; spike/mock/probe are dev tools.
