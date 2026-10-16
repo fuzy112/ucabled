@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Experimental BLE data channel (`l2cap` feature): frame each caBLE
+  message with the 4-byte big-endian length prefix the hybrid
+  specification requires, instead of relying on L2CAP message
+  boundaries.
+
 ## [0.1.3] - 2026-10-13
 
 ### Changed

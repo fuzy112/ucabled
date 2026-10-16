@@ -38,9 +38,9 @@
    （与今天一致）；随后把 `serviceData[20:]` 当 CBOR 解析，取出 `Key 1` 的 PSM。
 5. **连 PSM**：client 连该 PSM 的 LE CoC（不配对、insecure）。
 6. **握手与消息层不变**：通道建立后是同一套 Noise `KNpsk0`（P-256 / SHA-256 /
-   AES-256-GCM），PSK 由 QR secret + 解密后的 advert plaintext 派生。之后每条
-   消息首字节为类型：`0` shutdown、`1` CTAP、`2` update、`3` JSON（与
-   WebSocket 通道完全相同的消息层）。
+   AES-256-GCM），PSK 由 QR secret + 解密后的 advert plaintext 派生。每条消息
+   先加 **4 字节大端长度前缀**（PXP §6.1.2），其后首字节为类型：`0` shutdown、
+   `1` CTAP、`2` update、`3` JSON（与 WebSocket 通道完全相同的消息层）。
 
 ## 3. 桌面侧实现
 
@@ -56,8 +56,9 @@
 - **链路抽象**：`phone::CableTransport`（WebSocket 或 L2CAP），`CableLink`
   改持 `transport`；`session::Channel` 决定走哪条。
 - **`l2cap.rs`**：LE CoC 客户端 `connect` / `send` / `recv`，用
-  `SOCK_SEQPACKET`（LE Credit Based，约定一 SDU = 一条 caBLE 消息）；连上后把
-  安全等级设为 Sdp（insecure）、recv MTU 开到最大。
+  `SOCK_SEQPACKET`（LE Credit Based）；每条 caBLE 消息按 PXP §6.1.2 加 4 字节
+  大端长度前缀（`send` 编码、`recv` 校验长度上限与整帧一致）；连上后把安全等级
+  设为 Sdp（insecure）、recv MTU 开到最大。
 - **`relay.rs`**：advert 带 PSM 且已启用时选 L2CAP，否则 WebSocket。
 - **`session.rs`**：L2CAP connect 带与 WebSocket dial 相同的 20s 超时；
   connect 失败或超时都回落 WebSocket 通道（规范允许手机同时等多条通道；
@@ -71,9 +72,9 @@
 
 | # | 问题 | 说明 |
 | --- | --- | --- |
-| 1 | **CoC 模式互通** | LE Credit Based Flow Control（包边界，Linux `SOCK_SEQPACKET`）还是 Enhanced Credit Based（字节流，`SOCK_STREAM`）。Fast Pair 明说用 "LE credit based flow control"，故实现选了 LEB；若手机实际用 ECFC，需把 `l2cap.rs` 换成 `Stream` 并定长度前缀。 |
+| 1 | **CoC 模式互通** | LE Credit Based Flow Control（包边界，Linux `SOCK_SEQPACKET`）还是 Enhanced Credit Based（字节流，`SOCK_STREAM`）。规范未指定；PXP 的长度前缀让字节流也成立。Fast Pair 明说用 "LE credit based flow control"，故实现选了 LEB；若手机实际用 ECFC，需把 `l2cap.rs` 换成 `Stream`（前缀格式不变，但 `recv` 要按长度分多次读）。 |
 | 2 | **extended advertising 后缀** | 后缀要求 LE 扩展广播。BlueZ 会解析扩展广播报告，理论上会进 `Device1.ServiceData`，但必须真机确认 `payload.len() > 20`。这是 go/no-go 点。 |
-| 3 | **消息分帧** | 实现按「一 SDU = 一条 caBLE 消息」假设（规范示例用 `WriteMessage(BinaryMessage)`）；若对拷不符，需要自定义长度前缀。Chromium 尚未落地、Android 闭源，需真机对拷验证。 |
+| 3 | **消息分帧** | PXP §6.1.2 规定每条 caBLE 消息前加 **4 字节大端长度前缀**（CTAP 2.3 原文未规定分帧）。实现已按此在 `l2cap.rs` 的 `send`/`recv` 加前缀并校验；真机（Android / 未来 iOS）仍需对拷验证。 |
 | 4 | **insecure CoC 免配对** | 规范明说 insecure，需确认内核允许不 bonding、安全等级可低，以及随机地址轮换下的连通性（Chromium 作者早提过未配对时 L2CAP 在 MAC 轮换下不稳定）。 |
 | 5 | **手机/平台支持面** | **iPhone 实测不支持**（见 §5，含离线场景与 90s 重广播监听；iOS 27.0）。且 iOS 上第三方应用无法设置 BLE service data（fido-dev 邮件组），只有 Apple 能实现。Android 侧 Google 已官宣（安全工程博客 "Hybrid Transport Goes Offline!"，2026-03-04），GMS Core 闭源无法直接验证。**Chromium 桌面端未落地**：唯一 CL 7845133（仅 macOS、flag `FidoBleL2cap` 默认关）自 2026-05-13 卡在 tryjob 未合并；main 分支 `device/fido/cable/` 无任何 L2CAP/suffix/Key 6 代码。 |
 

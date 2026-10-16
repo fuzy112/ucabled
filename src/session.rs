@@ -171,11 +171,13 @@ impl DesktopFlow {
                 psm,
             } => {
                 tracing::info!(%address, psm, "connecting caBLE L2CAP channel");
-                // Largest message the desktop will send on this channel: the
-                // caBLE type byte plus the CTAP command, padded and tagged by
-                // the crypter.  The handshake messages that go out before the
-                // crypter are smaller for any plausible request.
-                let required = crate::crypter::Crypter::encrypted_size(1 + _ctap_len);
+                // Largest message the desktop will send on this channel:
+                // the 4-byte length prefix (PXP §6.1.2), the caBLE type byte
+                // and the CTAP command, padded and tagged by the crypter.
+                // The handshake messages that go out before the crypter are
+                // smaller for any plausible request.
+                let required = crate::l2cap::LENGTH_PREFIX
+                    + crate::crypter::Crypter::encrypted_size(1 + _ctap_len);
                 // A phone that advertised a PSM but never answers (stale
                 // address, moved out of range) must not hold the transaction
                 // until the host times out.
