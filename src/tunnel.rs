@@ -30,7 +30,7 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub const ASSIGNED_TUNNEL_DOMAINS: [&str; 2] = ["cable.ua5v.com", "cable.auth.com"];
 
-/// Assigned-domain IDs (CTAP 2.2 §11.5.1): indexes into
+/// Assigned-domain IDs (PXP §6.1.1): indexes into
 /// [`ASSIGNED_TUNNEL_DOMAINS`].
 pub const ASSIGNED_DOMAIN_GOOGLE: u16 = 0;
 pub const ASSIGNED_DOMAIN_APPLE: u16 = 1;
@@ -40,7 +40,7 @@ const ASSIGNED_DOMAIN_LIMIT: u16 = 256;
 const HASHED_DOMAIN_PREFIX: &str = "cable.";
 const BASE32_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
 const HASHED_TLDS: [&str; 4] = ["com", "org", "net", "info"];
-/// The hashed domain input is NUL-terminated (CTAP 2.2 §11.5.1).
+/// The hashed domain input is NUL-terminated (PXP §6.1.1).
 const HASHED_DOMAIN_TERMINATOR: u8 = 0;
 
 /// Maximum number of HTTP redirect hops when dialling the tunnel.

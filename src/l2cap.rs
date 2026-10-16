@@ -4,7 +4,7 @@
 //! data channel.
 //!
 //! The channel is deliberately insecure (no pairing, no link encryption):
-//! CTAP traffic has its own Noise layer on top (CTAP 2.3 §11.5.1.1.2). Each
+//! CTAP traffic has its own Noise layer on top (PXP §6.1.2). Each
 //! caBLE message is carried as one L2CAP SDU, so the message boundaries the
 //! spec's socket abstraction relies on are preserved. This uses the LE Credit
 //! Based Flow Control mode (`SOCK_SEQPACKET`); if a phone turns out to use

@@ -303,5 +303,5 @@ NixOS module（`nix/module.nix`）：
   PolicyKit1.conf.in`（默认上下文允许向 polkit 发送）；`src/polkit/
   polkitsubject.c`（`system-bus-name` 主体解析）；GeoClue 的非 root agent
   鉴权模式。
-- FIDO CTAP 2.2 §11.5（Hybrid transports / caBLE v2）。
+- FIDO PXP（Proximity Exchange Protocol，原 CTAP hybrid transport / caBLE v2）。
 - systemd `systemd.exec(5)` sandbox 指令（`DevicePolicy`/`DeviceAllow` 等）。

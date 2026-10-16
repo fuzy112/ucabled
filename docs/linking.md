@@ -10,7 +10,7 @@
 
 > 目标：手机与桌面第一次通过 QR 建立联系后互相"记住"对方，后续操作免扫码——
 > 桌面通过隧道服务器经 FCM/APNs 推送唤醒手机，BLE 广播仍作 proximity proof。
-> 规范来源：CTAP 2.2 §11.5.2 + Chromium `device/fido/cable`（pairing.cc、
+> 规范来源：PXP §5.3.2 + Chromium `device/fido/cable`（pairing.cc、
 > fido_tunnel_device.cc 的 paired 路径、v2_handshake.cc 的 NKpsk0）。
 
 ## 1. 协议流程

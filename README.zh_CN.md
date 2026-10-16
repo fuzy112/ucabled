@@ -10,7 +10,7 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 材料——通行密钥始终只存在于手机上。
 
 底层上，它向内核注册一个虚拟的 USB HID FIDO2 设备（`/dev/uhid`），并通过
-**caBLE v2**（二维码 + BLE 距离证明 + WSS 隧道，即 CTAP 2.2 §11.5 的 hybrid
+**caBLE v2**（二维码 + BLE 距离证明 + WSS 隧道，即 PXP / 原 CTAP hybrid
 传输）把浏览器发来的 WebAuthn 注册/登录请求中继到手机，再把手机的响应送回
 浏览器。
 

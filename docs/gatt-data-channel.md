@@ -16,7 +16,7 @@
    U2F）。用不用它是平台实现选择，不是协议缺陷。
 2. iOS（iCloud Keychain）与 Android（Google Password Manager）作为平台
    authenticator **不暴露**这个 GATT server，只实现 hybrid。
-3. hybrid（§11.5）的数据通道有 WebSocket（默认、回退）与 BLE（2.3 新增）两种；
+3. hybrid（现 PXP §6.1）的数据通道有 WebSocket（默认、回退）与 BLE（2.3 新增）两种；
    **BLE 通道用 insecure L2CAP CoC，不经过任何 GATT service**。即"hybrid 无
    GATT 数据通道"仍然成立，但"hybrid 无 BLE 数据通道"从 2.3 起不再成立。
 4. 因此，面向"手机 passkey、零安装"的场景：GATT 通道不可用（手机不提供）；
@@ -46,12 +46,12 @@
   GATT 绑定可承载 CTAP2，先前"只有 U2F/CTAP1、无 CBOR"的说法有误。**
 - 手机不提供该 server，故无法与 iOS / Android 平台 passkey 互通。
 
-### 2.2 hybrid 的数据通道（§11.5.1.1）
+### 2.2 hybrid 的数据通道（PXP §6.1）
 
-- §11.5.1.1.1 WebSocket（CTAP 2.2 起）：隧道服务器中转，URL 为
+- PXP §6.1.1 WebSocket（CTAP 2.2 起）：隧道服务器中转，URL 为
   `wss://<domain>/cable/connect/<routingID>/<tunnelID>`，子协议 `fido.cable`。
   仍是默认与回退通道。
-- §11.5.1.1.2 BLE（CTAP 2.3 新增）：authenticator 建 insecure L2CAP CoC
+- PXP §6.1.2 BLE（CTAP 2.3 新增）：authenticator 建 insecure L2CAP CoC
   server socket 并自动生成 `server PSM`；client 在 QR 的 `Key 6`（支持的通道
   列表，`0`=Websockets、`1`=BLE）里声明支持后，authenticator 把 PSM 放进
   **advertisement suffix**——即追加在 20 字节 service data 之后的 CBOR map

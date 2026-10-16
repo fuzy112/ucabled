@@ -13,8 +13,8 @@ passkey always lives on the phone.
 Under the hood it registers a virtual USB HID FIDO2 device with the kernel
 (`/dev/uhid`) and relays WebAuthn registration/sign-in requests from the
 browser to the phone over **caBLE v2** (QR code + BLE proximity proof + WSS
-tunnel, the hybrid transport from CTAP 2.2 §11.5), then sends the phone's
-response back to the browser.
+tunnel, the hybrid transport now specified by the Proximity Exchange
+Protocol), then sends the phone's response back to the browser.
 
 ```
       ┌─────────────┐

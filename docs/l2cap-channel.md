@@ -10,10 +10,10 @@
 
 ## 1. 结论
 
-1. CTAP 2.3 给 hybrid（§11.5）新增了 **BLE 数据通道**，走 insecure L2CAP
-   CoC，把 CTAP 流量完全从隧道服务器上拿走。手机可从双方支持集的交集中
-   并行尝试多个通道，任一通道建立后放弃其余（不支持并发传输）；
-   WebSocket 是双方都应支持的回退通道。
+1. CTAP 2.3 给 hybrid 新增了 **BLE 数据通道**（hybrid 章现拆分为 PXP），走
+   insecure L2CAP CoC，把 CTAP 流量完全从隧道服务器上拿走。手机可从双方
+   支持集的交集中并行尝试多个通道，任一通道建立后放弃其余（不支持并发
+   传输）；WebSocket 是双方都应支持的回退通道。
 2. 它与 §11.4 的 FIDO GATT service（`0xFFFD`）**无关**；GATT 与本项目手机的
    关系见 `docs/gatt-data-channel.md`。
 3. 桌面侧是在现有 caBLE 代码上的**增量**：Noise 握手、消息加解密
@@ -23,7 +23,7 @@
    （iPhone 不发 suffix，此项仍未验证，需 Android）、CoC 模式（LEB vs ECFC）
    与手机的互通、以及消息分帧约定。
 
-## 2. 协议机制（§11.5.1.1 与 §11.5.1.1.2）
+## 2. 协议机制（PXP §6.1 与 §6.1.2）
 
 1. **声明通道**：client（桌面）在 QR 的 `Key 6` 里列出支持的通道，`0`
    =Websockets、`1`=Bluetooth Low Energy；该键缺省视为 `[0]`。要启用 BLE
@@ -104,8 +104,9 @@
 
 ## 6. 参考
 
-- FIDO CTAP 2.3 §11.5.1.1（data transfer channel）、§11.5.1.1.2（BLE）与
-  §11.5.1.2（Data Transfer / Noise / 消息类型）
+- FIDO PXP §6.1（data transfer channel）、§6.1.2（BLE）与 §6.2（Data
+  Transfer / Noise / 消息类型）；CTAP 2.3（2026-02-26 PS）是最后含完整
+  hybrid 章的正式版，CTAP 2.3.1 WD 起该章只剩指向 PXP 的说明
 - Chromium issue `493286564`（BLE as a data transport channel for FIDO Hybrid）与
   CL `7845133`（桌面端唯一实现尝试，macOS-only，2026-05-13 起停滞）
 - Google 安全工程博客 "Hybrid Transport Goes Offline!"（2026-03-04，Android

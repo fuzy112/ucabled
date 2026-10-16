@@ -89,7 +89,7 @@ enum RequestKind {
 
 impl RequestKind {
     /// The contract spells the values `mc` / `ga`, mirroring the request type
-    /// inside the caBLE URL (CTAP 2.2 §11.5.1, key 5).
+    /// inside the caBLE URL (PXP §5.3.1, key 5).
     fn from_wire(value: &str) -> Option<Self> {
         match value {
             "mc" => Some(RequestKind::MakeCredential),

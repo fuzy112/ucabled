@@ -7,14 +7,14 @@ use crate::cbor;
 pub const QR_SECRET_SIZE: usize = 16;
 pub const COMPRESSED_PUBLIC_KEY_SIZE: usize = 33;
 
-/// QR CBOR map keys (CTAP 2.2 §11.5.1).
+/// QR CBOR map keys (PXP §5.3.1).
 const QR_KEY_PUBLIC_KEY: u8 = 0;
 const QR_KEY_SECRET: u8 = 1;
 const QR_KEY_NUM_KNOWN_DOMAINS: u8 = 2;
 const QR_KEY_EPOCH_SECONDS: u8 = 3;
 const QR_KEY_SUPPORTS_LINKING: u8 = 4;
 const QR_KEY_REQUEST_TYPE: u8 = 5;
-/// CTAP 2.3 §11.5.1.1: list of data transfer channels the client supports.
+/// PXP §5.3.1 (key 6): list of data transfer channels the client supports.
 const QR_KEY_TRANSPORTS: u8 = 6;
 
 /// Data transfer channel identifiers for QR `Key 6`.
@@ -34,7 +34,7 @@ pub enum RequestType {
 }
 
 impl RequestType {
-    /// The wire name used inside the QR contents (CTAP 2.2 §11.5.1, key 5)
+    /// The wire name used inside the QR contents (PXP §5.3.1, key 5)
     /// and handed to helpers so they can tell the two commands apart.
     pub fn as_str(self) -> &'static str {
         match self {
