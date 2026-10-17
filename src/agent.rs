@@ -73,12 +73,14 @@ impl RegisterLimiter {
     /// Whether `sender` may attempt a registration at `now`; an allowed
     /// attempt is recorded.
     fn check(&mut self, sender: &str, now: Instant) -> bool {
-        if let Some(last) = self.last.get(sender) {
+        if let Some(last) = self.last.get_mut(sender) {
             if now.duration_since(*last) < REGISTER_MIN_INTERVAL {
                 return false;
             }
+            *last = now;
+            return true;
         }
-        if !self.last.contains_key(sender) && self.last.len() >= REGISTER_LIMITER_MAX {
+        if self.last.len() >= REGISTER_LIMITER_MAX {
             if let Some(oldest) = self
                 .last
                 .iter()
