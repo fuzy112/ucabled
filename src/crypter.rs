@@ -15,8 +15,13 @@ fn padded_size(message_len: usize) -> usize {
 }
 
 pub struct Crypter {
+    // The raw keys are kept alongside the ciphers so `Drop` can wipe them;
+    // the ciphers cache the expanded AES key schedule, which would otherwise
+    // be recomputed on every message.
     read_key: [u8; 32],
     write_key: [u8; 32],
+    read_cipher: Aes256Gcm,
+    write_cipher: Aes256Gcm,
     read_seq: u32,
     write_seq: u32,
 }
@@ -24,6 +29,8 @@ pub struct Crypter {
 impl Crypter {
     pub fn new(read_key: [u8; 32], write_key: [u8; 32]) -> Self {
         Self {
+            read_cipher: Aes256Gcm::new((&read_key).into()),
+            write_cipher: Aes256Gcm::new((&write_key).into()),
             read_key,
             write_key,
             read_seq: 0,
@@ -60,14 +67,14 @@ impl Crypter {
 
         let nonce = Self::nonce(self.write_seq)?;
         self.write_seq += 1;
-        let cipher = Aes256Gcm::new((&self.write_key).into());
-        cipher.encrypt((&nonce).into(), padded.as_ref()).ok()
+        self.write_cipher
+            .encrypt((&nonce).into(), padded.as_ref())
+            .ok()
     }
 
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Option<Vec<u8>> {
         let nonce = Self::nonce(self.read_seq)?;
-        let cipher = Aes256Gcm::new((&self.read_key).into());
-        let plaintext = cipher.decrypt((&nonce).into(), ciphertext).ok()?;
+        let mut plaintext = self.read_cipher.decrypt((&nonce).into(), ciphertext).ok()?;
         self.read_seq += 1;
 
         if plaintext.is_empty() {
@@ -77,7 +84,9 @@ impl Crypter {
         if padding_len + 1 > plaintext.len() {
             return None;
         }
-        Some(plaintext[..plaintext.len() - padding_len - 1].to_vec())
+        // Strip the padding in place instead of copying the message out.
+        plaintext.truncate(plaintext.len() - padding_len - 1);
+        Some(plaintext)
     }
 }
 
