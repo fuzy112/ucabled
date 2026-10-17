@@ -560,7 +560,11 @@ async fn daemon_loop(
                     }
                 }
             }
-            _ = keepalive.tick() => {
+            // The keepalive cadence is only needed while a transaction is
+            // pending or an unfinished assembly needs its idle-expiry check;
+            // gating the branch keeps an idle daemon from waking ~7 times a
+            // second for its whole lifetime.
+            _ = keepalive.tick(), if pending.is_some() || transport.has_assembly() => {
                 // A truncated multi-frame request must not wedge the busy
                 // slot forever; hosts send continuation frames back to
                 // back, so idle silence means the sender is gone.

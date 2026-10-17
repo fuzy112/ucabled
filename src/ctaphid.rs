@@ -284,6 +284,12 @@ impl Transport {
         self.busy
     }
 
+    /// Whether a multi-frame assembly is in progress and therefore needs the
+    /// periodic idle-expiry check.
+    pub fn has_assembly(&self) -> bool {
+        self.assembly.is_some()
+    }
+
     /// Drop a multi-frame assembly whose sender has been silent for at
     /// least [`ASSEMBLY_IDLE_TIMEOUT`], freeing the busy slot.  Returns
     /// whether anything was dropped.  Only unfinished assemblies expire:
