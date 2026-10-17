@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::borrow::Cow;
+
 use crate::cbor;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -51,7 +53,7 @@ const GA_RESP_KEY_AUTH_DATA: u64 = 2;
 const GA_RESP_KEY_SIGNATURE: u64 = 3;
 const GA_RESP_KEY_NUMBER_OF_CREDENTIALS: u64 = 5;
 
-// Synthetic assertion fields (see `fake_silent_assertion`).
+// Synthetic assertion fields (see `answer_silent_probe`).
 /// authData flags byte: user presence and user verification unset.
 const AUTH_DATA_FLAGS: u8 = 0x00;
 /// Signature counter width in authData.
@@ -67,7 +69,7 @@ pub const MAX_MSG_SIZE: u64 = 7609;
 /// to chunk the allowList). Relaying means there is no real per-authenticator
 /// limit, so advertise a value large enough to keep a typical RP's whole
 /// allowList in one request: chunking would let Firefox keep only the first
-/// chunk (see `fake_silent_assertion`).
+/// chunk (see `answer_silent_probe`).
 pub const MAX_CREDENTIAL_COUNT_IN_LIST: u64 = 64;
 
 /// Advertised `maxCredentialIdLength`: Firefox drops allowList entries longer
@@ -161,7 +163,7 @@ pub fn extract_rp_id(command: &[u8]) -> Option<String> {
         if key == wanted && cmd == CMD_MAKE_CREDENTIAL {
             let inner_pairs = c.map_header()?;
             for _ in 0..inner_pairs {
-                let k = c.text()?;
+                let k = c.text_str()?;
                 if k == "id" {
                     rp_id = Some(c.text()?);
                 } else {
@@ -197,15 +199,18 @@ pub fn is_u2f_appid(rp_id: &str) -> bool {
 /// keeping canonical key order (length first, then lexicographic).
 /// `data` must start exactly at the map header. Returns the rebuilt map and
 /// the number of input bytes consumed.
-fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8>, usize)> {
+fn patch_text_map<'a>(
+    data: &'a [u8],
+    add_key: &'a str,
+    add_value: &str,
+) -> Option<(Vec<u8>, usize)> {
     let mut c = cbor::Decoder::new(data);
     let pairs = c.map_header()?;
-    let header_len = c.pos();
 
-    let mut entries: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut entries: Vec<(&str, std::ops::Range<usize>)> = Vec::new();
     let mut have_key = false;
     for _ in 0..pairs {
-        let k = c.text()?;
+        let k = c.text_str()?;
         if k == add_key {
             have_key = true;
         }
@@ -217,88 +222,28 @@ fn patch_text_map(data: &[u8], add_key: &str, add_value: &str) -> Option<(Vec<u8
         return None;
     }
 
-    entries.push((add_key.to_string(), 0..0)); // placeholder span
-    entries.sort_by(|a, b| (a.0.len(), &a.0).cmp(&(b.0.len(), &b.0)));
+    entries.push((add_key, 0..0)); // placeholder span
+    entries.sort_by(|a, b| (a.0.len(), a.0).cmp(&(b.0.len(), b.0)));
 
     let mut out = Vec::new();
     cbor::map(&mut out, entries.len() as u64);
     for (k, span) in entries {
-        cbor::text(&mut out, &k);
+        cbor::text(&mut out, k);
         if k == add_key {
             cbor::text(&mut out, add_value);
         } else {
             out.extend_from_slice(&data[span]);
         }
     }
-    let _ = header_len;
     Some((out, c.pos()))
 }
 
-/// Detect Firefox's silent getAssertion probe: `options.up == false` **and** a
-/// non-empty allowList. Firefox sends these (with an empty clientDataHash) to
-/// filter the allowList to credentials present on this device; a phone cannot
-/// answer silently, so the daemon answers locally with
-/// [`fake_silent_assertion`].
-///
-/// The allowList is required. A `up=false` assertion without one is a
-/// discoverable (resident) getAssertion — `ssh-keygen -t ecdsa-sk -O resident`
-/// sends one with rpId `ssh:` — which has nothing to filter and must be
-/// relayed to the phone instead.
-pub fn is_silent_probe(command: &[u8]) -> bool {
-    let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
-        return false;
-    };
-    let mut c = cbor::Decoder::new(params);
-    let Some(pairs) = c.map_header() else {
-        return false;
-    };
-    let (mut has_allow_list, mut up_false) = (false, false);
-    for _ in 0..pairs {
-        let Some(key) = c.uint() else { return false };
-        match key {
-            GA_KEY_ALLOW_LIST => {
-                let Some(b) = c.byte() else { return false };
-                if b >> 5 != cbor::MAJOR_ARRAY {
-                    return false;
-                }
-                let Some(n) = c.argument(b & cbor::ARG_MASK) else {
-                    return false;
-                };
-                has_allow_list = n > 0;
-                for _ in 0..n {
-                    if c.skip_value().is_none() {
-                        return false;
-                    }
-                }
-            }
-            GA_KEY_OPTIONS => {
-                let Some(inner) = c.map_header() else {
-                    return false;
-                };
-                for _ in 0..inner {
-                    let Some(k) = c.text() else { return false };
-                    if k == "up" {
-                        let Some(b) = c.byte() else { return false };
-                        up_false = b == cbor::FALSE;
-                    } else if c.skip_value().is_none() {
-                        return false;
-                    }
-                }
-            }
-            _ => {
-                if c.skip_value().is_none() {
-                    return false;
-                }
-            }
-        }
-    }
-    has_allow_list && up_false
-}
-
-/// Parse a getAssertion request into `(rpId, credential ids)`, collecting
-/// *every* allowList credential (not just the first). Returns None on any
-/// parse irregularity or if there is no allowList.
-fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
+/// Parse a getAssertion request into `(rpId, credential ids, up == false)`,
+/// collecting *every* allowList credential (not just the first). The single
+/// parse behind [`answer_silent_probe`]; returns None on any parse
+/// irregularity. A missing or empty allowList yields an empty credential
+/// list.
+fn parse_get_assertion(command: &[u8]) -> Option<(String, Vec<Vec<u8>>, bool)> {
     let (&CMD_GET_ASSERTION, params) = command.split_first()? else {
         return None;
     };
@@ -307,6 +252,7 @@ fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
 
     let mut rp_id: Option<String> = None;
     let mut creds: Vec<Vec<u8>> = Vec::new();
+    let mut up_false = false;
     for _ in 0..pairs {
         let key = c.uint()?;
         match key {
@@ -322,7 +268,7 @@ fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
                     let entries = c.map_header()?;
                     let mut cred_id = None;
                     for _ in 0..entries {
-                        let k = c.text()?;
+                        let k = c.text_str()?;
                         if k == "id" {
                             let b = c.byte()?;
                             if b >> 5 != cbor::MAJOR_BYTES {
@@ -337,11 +283,48 @@ fn parse_assertion_targets(command: &[u8]) -> Option<(String, Vec<Vec<u8>>)> {
                     creds.push(cred_id?);
                 }
             }
+            GA_KEY_OPTIONS => {
+                let inner = c.map_header()?;
+                for _ in 0..inner {
+                    let k = c.text_str()?;
+                    if k == "up" {
+                        up_false = c.byte()? == cbor::FALSE;
+                    } else {
+                        c.skip_value()?;
+                    }
+                }
+            }
             _ => c.skip_value()?,
         }
     }
 
-    Some((rp_id?, creds))
+    Some((rp_id?, creds, up_false))
+}
+
+/// Detect Firefox's silent getAssertion probe (`options.up == false` **and**
+/// a non-empty allowList) and, in the same parse, build the local answer.
+/// Returns `(rpId, first response, remaining credential ids)`; the caller
+/// serves the remainder from `authenticatorGetNextAssertion` with
+/// [`fake_next_assertion`]. Firefox sends these probes (with an empty
+/// clientDataHash) to filter the allowList to credentials present on this
+/// device; a phone cannot answer silently, so the daemon answers locally.
+/// Firefox only extracts the credential descriptors from these; the real
+/// interactive request still goes to the phone with the whole allowList
+/// intact, and the fake signatures never leave the browser's local
+/// filtering code.
+///
+/// The allowList is required. A `up=false` assertion without one is a
+/// discoverable (resident) getAssertion — `ssh-keygen -t ecdsa-sk -O resident`
+/// sends one with rpId `ssh:` — which has nothing to filter and must be
+/// relayed to the phone instead, as must any request that does not parse.
+pub fn answer_silent_probe(command: &[u8]) -> Option<(String, Vec<u8>, Vec<Vec<u8>>)> {
+    let (rp_id, creds, up_false) = parse_get_assertion(command)?;
+    if !up_false || creds.is_empty() {
+        return None;
+    }
+    let (first, rest) = creds.split_first().expect("creds is checked non-empty");
+    let response = fake_assertion_response(&rp_id, first, creds.len());
+    Some((rp_id, response, rest.to_vec()))
 }
 
 /// Build one structurally valid getAssertion "success" response echoing
@@ -380,20 +363,8 @@ fn fake_assertion_response(rp_id: &str, cred_id: &[u8], total: usize) -> Vec<u8>
     out
 }
 
-/// Build the first faked response for a silent preflight probe, plus the
-/// remaining credential ids to serve from `getNextAssertion` responses.
-///
-/// Returns None (caller answers with `NO_CREDENTIALS`) if the request doesn't
-/// parse or has no allowList.
-pub fn fake_silent_assertion(command: &[u8]) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
-    let (rp_id, creds) = parse_assertion_targets(command)?;
-    let (first, rest) = creds.split_first()?;
-    let response = fake_assertion_response(&rp_id, first, creds.len());
-    Some((response, rest.to_vec()))
-}
-
 /// Build the faked response for one `authenticatorGetNextAssertion` follow-up
-/// to [`fake_silent_assertion`].
+/// to [`answer_silent_probe`].
 pub fn fake_next_assertion(rp_id: &str, cred_id: &[u8]) -> Vec<u8> {
     fake_assertion_response(rp_id, cred_id, 1)
 }
@@ -410,11 +381,11 @@ pub fn is_blink_probe(command: &[u8]) -> bool {
 /// the hybrid session. Inject the missing fields (`user.displayName` falls
 /// back to `user.name`, `rp.name` to ""). These are display-only fields not
 /// covered by clientDataHash or attestation, so injecting them does not
-/// affect cryptographic integrity. Returns the input unchanged if no
+/// affect cryptographic integrity. Returns a borrow of the input when no
 /// patching is needed or the payload doesn't parse.
-pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
+pub fn patch_makecredential(command: &[u8]) -> Cow<'_, [u8]> {
     let Some((&CMD_MAKE_CREDENTIAL, params)) = command.split_first() else {
-        return command.to_vec();
+        return Cow::Borrowed(command);
     };
 
     let result = (|| -> Option<Vec<u8>> {
@@ -446,7 +417,7 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
                         let mut found = None;
                         if let Some(p) = inner.map_header() {
                             for _ in 0..p {
-                                let Some(k) = inner.text() else { break };
+                                let Some(k) = inner.text_str() else { break };
                                 if k == "name" {
                                     found = inner.text();
                                 } else {
@@ -478,7 +449,7 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
         }
     })();
 
-    result.unwrap_or_else(|| command.to_vec())
+    result.map_or(Cow::Borrowed(command), Cow::Owned)
 }
 
 /// OpenSSH hardcodes `rp.id = "ssh:"` and the user entity `openssh`/`openssh`
@@ -490,11 +461,11 @@ pub fn patch_makecredential(command: &[u8]) -> Vec<u8> {
 /// new passkey. OpenSSH never reads the user handle back, and the user entity
 /// is covered by neither clientDataHash nor attestation, so the rewrite is
 /// transparent. Never touch real WebAuthn RPs: there the user handle is the
-/// account binding. Returns the input unchanged for other RPs, non-parseable
+/// account binding. Returns a borrow of the input for other RPs, non-parseable
 /// payloads, or a user entity without an "id".
-pub fn dissociate_ssh_user(command: &[u8]) -> Vec<u8> {
+pub fn dissociate_ssh_user(command: &[u8]) -> Cow<'_, [u8]> {
     let Some((&CMD_MAKE_CREDENTIAL, params)) = command.split_first() else {
-        return command.to_vec();
+        return Cow::Borrowed(command);
     };
 
     let result = (|| -> Option<Vec<u8>> {
@@ -509,9 +480,9 @@ pub fn dissociate_ssh_user(command: &[u8]) -> Vec<u8> {
             if key == MC_KEY_RP {
                 let inner_pairs = c.map_header()?;
                 for _ in 0..inner_pairs {
-                    let k = c.text()?;
+                    let k = c.text_str()?;
                     if k == "id" {
-                        rp_is_ssh = c.text()? == "ssh:";
+                        rp_is_ssh = c.text_str()? == "ssh:";
                     } else {
                         c.skip_value()?;
                     }
@@ -548,7 +519,7 @@ pub fn dissociate_ssh_user(command: &[u8]) -> Vec<u8> {
         changed.then_some(out)
     })();
 
-    result.unwrap_or_else(|| command.to_vec())
+    result.map_or(Cow::Borrowed(command), Cow::Owned)
 }
 
 /// Rebuild a user entity map with "id" replaced by `handle` and "name" /
@@ -558,10 +529,10 @@ fn rewrite_user_entity(data: &[u8], handle: &[u8; 32], label: &str) -> Option<Ve
     let mut c = cbor::Decoder::new(data);
     let pairs = c.map_header()?;
 
-    let mut entries: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut entries: Vec<(&str, std::ops::Range<usize>)> = Vec::new();
     let mut has_id = false;
     for _ in 0..pairs {
-        let k = c.text()?;
+        let k = c.text_str()?;
         has_id |= k == "id";
         let start = c.pos();
         c.skip_value()?;
@@ -574,8 +545,8 @@ fn rewrite_user_entity(data: &[u8], handle: &[u8; 32], label: &str) -> Option<Ve
     let mut out = Vec::new();
     cbor::map(&mut out, entries.len() as u64);
     for (k, span) in entries {
-        cbor::text(&mut out, &k);
-        match k.as_str() {
+        cbor::text(&mut out, k);
+        match k {
             "id" => cbor::bytes(&mut out, handle),
             "name" | "displayName" => cbor::text(&mut out, label),
             _ => out.extend_from_slice(&data[span]),
@@ -592,18 +563,18 @@ fn rewrite_user_entity(data: &[u8], handle: &[u8; 32], label: &str) -> Option<Ve
 /// authenticators reject the credential as incompatible with the hybrid
 /// transport ("no passkeys found"). The hint is advisory and covered by no
 /// signature, so dropping it is safe. Descriptor order and every other field
-/// are preserved byte-for-byte. Returns the input unchanged if nothing needed
-/// stripping or the payload doesn't parse.
-pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
+/// are preserved byte-for-byte. Returns a borrow of the input if nothing
+/// needed stripping or the payload doesn't parse.
+pub fn strip_transport_hints(command: &[u8]) -> Cow<'_, [u8]> {
     let Some((&cmd, params)) = command.split_first() else {
-        return command.to_vec();
+        return Cow::Borrowed(command);
     };
     // CTAP2 parameter numbering: getAssertion.allowList = 3,
     // makeCredential.excludeList = 5 (4 is pubKeyCredParams).
     let list_key = match cmd {
         CMD_MAKE_CREDENTIAL => MC_KEY_EXCLUDE_LIST,
         CMD_GET_ASSERTION => GA_KEY_ALLOW_LIST,
-        _ => return command.to_vec(),
+        _ => return Cow::Borrowed(command),
     };
 
     let result = (|| -> Option<Vec<u8>> {
@@ -638,10 +609,10 @@ pub fn strip_transport_hints(command: &[u8]) -> Vec<u8> {
 
     match result {
         Some(out) => {
-            tracing::debug!("stripped transports hint(s) from CTAP request");
-            out
+            tracing::info!("request carries transport hints, stripped them");
+            Cow::Owned(out)
         }
-        None => command.to_vec(),
+        None => Cow::Borrowed(command),
     }
 }
 
@@ -657,7 +628,7 @@ fn strip_transports_from_descriptor(data: &[u8]) -> Option<(Vec<u8>, bool)> {
     let mut has_id = false;
     for _ in 0..pairs {
         let key_start = c.pos();
-        let key = c.text()?;
+        let key = c.text_str()?;
         let key_end = c.pos();
         let val_start = c.pos();
         c.skip_value()?;
@@ -708,74 +679,6 @@ fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
         }
     }
     Some((out, removed))
-}
-
-/// Diagnostic: whether the request carries any `transports` hint in its
-/// getAssertion `allowList` (key 3) or makeCredential `excludeList` (key 5)
-/// descriptors. Read-only, never fails (returns false on any irregularity).
-/// Logged by the daemon so we can tell whether Firefox ever sends the hint.
-pub fn request_has_transport_hints(command: &[u8]) -> bool {
-    let Some((&cmd, params)) = command.split_first() else {
-        return false;
-    };
-    let list_key = match cmd {
-        CMD_MAKE_CREDENTIAL => MC_KEY_EXCLUDE_LIST,
-        CMD_GET_ASSERTION => GA_KEY_ALLOW_LIST,
-        _ => return false,
-    };
-
-    let result = (|| -> Option<bool> {
-        let mut c = cbor::Decoder::new(params);
-        let pairs = c.map_header()?;
-        for _ in 0..pairs {
-            let key = c.uint()?;
-            if key == list_key {
-                return Some(array_has_transport_hint(&mut c));
-            }
-            c.skip_value()?;
-        }
-        Some(false)
-    })();
-
-    result.unwrap_or(false)
-}
-
-fn array_has_transport_hint(c: &mut cbor::Decoder) -> bool {
-    let Some(b) = c.byte() else { return false };
-    if b >> 5 != cbor::MAJOR_ARRAY {
-        return false;
-    }
-    let Some(n) = c.argument(b & cbor::ARG_MASK) else {
-        return false;
-    };
-    for _ in 0..n {
-        let start = c.pos();
-        if c.skip_value().is_none() {
-            return false;
-        }
-        let elem = &c.data()[start..c.pos()];
-        if descriptor_has_transport_hint(elem) {
-            return true;
-        }
-    }
-    false
-}
-
-fn descriptor_has_transport_hint(data: &[u8]) -> bool {
-    let mut c = cbor::Decoder::new(data);
-    let Some(pairs) = c.map_header() else {
-        return false;
-    };
-    for _ in 0..pairs {
-        let Some(key) = c.text() else { return false };
-        if key == "transports" {
-            return true;
-        }
-        if c.skip_value().is_none() {
-            return false;
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -870,7 +773,10 @@ mod tests {
     #[test]
     fn patch_is_idempotent_and_untouched_when_complete() {
         let cmd = hex::decode("01a5015820cc1f4afda7a13ed02de520a7b2c8d5cce2b1e6d8dbe392f022a0cf88ee456fcb02a26269646b776562617574686e2e696f646e616d656b776562617574686e2e696f03a36269644d776562617574686e696f2d7172646e616d656271726b646973706c61794e616d656271720483a263616c672764747970656a7075626c69632d6b6579a263616c672664747970656a7075626c69632d6b6579a263616c6739010064747970656a7075626c69632d6b657907a162726bf5").unwrap();
-        assert_eq!(patch_makecredential(&cmd), cmd);
+        let patched = patch_makecredential(&cmd);
+        // A complete request must be returned by borrow, not copied.
+        assert!(matches!(&patched, Cow::Borrowed(_)));
+        assert_eq!(patched, cmd);
     }
 
     /// `{"id": h'0102', "type": "public-key", "transports": ["usb"]}`
@@ -924,28 +830,14 @@ mod tests {
     fn strip_transport_hints_noop_without_hint() {
         // Interactive getAssertion with an allowList but no transports.
         let cmd = get_assertion_with(DESC_NO_TRANSPORTS);
-        assert_eq!(strip_transport_hints(&cmd), cmd);
+        let out = strip_transport_hints(&cmd);
+        // Nothing to strip: the request must be returned by borrow, not copied.
+        assert!(matches!(&out, Cow::Borrowed(_)));
+        assert_eq!(out, cmd);
         // Unrelated command byte is left alone.
-        assert_eq!(strip_transport_hints(&[0x06, 0x00]), vec![0x06, 0x00]);
-    }
-
-    #[test]
-    fn request_has_transport_hints_detects_and_defaults_false() {
-        assert!(request_has_transport_hints(
-            &get_assertion_with_transport_hint()
-        ));
-        assert!(!request_has_transport_hints(&get_assertion_with(
-            DESC_NO_TRANSPORTS
-        )));
-        // makeCredential excludeList (key 5)
-        let mut mc = hex::decode("01a3015820").unwrap();
-        mc.extend_from_slice(&[0xaa; 32]);
-        mc.extend_from_slice(&hex::decode("02a16269646b6578616d706c652e636f6d0581").unwrap());
-        mc.extend_from_slice(&hex::decode(DESC_WITH_TRANSPORTS).unwrap());
-        assert!(request_has_transport_hints(&mc));
-        // unrelated / empty
-        assert!(!request_has_transport_hints(&[0x06, 0x00]));
-        assert!(!request_has_transport_hints(&[]));
+        let out = strip_transport_hints(&[0x06, 0x00]);
+        assert!(matches!(&out, Cow::Borrowed(_)));
+        assert_eq!(out, vec![0x06, 0x00]);
     }
 
     /// Parse the user entity (key 3) of a makeCredential command into
@@ -1031,12 +923,17 @@ mod tests {
         cbor::text(&mut cmd, "user@example.com");
         cbor::text(&mut cmd, "displayName");
         cbor::text(&mut cmd, "User 42");
-        assert_eq!(dissociate_ssh_user(&cmd), cmd);
+        let out = dissociate_ssh_user(&cmd);
+        // Other RPs are returned by borrow, not copied.
+        assert!(matches!(&out, Cow::Borrowed(_)));
+        assert_eq!(out, cmd);
         // getAssertion is never touched
         let ga = hex::decode("02a201647373683a025820").unwrap();
         let mut ga_full = ga.clone();
         ga_full.extend_from_slice(&[0xaa; 32]);
-        assert_eq!(dissociate_ssh_user(&ga_full), ga_full);
+        let out = dissociate_ssh_user(&ga_full);
+        assert!(matches!(&out, Cow::Borrowed(_)));
+        assert_eq!(out, ga_full);
     }
 
     #[test]
@@ -1053,7 +950,10 @@ mod tests {
         cbor::map(&mut cmd, 1);
         cbor::text(&mut cmd, "name");
         cbor::text(&mut cmd, "openssh");
-        assert_eq!(dissociate_ssh_user(&cmd), cmd);
+        let out = dissociate_ssh_user(&cmd);
+        // No user id: fail safe by returning the request untouched, by borrow.
+        assert!(matches!(&out, Cow::Borrowed(_)));
+        assert_eq!(out, cmd);
     }
 
     #[test]
@@ -1068,13 +968,13 @@ mod tests {
     fn silent_probe_detection() {
         // Real probe captured from Firefox: options {up: false}
         let probe = hex::decode("02a4016b776562617574686e2e696f025820e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a1627570f4").unwrap();
-        assert!(is_silent_probe(&probe));
+        assert!(answer_silent_probe(&probe).is_some());
         // Real interactive request: options {uv: true, up: true}
         let interactive = hex::decode("02a4016b776562617574686e2e696f025820341a4e06e8dfd6cd4244803bd2079eb48ec2f1b41f832f2e18de51bd91248e8e0381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a2627576f5627570f5").unwrap();
-        assert!(!is_silent_probe(&interactive));
+        assert!(answer_silent_probe(&interactive).is_none());
         // No options at all
         let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
-        assert!(!is_silent_probe(&plain));
+        assert!(answer_silent_probe(&plain).is_none());
         // Captured from `ssh-keygen -t ecdsa-sk -O resident`: a discoverable
         // getAssertion for rpId "ssh:" with options {up:false, uv:true} and
         // no allowList. It must be relayed, not answered locally.
@@ -1083,13 +983,14 @@ mod tests {
              089714856ee233b3902a591d0d5f292505a2627570f4627576f5",
         )
         .unwrap();
-        assert!(!is_silent_probe(&ssh_resident));
+        assert!(answer_silent_probe(&ssh_resident).is_none());
     }
 
     #[test]
-    fn fake_silent_assertion_echoes_credential() {
+    fn silent_probe_answer_echoes_credential() {
         let probe = hex::decode("02a4016b776562617574686e2e696f025820e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b8550381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a1627570f4").unwrap();
-        let (resp, rest) = fake_silent_assertion(&probe).unwrap();
+        let (rp, resp, rest) = answer_silent_probe(&probe).unwrap();
+        assert_eq!(rp, "webauthn.io");
         assert!(rest.is_empty());
         assert_eq!(resp[0], 0x00);
         // echoes the credential id 56ebb4bab2368cd5c71e173c5213c85203e25119
@@ -1100,11 +1001,11 @@ mod tests {
         assert!(!resp.ends_with(&[0x05, 0x01]));
         // getAssertion without allowList cannot be faked
         let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
-        assert!(fake_silent_assertion(&plain).is_none());
+        assert!(answer_silent_probe(&plain).is_none());
     }
 
     #[test]
-    fn fake_silent_assertion_reports_all_credentials() {
+    fn silent_probe_answer_reports_all_credentials() {
         // {1: "example.com", 2: h'aa'x32, 3: [{"id": h'0102'}, {"id": h'0304'}]}
         let mut two = hex::decode("02a4016b6578616d706c652e636f6d025820").unwrap();
         two.extend_from_slice(&[0xaa; 32]);
@@ -1115,9 +1016,10 @@ mod tests {
         two.extend_from_slice(
             &hex::decode("a262696442030464747970656a7075626c69632d6b6579").unwrap(),
         );
-        two.extend_from_slice(&hex::decode("05a1627570f5").unwrap());
+        two.extend_from_slice(&hex::decode("05a1627570f4").unwrap()); // options {up: false}
 
-        let (resp, rest) = fake_silent_assertion(&two).unwrap();
+        let (rp, resp, rest) = answer_silent_probe(&two).unwrap();
+        assert_eq!(rp, "example.com");
         assert_eq!(resp[0], 0x00);
         // numberOfCredentials = 2 (key 5) so the client asks for the rest
         assert_eq!(&resp[resp.len() - 2..], &[0x05, 0x02]);

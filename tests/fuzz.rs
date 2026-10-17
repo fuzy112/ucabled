@@ -100,9 +100,8 @@ proptest! {
         ],
     ) {
         let _ = ctap::extract_rp_id(&data);
-        let _ = ctap::is_silent_probe(&data);
+        let _ = ctap::answer_silent_probe(&data);
         let _ = ctap::is_blink_probe(&data);
-        let _ = ctap::request_has_transport_hints(&data);
         // The patchers must themselves produce re-parseable (or identical)
         // output.
         let patched = ctap::patch_makecredential(&data);

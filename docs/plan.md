@@ -202,7 +202,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
   凭证，真实请求就只剩第一个；当 RP（如 Codeberg/Forgejo 2FA）注册了多个密钥、
   而手机持有的是后面的那个时，手机报「找不到通行密钥」。修法：`getInfo` 广告键
   7/8（`maxCredentialCountInList=64`、`maxCredentialIdLength=1024`）避免分块，
-  `fake_silent_assertion` 回带 `numberOfCredentials` 与全部凭证，并对随后的
+  `answer_silent_probe` 回带 `numberOfCredentials` 与全部凭证，并对随后的
   `authenticatorGetNextAssertion`（0x08）逐个补齐，从而让真实请求保留完整
    `allowList`。伪造响应只在本地、只回显浏览器自己给的公开凭证 id，不含任何密钥
   材料；真实断言仍由手机签名。
