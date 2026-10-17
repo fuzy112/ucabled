@@ -47,13 +47,15 @@ impl RequestType {
 const WIDTHS: [usize; 8] = [0, 3, 5, 8, 10, 13, 15, 17];
 
 pub fn bytes_to_digits(input: &[u8]) -> String {
-    let mut ret = String::new();
+    use std::fmt::Write;
+    let mut ret =
+        String::with_capacity(input.len().div_ceil(DIGIT_CHUNK_BYTES) * DIGIT_CHUNK_DIGITS);
     for chunk in input.chunks(DIGIT_CHUNK_BYTES) {
         let mut buf = [0u8; 8];
         buf[..chunk.len()].copy_from_slice(chunk);
         let v = u64::from_le_bytes(buf);
         let width = WIDTHS[chunk.len()];
-        ret.push_str(&format!("{:0width$}", v, width = width));
+        write!(ret, "{:0width$}", v, width = width).unwrap();
     }
     ret
 }
