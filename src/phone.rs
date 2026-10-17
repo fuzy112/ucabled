@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use tokio_tungstenite::tungstenite::Bytes;
 
 use crate::cbor;
 use crate::crypter::Crypter;
@@ -36,11 +37,11 @@ impl CableTransport {
     }
 
     /// Receive one message.
-    pub async fn recv(&mut self) -> Result<Vec<u8>> {
+    pub async fn recv(&mut self) -> Result<Bytes> {
         match self {
             Self::Websocket(ws) => tunnel::read_binary(ws).await,
             #[cfg(feature = "l2cap")]
-            Self::L2cap(stream) => crate::l2cap::recv(stream).await,
+            Self::L2cap(stream) => crate::l2cap::recv(stream).await.map(Bytes::from),
         }
     }
 }
@@ -61,11 +62,14 @@ impl CableLink {
 
     pub async fn recv_message(&mut self) -> Result<(u8, Vec<u8>)> {
         let ct = self.transport.recv().await?;
-        let pt = self.crypter.decrypt(&ct).context("decrypt failed")?;
+        let mut pt = self.crypter.decrypt(&ct).context("decrypt failed")?;
         if pt.is_empty() {
             bail!("empty cable message");
         }
-        Ok((pt[0], pt[1..].to_vec()))
+        // Drop the type byte with `remove`, which shifts the payload down; a
+        // second Vec just for the payload would cost an allocation on top.
+        let ty = pt.remove(0);
+        Ok((ty, pt))
     }
 
     pub async fn send_ctap(&mut self, payload: &[u8]) -> Result<()> {

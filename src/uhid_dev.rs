@@ -134,12 +134,16 @@ impl UhidDevice {
                         buf[4 + OUTPUT_DATA_SIZE],
                         buf[4 + OUTPUT_DATA_SIZE + 1],
                     ]) as usize;
-                    let mut data = buf[4..4 + size.min(OUTPUT_DATA_SIZE)].to_vec();
+                    let raw = &buf[4..4 + size.min(OUTPUT_DATA_SIZE)];
                     // hidraw writes carry a leading report-ID byte (0 when the
-                    // descriptor defines no report IDs); strip it.
-                    if data.len() == FIDO_REPORT_SIZE + REPORT_ID_LEN && data[0] == 0 {
-                        data.remove(0);
-                    }
+                    // descriptor defines no report IDs); strip it by slicing
+                    // rather than shifting the report left in place.
+                    let data = match raw {
+                        [0, rest @ ..] if raw.len() == FIDO_REPORT_SIZE + REPORT_ID_LEN => {
+                            rest.to_vec()
+                        }
+                        _ => raw.to_vec(),
+                    };
                     UhidEvent::Output(data)
                 }
                 other => UhidEvent::Other(other),

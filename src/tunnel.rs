@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderMap, Response, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::{
     connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
 };
@@ -283,14 +283,14 @@ pub async fn write_binary(ws: &mut Ws, data: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-pub async fn read_binary(ws: &mut Ws) -> Result<Vec<u8>> {
+pub async fn read_binary(ws: &mut Ws) -> Result<Bytes> {
     loop {
         match ws.next().await {
             Some(Ok(Message::Binary(data))) => {
                 if data.len() > MAX_FRAME_SIZE {
                     bail!("tunnel frame too large: {} bytes", data.len());
                 }
-                return Ok(data.to_vec());
+                return Ok(data);
             }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => bail!("tunnel websocket closed"),

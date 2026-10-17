@@ -323,7 +323,13 @@ impl Transport {
 /// Panics when `payload` is longer than `u16::MAX`: the initial report carries
 /// the payload length in a 16-bit field.  Callers stay within [`MAX_PAYLOAD`].
 pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
-    let mut reports = Vec::new();
+    // One INIT report plus as many continuation reports as the payload's
+    // remainder needs.
+    let report_count = 1 + payload
+        .len()
+        .saturating_sub(INIT_DATA_SIZE)
+        .div_ceil(CONT_DATA_SIZE);
+    let mut reports = Vec::with_capacity(report_count);
     let mut first = vec![0u8; REPORT_SIZE];
     first[0..CID_LEN].copy_from_slice(&cid.to_be_bytes());
     first[INIT_CMD_OFFSET] = cmd;
