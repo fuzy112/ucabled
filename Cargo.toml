@@ -83,3 +83,10 @@ gettext-rs = "0.8"
 
 [dev-dependencies]
 proptest = "1"
+
+# Thin LTO for release builds: inlines the pure-Rust crypto and CBOR code
+# across crate boundaries for a modest runtime win, while keeping release
+# build times and backtrace usefulness reasonable (unlike fat LTO or
+# codegen-units = 1).  Dev builds are unaffected.
+[profile.release]
+lto = "thin"
