@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Optimize performance.
+
 ### Fixed
 
 - Experimental BLE data channel (`l2cap` feature): frame each caBLE
