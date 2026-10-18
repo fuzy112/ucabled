@@ -17,6 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   specification requires, instead of relying on L2CAP message
   boundaries.
 
+### Security
+
+- Update `rustls` to 0.23.46, fixing four advisories in the tunnel's
+  TLS stack (RUSTSEC-2026-0346 to -0349).
+
 ## [0.1.3] - 2026-10-13
 
 ### Changed
