@@ -312,10 +312,13 @@ nix flake check
 
 Releasing (on `master`, inside the dev shell): `admin/release.sh X.Y.Z` bumps
 the version, stamps the changelog, commits, and creates the signed tag
-`vX.Y.Z`.  Push `master` and `website` first and wait for their checks, then
-push the tag.  `.github/workflows/release.yml` checks tag/manifest/changelog
-consistency and the tag signature, then publishes the GitHub release with the
-changelog section as notes.
+`vX.Y.Z`.  It then merges `master` into `next` and opens the next development
+version there (the next minor by default; pass `X.Y.Z-pre` as a second
+argument to choose another).  Push `master`, `next` and `website` first and
+wait for their checks, then push the tag.
+`.github/workflows/release.yml` checks tag/manifest/changelog consistency and
+the tag signature, then publishes the GitHub release with the changelog
+section as notes.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell
