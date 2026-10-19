@@ -290,9 +290,10 @@ nix flake check
 ```
 
 发布（在 `master` 上、dev shell 内）：`admin/release.sh X.Y.Z` 会提升版本、
-写入 changelog、提交并创建签名标签 `vX.Y.Z`。推送该标签会触发
-`.github/workflows/release.yml`，它检查标签/manifest/changelog 的一致性以及
-标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
+写入 changelog、提交并创建签名标签 `vX.Y.Z`。先推送 `master` 和 `website`
+并等待相应检查通过，再推送标签。`.github/workflows/release.yml` 会检查
+标签/manifest/changelog 的一致性以及标签签名，然后以 changelog 对应小节作为
+发布说明发布 GitHub release。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
 （以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加

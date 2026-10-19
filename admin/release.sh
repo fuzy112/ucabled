@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Cut a release: bump the version, stamp the changelog, commit, and create
-# a signed tag.  Pushing the tag runs the Release workflow, which re-verifies
-# tag/manifest/changelog consistency and the tag signature, then publishes
-# the GitHub release with the changelog section as its notes.
+# a signed tag.  Push the branches first and wait for their checks, then push
+# the tag: the Release workflow re-verifies tag/manifest/changelog consistency
+# and the tag signature, then publishes the GitHub release with the changelog
+# section as its notes.
 #
 # Usage (inside nix develop or nix-shell):
 #   admin/release.sh X.Y.Z
 #
-# Must run on master with a clean tree.
+# Must run on master with a clean tree, an up-to-date website worktree and
+# gpg available for the tag signature.
 
 set -euo pipefail
 
@@ -24,6 +26,11 @@ version=$1
 [ -z "$(git status --porcelain)" ] || die "working tree is not clean"
 [ "$(git branch --show-current)" = "master" ] \
     || die "release from master, not $(git branch --show-current)"
+command -v gpg >/dev/null || die "gpg not found; it is needed to sign the tag"
+if git rev-parse -q --verify refs/remotes/origin/master >/dev/null; then
+    behind=$(git rev-list --count HEAD..origin/master)
+    [ "$behind" -eq 0 ] || die "master is $behind commits behind origin/master; pull first"
+fi
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
     die "tag v$version already exists"
 fi
@@ -45,6 +52,15 @@ fi
 [ -f "$website_wt/src/lib/version.ts" ] || die "$website_wt has no src/lib/version.ts"
 [ -z "$(git -C "$website_wt" status --porcelain)" ] \
     || die "website worktree is not clean: $website_wt"
+website_upstream=$(git -C "$website_wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+if [ -n "$website_upstream" ]; then
+    behind=$(git -C "$website_wt" rev-list --count "HEAD..$website_upstream")
+    [ "$behind" -eq 0 ] \
+        || die "website branch is $behind commits behind $website_upstream; pull first"
+else
+    printf 'release.sh: warning: %s has no upstream; cannot check for missed commits\n' \
+        "$website_wt" >&2
+fi
 
 today=$(date +%F)
 
@@ -65,7 +81,9 @@ else
     sed -i "0,/^\[Unreleased\]:/s//&\n[$version]: https:\/\/github.com\/fuzy112\/ucabled\/releases\/tag\/v$version/" CHANGELOG.md
 fi
 
-# Refresh the lockfile's ucabled version entry, then the standard checks.
+# Refresh the lockfile's ucabled version entry, then the checks that must pass
+# before tagging.  The feature-gated l2cap tests and the dependency audits run
+# in CI too, but a release should not depend on that.
 # Tee their output to a log so the clear below can tell a clean run from one
 # that merely survived (a warning does not abort, unlike an error under set -e).
 check_log=$(mktemp)
@@ -73,11 +91,17 @@ trap 'rm -f "$check_log"' EXIT
 check() { "$@" 2>&1 | tee -a "$check_log"; }
 check cargo check --quiet
 check cargo fmt --all -- --check
-check cargo clippy --all-targets --locked -- -D warnings
+check cargo clippy --all-targets --all-features --locked -- -D warnings
 check cargo test --locked
+check cargo test --locked --features l2cap
+check cargo check --locked --no-default-features --all-targets
+check cargo audit
+check cargo deny check
 
 git commit -qam "Release $version" -m "Bump the version and stamp the changelog."
 git tag -s "v$version" -m "ucabled $version"
+git tag -v "v$version" >/dev/null 2>&1 \
+    || die "signed tag v$version does not verify"
 
 # Bump the website version and commit it in its worktree.  Never push: the
 # release prepares everything, you review and push both branches afterwards.
@@ -112,8 +136,12 @@ Release $version is ready:
   - Committed "Release $version" on master and signed tag v$version.
   - Committed the VERSION bump on the website branch ($website_wt).
 
-Review, then publish with:
-  ${push_style}git push origin refs/heads/master refs/heads/website refs/tags/v$version${style_reset}
+Review, then push the branches first:
+  ${push_style}git push origin refs/heads/master refs/heads/website${style_reset}
+
+Wait for the Rust and Audit workflows and the website deployment to pass,
+then publish the tag:
+  ${push_style}git push origin refs/tags/v$version${style_reset}
 
 The Release workflow verifies the tag and publishes the GitHub release
 with the changelog section as its notes.
