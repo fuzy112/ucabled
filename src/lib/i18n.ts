@@ -107,7 +107,7 @@ export const en: Dict = {
       {
         tag: "02 / relay",
         title: "one QR scan, one transaction",
-        body: "On a WebAuthn ceremony the session agent shows a small always-on-top QR window. The phone scans it; caBLE v2 (CTAP 2.2 §11.5 hybrid) pairs a BLE proximity proof with a WSS tunnel encrypted by Noise KNpsk0 + AES-256-GCM.",
+        body: "On a WebAuthn ceremony the session agent shows a small always-on-top QR window. The phone scans it; caBLE v2 (the hybrid transport, now specified by the FIDO Proximity Exchange Protocol) pairs a BLE proximity proof with a WSS tunnel encrypted by Noise KNpsk0 + AES-256-GCM.",
         code: "> scan QR with phone\n> Face ID / fingerprint\n> tunnel: e2e encrypted CTAP",
       },
       {
@@ -287,7 +287,7 @@ export const zh: Dict = {
       {
         tag: "02 / 中继",
         title: "一次扫码，一次事务",
-        body: "WebAuthn 流程中，会话代理弹出一个小的置顶二维码窗口。手机扫码；caBLE v2（CTAP 2.2 §11.5 hybrid）把 BLE 距离证明与 WSS 隧道配对，隧道由 Noise KNpsk0 + AES-256-GCM 加密。",
+        body: "WebAuthn 流程中，会话代理弹出一个小的置顶二维码窗口。手机扫码；caBLE v2（hybrid transport，现由 FIDO Proximity Exchange Protocol 规范）把 BLE 距离证明与 WSS 隧道配对，隧道由 Noise KNpsk0 + AES-256-GCM 加密。",
         code: "> scan QR with phone\n> Face ID / fingerprint\n> tunnel: e2e encrypted CTAP",
       },
       {

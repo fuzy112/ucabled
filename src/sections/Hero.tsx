@@ -26,7 +26,7 @@ const DIAGRAM = `      ┌─────────────┐
   │     QR window       │
   └─────────────────────┘`;
 
-const CHIPS = [VERSION_TAG, "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · CTAP 2.2 §11.5"];
+const CHIPS = [VERSION_TAG, "GPL-3.0-or-later", "rust", "/dev/uhid", "caBLE v2 · PXP"];
 
 export default function Hero() {
   const c = useCopy();
