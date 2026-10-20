@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{Context, Result};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
+use rand::rngs::OsRng;
 
 use ucabled::ctap::CMD_GET_INFO;
-use ucabled::kdf::{derive, Purpose};
+use ucabled::kdf::{Purpose, derive};
 use ucabled::qr::{self, RequestType};
 use ucabled::session::DesktopFlow;
-use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
+use ucabled::{NUM_ASSIGNED_TUNNEL_DOMAINS, eid};
 
 #[derive(Default)]
 struct Args {

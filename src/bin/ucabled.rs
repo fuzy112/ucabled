@@ -9,12 +9,12 @@ use tokio::task::AbortHandle;
 use ucabled::agent::CancelRequest;
 use ucabled::ctap::{
     CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_CHANNEL_BUSY, CTAP1_ERR_TIMEOUT,
-    CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS,
+    CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_NOT_ALLOWED,
     CTAP2_ERR_PIN_NOT_SET,
 };
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
-use ucabled::uhid_dev::{UhidDevice, UhidEvent, FIDO_REPORT_DESCRIPTOR};
+use ucabled::uhid_dev::{FIDO_REPORT_DESCRIPTOR, UhidDevice, UhidEvent};
 use ucabled::ui::Notifier;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);

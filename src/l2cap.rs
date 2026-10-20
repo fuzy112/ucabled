@@ -10,7 +10,7 @@
 //! Control mode (`SOCK_SEQPACKET`); if a phone turns out to use Enhanced
 //! Credit Based Flow Control instead, this is where that changes.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use bluer::l2cap::{Security, SecurityLevel, SeqPacket, SocketAddr};
 use bluer::{Address, AddressType};
 

@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 
 type ServerWs = WebSocketStream<TcpStream>;
 type PendingTunnels = Arc<Mutex<HashMap<String, ServerWs>>>;

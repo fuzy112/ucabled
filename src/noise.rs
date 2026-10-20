@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use sha2::{Digest, Sha256};
 
 pub const KN_PSK0_PROTOCOL_NAME: &[u8] = b"Noise_KNpsk0_P256_AESGCM_SHA256";

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{bail, Context, Result};
-use rand::rngs::OsRng;
+use anyhow::{Context, Result, bail};
 use rand::RngCore;
+use rand::rngs::OsRng;
 use tokio_tungstenite::tungstenite::Bytes;
 
 use crate::cbor;
@@ -10,7 +10,7 @@ use crate::crypter::Crypter;
 use crate::ctap;
 use crate::eid;
 use crate::handshake;
-use crate::kdf::{derive, Purpose};
+use crate::kdf::{Purpose, derive};
 use crate::tunnel::{self, Ws};
 
 pub const MSG_SHUTDOWN: u8 = 0;

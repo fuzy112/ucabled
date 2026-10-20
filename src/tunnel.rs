@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderMap, Response, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::{
-    connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
 };
 
 use crate::WS_SUBPROTOCOL;
@@ -323,9 +323,11 @@ mod tests {
         let a = decode_tunnel_server_domain(256).unwrap();
         assert_eq!(a, decode_tunnel_server_domain(256).unwrap());
         assert!(a.starts_with("cable."));
-        assert!([".com", ".org", ".net", ".info"]
-            .iter()
-            .any(|tld| a.ends_with(tld)));
+        assert!(
+            [".com", ".org", ".net", ".info"]
+                .iter()
+                .any(|tld| a.ends_with(tld))
+        );
         assert_ne!(a, decode_tunnel_server_domain(257).unwrap());
     }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit};
 
 const PADDING_GRANULARITY: usize = 32;
 /// AES-GCM authentication tag appended to every ciphertext.

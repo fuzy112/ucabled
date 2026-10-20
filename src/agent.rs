@@ -18,13 +18,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use dbus::Path;
 use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::message::{MatchRule, Message};
 use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
-use dbus::Path;
 use dbus_crossroads::{Crossroads, MethodErr};
-use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
 use futures::StreamExt;
+use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 

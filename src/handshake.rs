@@ -6,7 +6,7 @@ use p256::{PublicKey, SecretKey};
 use rand::rngs::OsRng;
 
 use crate::crypter::Crypter;
-use crate::noise::{Noise, KN_PSK0_PROTOCOL_NAME, NK_PSK0_PROTOCOL_NAME};
+use crate::noise::{KN_PSK0_PROTOCOL_NAME, NK_PSK0_PROTOCOL_NAME, Noise};
 
 pub const P256_X962_LENGTH: usize = 65;
 pub const RESPONSE_SIZE: usize = P256_X962_LENGTH + 16;
@@ -376,9 +376,10 @@ mod tests {
 
         // Truncated and extended responses fail the length check.
         let (init, response) = qr_init_and_response();
-        assert!(init
-            .process_response(&response[..RESPONSE_SIZE - 1])
-            .is_none());
+        assert!(
+            init.process_response(&response[..RESPONSE_SIZE - 1])
+                .is_none()
+        );
         let (init, response) = qr_init_and_response();
         let mut bad = response.clone();
         bad.push(0);

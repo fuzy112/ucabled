@@ -3,8 +3,8 @@
 use std::borrow::Cow;
 
 use crate::cbor;
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 
 /// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
 /// identity consistent across daemon restarts; the real attestation AAGUID
@@ -442,11 +442,7 @@ pub fn patch_makecredential(command: &[u8]) -> Cow<'_, [u8]> {
                 None => out.extend_from_slice(value),
             }
         }
-        if changed {
-            Some(out)
-        } else {
-            None
-        }
+        if changed { Some(out) } else { None }
     })();
 
     result.map_or(Cow::Borrowed(command), Cow::Owned)
@@ -720,7 +716,7 @@ mod tests {
         // {1: h'..32..', 2: {"id": "webauthn.io"}, 3: {...user...}}
         let mut cmd = vec![0x01, 0xa3, 0x01, 0x58, 0x20];
         cmd.extend_from_slice(&[0xbb; 32]); // clientDataHash
-                                            // key 2: rp map {"id": "webauthn.io"}
+        // key 2: rp map {"id": "webauthn.io"}
         cmd.extend_from_slice(&[0x02, 0xa1, 0x62]);
         cmd.extend_from_slice(b"id");
         cmd.push(0x6b);

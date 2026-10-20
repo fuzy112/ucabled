@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bluer::AdapterEvent;
 use futures::StreamExt;
 use std::time::Duration;
 
-use crate::eid;
 use crate::CABLE_BLE_UUID;
+use crate::eid;
 
 /// Failure while waiting for a caBLE BLE advert.
 #[derive(Debug)]

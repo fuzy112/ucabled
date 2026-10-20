@@ -20,14 +20,14 @@ async fn main() -> Result<()> {
 #[cfg(feature = "ble")]
 async fn run() -> Result<()> {
     use anyhow::Context;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
-    use rand::rngs::OsRng;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use rand::RngCore;
+    use rand::rngs::OsRng;
     use std::time::Duration;
-    use ucabled::kdf::{derive, Purpose};
+    use ucabled::kdf::{Purpose, derive};
     use ucabled::qr::{self, RequestType};
-    use ucabled::{eid, NUM_ASSIGNED_TUNNEL_DOMAINS};
+    use ucabled::{NUM_ASSIGNED_TUNNEL_DOMAINS, eid};
 
     tracing_subscriber::fmt()
         .with_env_filter(

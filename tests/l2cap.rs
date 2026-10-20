@@ -28,10 +28,10 @@ mod common;
 use anyhow::Result;
 use bluer::l2cap::{SeqPacket, SeqPacketListener, SocketAddr};
 use bluer::{Address, AddressType};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 

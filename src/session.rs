@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::eid;
 use crate::error::TransactionError;
 use crate::handshake::HandshakeInitiator;
-use crate::kdf::{derive, Purpose};
+use crate::kdf::{Purpose, derive};
 use crate::phone::{CableLink, CableTransport, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
 use crate::tunnel::{self, decode_tunnel_server_domain};
 
@@ -131,12 +131,12 @@ impl DesktopFlow {
                 MSG_SHUTDOWN => {
                     return Err(TransactionError::failed(anyhow::anyhow!(
                         "unexpected shutdown from authenticator"
-                    )))
+                    )));
                 }
                 other => {
                     return Err(TransactionError::failed(anyhow::anyhow!(
                         "unexpected message type {other}"
-                    )))
+                    )));
                 }
             }
         };

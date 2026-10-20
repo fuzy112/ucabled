@@ -187,7 +187,7 @@ fn env_truthy(name: &str) -> bool {
 // --------------------------------------------------------------------------
 
 fn init_i18n() {
-    use gettextrs::{bindtextdomain, setlocale, textdomain, LocaleCategory};
+    use gettextrs::{LocaleCategory, bindtextdomain, setlocale, textdomain};
 
     // GTK4 dropped the setlocale() that GTK3 did at init, so without this the
     // process stays in the "C" locale and gettext never loads a catalog.
