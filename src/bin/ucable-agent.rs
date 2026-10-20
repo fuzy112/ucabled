@@ -274,12 +274,11 @@ async fn route_messages(
             }
             sig = signals.next() => {
                 let Some(sig) = sig else { break };
-                if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>() {
-                    if name == BUS_NAME && !new_owner.is_empty() {
+                if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>()
+                    && name == BUS_NAME && !new_owner.is_empty() {
                         tracing::info!("daemon appeared on the bus, re-registering");
                         let _ = daemon_tx.send(());
                     }
-                }
             }
         }
     }
@@ -440,10 +439,8 @@ fn open_window(
                 _ => false,
             }
         };
-        if still_live {
-            if let Ok(status) = status {
-                on_exit(status);
-            }
+        if still_live && let Ok(status) = status {
+            on_exit(status);
         }
     });
     true

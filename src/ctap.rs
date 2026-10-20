@@ -591,12 +591,12 @@ pub fn strip_transport_hints(command: &[u8]) -> Cow<'_, [u8]> {
         for (key, span) in entries {
             cbor::uint(&mut out, key);
             let value = &params[span.clone()];
-            if key == list_key {
-                if let Some((stripped, true)) = strip_transports_from_array(value) {
-                    changed = true;
-                    out.extend_from_slice(&stripped);
-                    continue;
-                }
+            if key == list_key
+                && let Some((stripped, true)) = strip_transports_from_array(value)
+            {
+                changed = true;
+                out.extend_from_slice(&stripped);
+                continue;
             }
             out.extend_from_slice(value);
         }

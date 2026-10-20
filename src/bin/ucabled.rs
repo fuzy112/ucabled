@@ -490,8 +490,8 @@ async fn daemon_loop(
                 }
             }
             Some((cid, result)) = result_rx.recv() => {
-                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending {
-                    if *pending_cid == cid {
+                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending
+                    && *pending_cid == cid {
                         notifier.hide();
                         let payload = match result {
                             Ok(p) => {
@@ -520,11 +520,10 @@ async fn daemon_loop(
                         write_all(&device, reports, &mut write_failures).await;
                         pending = None;
                     }
-                }
             }
             Some((tid, use_phone)) = select_rx.recv() => {
-                if let Some(Pending::Select { cid, .. }) = &pending {
-                    if *cid as u64 == tid {
+                if let Some(Pending::Select { cid, .. }) = &pending
+                    && *cid as u64 == tid {
                         let cid = *cid;
                         pending = None;
                         // CTAP2_ERR_PIN_NOT_SET: on the blink probe a Pin*
@@ -535,7 +534,6 @@ async fn daemon_loop(
                         write_all(&device, reports, &mut write_failures).await;
                         tracing::info!(use_phone, "device selection answered");
                     }
-                }
             }
             Some(request) = cancel_rx.recv() => {
                 if !cancel_aborts(&request, pending.as_ref()) {
