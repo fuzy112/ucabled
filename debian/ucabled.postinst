@@ -1,0 +1,55 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -e
+
+# The debhelper snippets expand at the marker below, in the order they
+# were generated:
+#
+#   1. systemd-sysusers, which creates the ucabled service account
+#      (dh_installsysusers runs first in debian/rules);
+#   2. deb-systemd-helper enable, which enables ucabled.service at boot;
+#   3. deb-systemd-helper --user enable for the session agent;
+#   4. a try-restart of a daemon that is already running (upgrades only,
+#      because dh_installsystemd is invoked with --no-start).
+#
+# The daemon itself is started below instead, after its runtime
+# prerequisites exist: a fresh install must not race the account creation
+# or the /dev/uhid ACL.
+#DEBHELPER#
+
+case "$1" in
+configure)
+	# The system bus and polkitd only read their policy files at
+	# startup.  dbus-send works with both dbus-daemon and dbus-broker.
+	if command -v dbus-send >/dev/null 2>&1; then
+		dbus-send --system --type=method_call \
+			--dest=org.freedesktop.DBus / \
+			org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+	fi
+	# polkitd re-reads its actions on SIGHUP.  deb-systemd-invoke goes
+	# through policy-rc.d and is a no-op without a running systemd.
+	deb-systemd-invoke reload polkit.service >/dev/null 2>&1 || true
+
+	# /dev/uhid gets the ucabled ACL from the udev rule just installed,
+	# so load the module and re-apply the rules now that the account
+	# exists.
+	command -v modprobe >/dev/null 2>&1 && modprobe uhid 2>/dev/null || true
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm control --reload-rules >/dev/null 2>&1 || true
+		udevadm trigger --subsystem-match=misc >/dev/null 2>&1 || true
+	fi
+
+	# Everything the daemon needs is in place now: let systemd see the
+	# newly unpacked units, then start it.  A unit the admin disabled is
+	# left alone (deb-systemd-invoke skips disabled units).
+	deb-systemd-invoke daemon-reload >/dev/null 2>&1 || true
+	deb-systemd-invoke start ucabled.service >/dev/null 2>&1 || true
+
+	if [ -z "$2" ] && [ -d /run/systemd/system ]; then
+		echo "Log out and back in (or run 'systemctl --user start ucable-agent')"
+		echo "so the session agent registers and the QR window can appear."
+	fi
+	;;
+esac
+
+exit 0

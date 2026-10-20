@@ -17,6 +17,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
   specification requires, instead of relying on L2CAP message
   boundaries.
 
+## [0.1.5] - 2026-10-20
+
+### Added
+
+- Debian/Ubuntu packaging: `debian/` builds a `ucabled` binary package
+  with the systemd units, udev rule, D-Bus and polkit policies, manual
+  pages, shell completions and translations.
+
+### Changed
+
+- Link against the gettext runtime that glibc and musl already provide
+  instead of letting `gettext-sys` compile and statically link its bundled
+  GNU gettext.  This shortens compiles and fixes `dpkg-buildpackage`,
+  whose `-flto=auto` link flags broke the bundled libintl archive.
+
+### Fixed
+
+- The Firefox and Chromium snaps can open the virtual token again: the udev
+  rule now tags the hidraw node for those snaps.  snapd's `u2f-devices`
+  interface only tags devices from a hardcoded USB VID/PID allowlist, which
+  can never match a uhid device, so a sandboxed browser saw the token on the
+  bus but was refused by its device cgroup.
+
 ## [0.1.4] - 2026-10-19
 
 ### Security
@@ -82,7 +105,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
-[0.2.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.1.4...HEAD
+[0.2.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/fuzy112/ucabled/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/fuzy112/ucabled/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/fuzy112/ucabled/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/fuzy112/ucabled/compare/v0.1.1...v0.1.2

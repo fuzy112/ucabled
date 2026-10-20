@@ -50,8 +50,10 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 - 已在 NixOS + Firefox + iPhone 上验证注册与登录，覆盖三款测试过的 iOS
   通行密钥提供方：iCloud 钥匙串、Google 密码管理器和 Strongbox。
 - Android（Google 密码管理器）使用同一协议，预计可用，但未在真机上测试。
-- 需要 Linux（`/dev/uhid`）、蓝牙，以及能看到 hidraw 的浏览器。Flatpak/Snap
-  浏览器需要额外的 udev 配置；原生 NixOS 包开箱即用。
+- 需要 Linux（`/dev/uhid`）、蓝牙，以及能看到 hidraw 的浏览器。随包安装的 udev
+  规则会为 Firefox/Chromium snap 打上标签，并已验证（snapd 的 `u2f-devices`
+  白名单基于 USB VID/PID，匹配不到虚拟 HID 设备）。Flatpak 浏览器未测试：其沙箱
+  需要能看到 `/dev/hidraw*`，例如 `flatpak override --user --device=all <app-id>`。
 
 ## 安装（NixOS，推荐）
 
@@ -111,6 +113,30 @@ nix.settings = {
 每次向 `master` 推送时 CI 都会填充缓存。只缓存本仓库的构建产物（依赖仍来自
 `cache.nixos.org`），且替换要求相同的提交与 `flake.lock`，因此本地改过的
 源码树照常本地构建。
+
+## 安装（Debian / Ubuntu）
+
+源码树自带 Debian 打包文件，用标准工具即可构建 `.deb`：
+
+```bash
+sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
+    libgtk4-layer-shell-dev gettext
+dpkg-buildpackage -b -us -uc        # 加 -d 可跳过构建依赖检查
+sudo apt install ../ucabled_*.deb
+```
+
+构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
+工具链更旧（Debian trixie、Ubuntu 24.04），改用 rustup 安装的工具链：
+
+```bash
+debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+```
+
+该包会安装守护进程、两个 helper、systemd 单元、udev 规则、D-Bus 与 polkit
+策略、手册页、shell 补全和翻译。它会创建 `ucabled` 服务账户、启动守护进程，
+并全局启用每用户会话代理；安装后请重新登录一次，让代理注册。caBLE 身份密钥
+位于 `/var/lib/ucabled/identity.key`：`apt remove` 会保留，`apt purge` 会删除
+（之后手机需要重新配对）。
 
 ## 安装（其他发行版）
 
@@ -256,6 +282,7 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
 | --- | --- |
 | 没有弹出二维码窗口 | `ucable-agent` 未注册：`systemctl --user status ucable-agent`、`journalctl --user -u ucable-agent -f`。只有活动的本地会话才能显示窗口 |
 | 浏览器看不到设备 | `ls /dev/hidraw*`；`systemctl status ucabled`；用 `udevadm info` 检查 `ID_FIDO_TOKEN=1` |
+| Snap/Flatpak 版浏览器看不到设备 | Snap：`udevadm info /dev/hidraw2 \| grep TAGS` 里应有 `snap_firefox_firefox`（Firefox 和 Chromium 均已验证；规则装好前启动的浏览器需重启）。Flatpak：未测试；确认沙箱能看到 `/dev/hidraw*`，例如 `flatpak override --user --device=all <app-id>` |
 | 事务总是失败 | 确认蓝牙已开（系统不会替你打开）；`journalctl -u ucabled -f` |
 | 手机扫不了二维码 | 确认日志里没有 `Bluetooth adapter is powered off`，且手机蓝牙正常 |
 | Firefox 提示 "Multiple devices found"（插着另一个安全密钥） | 触碰那个安全密钥来使用它，或在 ucabled 窗口中点击 **使用手机**。Firefox 本身只能通过触碰来选定认证器，因此通过 ucabled 自己的提示来选择手机 |

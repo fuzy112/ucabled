@@ -54,8 +54,11 @@ injection.  Parsing the rpId is read-only, just to title the QR window.
 - Android (Google Password Manager) speaks the same protocol and should work,
   but is untested on real hardware.
 - Needs Linux (`/dev/uhid`), Bluetooth, and a browser that can see hidraw.
-  Flatpak/Snap browsers need extra udev configuration; the native NixOS
-  packages work out of the box.
+  The shipped udev rule tags the device for the Firefox and Chromium snaps,
+  which was verified (snapd's `u2f-devices` allowlist is USB VID/PID based
+  and cannot match a virtual HID device).  Flatpak browsers are untested:
+  their sandbox has to expose `/dev/hidraw*` before it can see the token,
+  for example through `flatpak override --user --device=all <app-id>`.
 
 ## Install (NixOS, recommended)
 
@@ -117,6 +120,34 @@ CI fills the cache on every push to `master`.  Only this repository's artifacts
 are cached (dependencies still come from `cache.nixos.org`), and substitution
 needs the same commit and `flake.lock`, so a locally modified tree is built as
 usual.
+
+## Install (Debian / Ubuntu)
+
+The tree carries Debian packaging, so a `.deb` is built with the standard
+tools:
+
+```bash
+sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
+    libgtk4-layer-shell-dev gettext
+dpkg-buildpackage -b -us -uc        # add -d to skip the build-dependency check
+sudo apt install ../ucabled_*.deb
+```
+
+The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
+Where the distribution is older (Debian trixie, Ubuntu 24.04), build with a
+rustup toolchain instead:
+
+```bash
+debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+```
+
+The package installs the daemon, both helpers, the systemd units, the udev
+rule, the D-Bus and polkit policies, the manual pages, the shell completions
+and the translations.  It creates the `ucabled` service account, starts the
+daemon, and enables the per-user session agent globally; log out and back in
+once so the agent registers.  The caBLE identity key lives in
+`/var/lib/ucabled/identity.key`, which `apt remove` keeps and `apt purge`
+deletes (phones then have to be paired again).
 
 ## Install (other distros)
 
@@ -274,6 +305,7 @@ existing phone passkey asks before overwriting.
 | --- | --- |
 | No QR window appears | The `ucable-agent` agent is not registered: `systemctl --user status ucable-agent` and `journalctl --user -u ucable-agent -f`.  Only the active local session may show the window |
 | The browser does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
+| A Snap or Flatpak browser does not see the device | Snap: `udevadm info /dev/hidraw2 \| grep TAGS` should list `snap_firefox_firefox` (verified for Firefox and Chromium; restart a sandbox that started before the rule).  Flatpak: untested; make sure the sandbox exposes `/dev/hidraw*`, e.g. with `flatpak override --user --device=all <app-id>` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
 | Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window.  Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |

@@ -1,0 +1,10 @@
+ucabled (0.1.4) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Ship the system daemon (ucabled), the per-user session agent
+    (ucable-agent) and the GTK4 prompt helper (ucable-agent-helper)
+    together with the systemd units, the udev rule, the D-Bus system
+    policy, the polkit action, the manual pages, the shell completions
+    and the gettext catalogs.
+
+ -- Zhengyi Fu <i@fuzy.me>  Tue, 20 Oct 2026 16:28:38 +0800

@@ -1,2 +1,12 @@
 /target
 /result
+
+# Debian packaging build artifacts.
+/debian/.debhelper/
+/debian/*.debhelper
+/debian/*.debhelper.log
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/ucabled/
+/debian/tmp/
