@@ -3,3 +3,12 @@
 # leaving the node's group alone; the human user only needs the resulting
 # hidraw node (uaccess via systemd's FIDO/uaccess rules).
 KERNEL=="uhid", RUN+="/usr/bin/setfacl -m u:ucabled:rw /dev/uhid"
+
+# Snap browsers only reach hidraw nodes that snapd's u2f-devices interface
+# tagged from its hardcoded USB VID/PID allowlist, which can never match a
+# uhid device: a virtual HID device has no idVendor/idProduct attributes,
+# only a HID modalias.  Tag the token for the browser snaps ourselves so
+# their device cgroup lets them open it; their AppArmor profiles already
+# allow /dev/hidraw*.
+SUBSYSTEM=="hidraw", ATTRS{modalias}=="hid:*v00001209p00005042*", TAG+="snap_firefox_firefox"
+SUBSYSTEM=="hidraw", ATTRS{modalias}=="hid:*v00001209p00005042*", TAG+="snap_chromium_chromium"

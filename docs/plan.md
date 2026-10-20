@@ -179,8 +179,10 @@ AD 为空；明文先补零至 32 字节倍数，末字节记补零数。消息�
 设备没有可触摸的按键，所以 daemon 收到选择探测时让 agent 弹"Use phone"窗口，
 点按即选中虚拟设备（实现见 docs/system-service.md §3.4）。`--no-ui` 或无 agent
 时不弹窗，虚拟设备不参与选择，实体密钥照常可用。
-- 沙箱 Firefox（Flatpak/Snap）需额外 udev 规则让沙箱看到 hidraw；NixOS 原生
-包无此问题。
+- 沙箱 Firefox：Snap 版受 snapd 的 `u2f-devices` 白名单限制（基于 USB VID/PID，
+  匹配不到 uhid 设备），由 `dist/90-ucabled.rules` 直接给节点打 `snap_*` 标签解决，
+  已在 Firefox 与 Chromium snap 上验证。Flatpak 版 udev 规则无能为力，取决于沙箱
+  是否开放 `/dev/hidraw*`，未验证。NixOS 原生包无此问题。
 - **credential transports 恒为 `usb`**：RP 看到的 `transports` 由 Firefox 决定，
 不是设备能控制的。Linux 的 CTAP 后端（`dom/webauthn/authrs_bridge/src/lib.rs`
 的 `get_transports`）对所有走 USB-HID 的凭证硬编码返回 `["usb"]`，只在

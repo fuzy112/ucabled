@@ -19,6 +19,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   GNU gettext.  This shortens compiles and fixes `dpkg-buildpackage`,
   whose `-flto=auto` link flags broke the bundled libintl archive.
 
+### Fixed
+
+- The Firefox and Chromium snaps can open the virtual token again: the udev
+  rule now tags the hidraw node for those snaps.  snapd's `u2f-devices`
+  interface only tags devices from a hardcoded USB VID/PID allowlist, which
+  can never match a uhid device, so a sandboxed browser saw the token on the
+  bus but was refused by its device cgroup.
+
 ## [0.1.4] - 2026-10-19
 
 ### Security

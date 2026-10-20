@@ -54,8 +54,11 @@ injection.  Parsing the rpId is read-only, just to title the QR window.
 - Android (Google Password Manager) speaks the same protocol and should work,
   but is untested on real hardware.
 - Needs Linux (`/dev/uhid`), Bluetooth, and a browser that can see hidraw.
-  Flatpak/Snap browsers need extra udev configuration; the native NixOS
-  packages work out of the box.
+  The shipped udev rule tags the device for the Firefox and Chromium snaps,
+  which was verified (snapd's `u2f-devices` allowlist is USB VID/PID based
+  and cannot match a virtual HID device).  Flatpak browsers are untested:
+  their sandbox has to expose `/dev/hidraw*` before it can see the token,
+  for example through `flatpak override --user --device=all <app-id>`.
 
 ## Install (NixOS, recommended)
 
@@ -302,6 +305,7 @@ existing phone passkey asks before overwriting.
 | --- | --- |
 | No QR window appears | The `ucable-agent` agent is not registered: `systemctl --user status ucable-agent` and `journalctl --user -u ucable-agent -f`.  Only the active local session may show the window |
 | The browser does not see the device | `ls /dev/hidraw*`; `systemctl status ucabled`; check `udevadm info` for `ID_FIDO_TOKEN=1` |
+| A Snap or Flatpak browser does not see the device | Snap: `udevadm info /dev/hidraw2 \| grep TAGS` should list `snap_firefox_firefox` (verified for Firefox and Chromium; restart a sandbox that started before the rule).  Flatpak: untested; make sure the sandbox exposes `/dev/hidraw*`, e.g. with `flatpak override --user --device=all <app-id>` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
 | Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window.  Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |
