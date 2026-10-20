@@ -1,0 +1,68 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# autopkgtest smoke test.
+#
+# The daemon cannot be exercised end to end without a Bluetooth adapter and
+# a phone, so this checks what can be checked in a container: the three
+# programs start (which also proves their shared libraries are installed),
+# every file the runtime needs is present, the units parse and point at the
+# packaged binaries, and the postinst created the service account.
+
+set -eu
+
+fail() {
+	echo "FAIL: $*" >&2
+	exit 1
+}
+
+version=$(dpkg-query -W -f='${Version}' ucabled)
+expected=${version%%-*}
+
+# The binaries run, and the version they report matches the package.
+for bin in ucabled ucable-agent ucable-agent-helper; do
+	actual=$("$bin" --version) || fail "$bin --version failed"
+	[ "$actual" = "$bin $expected" ] ||
+		fail "$bin reports '$actual', expected '$bin $expected'"
+done
+
+# Everything the daemon, the agent and the session manager read at runtime.
+for file in \
+	/usr/lib/systemd/system/ucabled.service \
+	/usr/lib/systemd/user/ucable-agent.service \
+	/usr/lib/udev/rules.d/90-ucabled.rules \
+	/usr/lib/modules-load.d/ucabled.conf \
+	/usr/lib/sysusers.d/ucabled.conf \
+	/usr/share/dbus-1/system.d/org.ucabled.conf \
+	/usr/share/polkit-1/actions/org.ucabled.policy \
+	/usr/share/man/man1/ucabled.1.gz
+do
+	[ -e "$file" ] || fail "$file is missing"
+done
+
+# The udev rule has to call a setfacl that exists in this installation.
+acl=$(sed -n 's/.*RUN+="\([^ "]*setfacl\) .*/\1/p' \
+	/usr/lib/udev/rules.d/90-ucabled.rules)
+[ -n "$acl" ] || fail "no setfacl call in the udev rule"
+[ -x "$acl" ] || fail "udev rule calls a missing setfacl: $acl"
+
+# systemd parses the units; verify also checks that ExecStart exists.
+systemd-analyze verify /usr/lib/systemd/system/ucabled.service ||
+	fail "ucabled.service does not verify"
+systemd-analyze verify /usr/lib/systemd/user/ucable-agent.service ||
+	fail "ucable-agent.service does not verify"
+
+grep -qx 'ExecStart=/usr/bin/ucabled' /usr/lib/systemd/system/ucabled.service ||
+	fail "ucabled.service does not start /usr/bin/ucabled"
+grep -qx 'ExecStart=/usr/bin/ucable-agent' /usr/lib/systemd/user/ucable-agent.service ||
+	fail "ucable-agent.service does not start /usr/bin/ucable-agent"
+
+# The postinst creates the dedicated account through systemd-sysusers.
+getent passwd ucabled >/dev/null || fail "the ucabled user is missing"
+getent group ucabled >/dev/null || fail "the ucabled group is missing"
+
+# At least one compiled gettext catalog for the GTK4 helper.
+ls /usr/share/locale/*/LC_MESSAGES/ucable-agent-helper-gtk.mo >/dev/null 2>&1 ||
+	fail "no gettext catalog installed"
+
+echo "smoke test passed"

@@ -118,6 +118,34 @@ are cached (dependencies still come from `cache.nixos.org`), and substitution
 needs the same commit and `flake.lock`, so a locally modified tree is built as
 usual.
 
+## Install (Debian / Ubuntu)
+
+The tree carries Debian packaging, so a `.deb` is built with the standard
+tools:
+
+```bash
+sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
+    libgtk4-layer-shell-dev gettext
+dpkg-buildpackage -b -us -uc        # add -d to skip the build-dependency check
+sudo apt install ../ucabled_*.deb
+```
+
+The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
+Where the distribution is older (Debian trixie, Ubuntu 24.04), build with a
+rustup toolchain instead:
+
+```bash
+debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+```
+
+The package installs the daemon, both helpers, the systemd units, the udev
+rule, the D-Bus and polkit policies, the manual pages, the shell completions
+and the translations.  It creates the `ucabled` service account, starts the
+daemon, and enables the per-user session agent globally; log out and back in
+once so the agent registers.  The caBLE identity key lives in
+`/var/lib/ucabled/identity.key`, which `apt remove` keeps and `apt purge`
+deletes (phones then have to be paired again).
+
 ## Install (other distros)
 
 On a systemd distribution, build and run the installer:

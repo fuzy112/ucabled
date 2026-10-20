@@ -112,6 +112,30 @@ nix.settings = {
 `cache.nixos.org`），且替换要求相同的提交与 `flake.lock`，因此本地改过的
 源码树照常本地构建。
 
+## 安装（Debian / Ubuntu）
+
+源码树自带 Debian 打包文件，用标准工具即可构建 `.deb`：
+
+```bash
+sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
+    libgtk4-layer-shell-dev gettext
+dpkg-buildpackage -b -us -uc        # 加 -d 可跳过构建依赖检查
+sudo apt install ../ucabled_*.deb
+```
+
+构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
+工具链更旧（Debian trixie、Ubuntu 24.04），改用 rustup 安装的工具链：
+
+```bash
+debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+```
+
+该包会安装守护进程、两个 helper、systemd 单元、udev 规则、D-Bus 与 polkit
+策略、手册页、shell 补全和翻译。它会创建 `ucabled` 服务账户、启动守护进程，
+并全局启用每用户会话代理；安装后请重新登录一次，让代理注册。caBLE 身份密钥
+位于 `/var/lib/ucabled/identity.key`：`apt remove` 会保留，`apt purge` 会删除
+（之后手机需要重新配对）。
+
 ## 安装（其他发行版）
 
 在 systemd 发行版上，构建并运行安装脚本：

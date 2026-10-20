@@ -1,0 +1,41 @@
+Source: ucabled
+Section: misc
+Priority: optional
+Maintainer: Zhengyi Fu <i@fuzy.me>
+Build-Depends: debhelper-compat (= 13),
+               cargo (>= 1.92),
+               rustc (>= 1.92),
+               pkgconf,
+               libgtk-4-dev,
+               libgtk4-layer-shell-dev (>= 1.0),
+               gettext
+Standards-Version: 4.7.0
+Homepage: https://github.com/fuzy112/ucabled
+Vcs-Git: https://github.com/fuzy112/ucabled.git
+Vcs-Browser: https://github.com/fuzy112/ucabled
+Rules-Requires-Root: no
+
+Package: ucabled
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         acl,
+         bluez,
+         dbus,
+         polkitd | policykit-1,
+         systemd
+Description: virtual FIDO2 key that relays passkeys to a phone
+ ucabled registers a virtual USB HID FIDO2 device with the kernel
+ (/dev/uhid) and relays WebAuthn registration and authentication
+ requests from the browser to a phone over caBLE v2, the hybrid
+ transport described in CTAP 2.2 section 11.5.
+ .
+ A QR code is shown on the desktop; the phone scans it, proves its
+ proximity over Bluetooth Low Energy and completes the ceremony through
+ a WebSocket tunnel, so Face ID or a fingerprint on the phone authorizes
+ the request.  No key material is stored on the machine: the virtual
+ device only relays the ceremony.
+ .
+ The package contains the system daemon (ucabled), the per-user session
+ agent (ucable-agent) and its GTK4 prompt helper
+ (ucable-agent-helper).

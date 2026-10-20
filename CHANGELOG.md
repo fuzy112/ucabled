@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Debian/Ubuntu packaging: `debian/` builds a `ucabled` binary package
+  with the systemd units, udev rule, D-Bus and polkit policies, manual
+  pages, shell completions and translations.
+
 ## [0.1.4] - 2026-10-19
 
 ### Security

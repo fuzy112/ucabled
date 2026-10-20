@@ -1,0 +1,47 @@
+ucabled for Debian and Ubuntu
+=============================
+
+Building
+--------
+
+    sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
+        libgtk4-layer-shell-dev gettext
+    dpkg-buildpackage -b -us -uc
+
+The build needs cargo 1.92 or newer, because the gtk4 0.11 bindings
+require it.  Debian trixie and Ubuntu 24.04 ship older toolchains; build
+those with a rustup toolchain instead:
+
+    debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+
+Cargo fetches the crates pinned by Cargo.lock from crates.io on the first
+build; set CARGO_NET_OFFLINE=1 to build against an already populated
+cargo cache without network access.
+
+Bluetooth
+---------
+
+caBLE needs a working adapter and bluez's bluetoothd.  The package
+depends on bluez but does not start it; the daemon starts regardless and
+only the individual transaction fails while Bluetooth is off, matching
+the unit's Wants=bluetooth.target.
+
+Pairing identity
+----------------
+
+Phones remember this machine by the caBLE identity key in
+/var/lib/ucabled/identity.key (created through systemd's StateDirectory=).
+Removing the package keeps it; purging deletes it, and phones then have
+to be paired again after a reinstall.
+
+Session agent
+-------------
+
+ucable-agent.service is a user unit, enabled globally through
+/etc/systemd/user/graphical-session.target.wants/.  Log out and back in
+after installing so it starts with the graphical session.
+
+On wlroots compositors (Sway, Hyprland) the bundled GTK4 helper can be
+presented as a layer-shell overlay by starting the agent with
+UCABLED_HELPER_LAYER_SHELL=1, or by passing --layer-shell to
+ucable-agent-helper.
