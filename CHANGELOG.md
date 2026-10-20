@@ -12,6 +12,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   with the systemd units, udev rule, D-Bus and polkit policies, manual
   pages, shell completions and translations.
 
+### Changed
+
+- Link against the gettext runtime that glibc and musl already provide
+  instead of letting `gettext-sys` compile and statically link its bundled
+  GNU gettext.  This shortens compiles and fixes `dpkg-buildpackage`,
+  whose `-flto=auto` link flags broke the bundled libintl archive.
+
 ## [0.1.4] - 2026-10-19
 
 ### Security
