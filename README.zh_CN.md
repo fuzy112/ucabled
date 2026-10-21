@@ -139,7 +139,8 @@ debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 
 在 NixOS 上，`nix run .#deb` 会在 rootless podman 容器里构建同样的三个包，
 产物写到 `debian-build/`，宿主机无需安装上述构建依赖；前提是 rootless
-podman 可用。
+podman 可用。加 `sudo` 运行则改用 rootful podman，不需要配置 subuid/subgid，
+产物会 chown 回调用者。
 
 源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
 以及 D-Bus/polkit 策略）、`ucable-agent`（默认的 GTK4 会话代理及其 helper）

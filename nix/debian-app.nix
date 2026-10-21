@@ -27,10 +27,10 @@ pkgs.writeShellApplication {
       cat <<'EOF'
     Usage: nix run .#deb [-- --help]
 
-    Build the three Debian packages in a rootless podman container.  The
-    container image is built on first use and cached by podman; the cargo
-    registry and target directory are kept in the named volumes
-    ucabled-deb-cargo and ucabled-deb-target.
+    Build the three Debian packages in a podman container.  It runs
+    rootless by default; with sudo it uses a rootful build.  The container
+    image is built on first use and cached by podman; the cargo registry
+    and target directory are kept in named volumes.
 
     Environment:
       UCABLED_DEB_OUT    output directory (default: <repo>/debian-build)
@@ -52,14 +52,23 @@ pkgs.writeShellApplication {
         ;;
     esac
 
-    repo=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if [ -z "$repo" ] || [ ! -f "$repo/debian/control" ]; then
+      # sudo makes git refuse a repository owned by another user; find the
+      # source tree from the working directory instead.
+      repo=$(pwd)
+      while [ "$repo" != "/" ] && [ ! -f "$repo/debian/control" ]; do
+        repo=$(dirname "$repo")
+      done
+    fi
     if [ ! -f "$repo/debian/control" ] || [ ! -f "$repo/Cargo.toml" ]; then
       echo "ucabled-deb: run this from the ucabled source tree" >&2
       exit 1
     fi
 
-    if ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null ||
-      ! grep -q "^$(id -un):" /etc/subgid 2>/dev/null; then
+    if [ "$(id -u)" -ne 0 ] &&
+      { ! grep -q "^$(id -un):" /etc/subuid 2>/dev/null ||
+        ! grep -q "^$(id -un):" /etc/subgid 2>/dev/null; }; then
       cat >&2 <<EOF
     ucabled-deb: rootless podman needs a subordinate UID/GID range.
     On NixOS add:
@@ -67,6 +76,7 @@ pkgs.writeShellApplication {
       users.users.$(id -un).subGidRanges = [{ startGid = 100000; count = 65536; }];
     then run: sudo nixos-rebuild switch
     Alternatively build inside a NixOS VM with the same ranges configured.
+    Or run this app with sudo for a rootful build.
     EOF
       exit 1
     fi
@@ -82,12 +92,16 @@ pkgs.writeShellApplication {
 
     # NixOS only writes /etc/containers/policy.json when
     # virtualisation.containers is enabled.  Keep podman's config and image
-    # store under the user's data directory so the app needs neither that
-    # module nor root.
-    podman_state="''${XDG_DATA_HOME:-$HOME/.local/share}/ucabled-deb/podman"
+    # store in a dedicated state directory instead of relying on that module.
+    if [ "$(id -u)" -eq 0 ]; then
+      podman_state="/var/lib/ucabled-deb/podman"
+      podman_runroot="/run/ucabled-deb-podman"
+    else
+      podman_state="''${XDG_DATA_HOME:-$HOME/.local/share}/ucabled-deb/podman"
+      podman_runroot="''${XDG_RUNTIME_DIR:-/tmp}/ucabled-deb-podman"
+    fi
     podman_config="$podman_state/config"
     podman_root="$podman_state/storage"
-    podman_runroot="''${XDG_RUNTIME_DIR:-/tmp}/ucabled-deb-podman"
     mkdir -p "$podman_config/.config/containers" "$podman_runroot"
     cp ${policy} "$podman_config/.config/containers/policy.json"
 
@@ -146,6 +160,10 @@ pkgs.writeShellApplication {
 
         cp -v /tmp/*.deb /tmp/*.buildinfo /tmp/*.changes /out/
       '
+
+    if [ "$(id -u)" -eq 0 ] && [ -n "''${SUDO_UID:-}" ]; then
+      chown -R "''${SUDO_UID}:''${SUDO_GID:-$(id -g "$SUDO_UID")}" "$out"
+    fi
 
     echo
     echo "Packages written to $out:"
