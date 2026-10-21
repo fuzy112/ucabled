@@ -55,6 +55,38 @@ const QR_QUIET = 4;
 /// The GTK helper rasterizes at the same 10 px per module.
 const QR_MODULE_PX = 10;
 
+/// Side of the centre passkey glyph in modules, and the smallest QR version
+/// used with it: at 37 modules the 10x10 patch stays well inside the 15%
+/// error-correction budget, exactly like the GTK helper.
+const QR_CENTER_MODULES = 10;
+const QR_MIN_MODULES = 37;
+
+/// The helper's 100x100 passkey mask (src/bin/resources/passkey.gray) as an
+/// opaque grey PNG, inlined so the extension ships no side files.  Split over
+/// several lines only to keep the source readable.
+const PASSKEY_PNG = [
+    'iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAAAAABVicqIAAAD3klEQVR42u3ZW0gUURgA4LO6',
+    '3mtpUdao2AxfIiUSHzQxH0JFUBQMNSy6PIiQGaVEYQ8KmrlGiYIFEj1kXtAupqFYKZKVtfnQ',
+    'DUlNtzQzo8xLumquW+nuzLhzLnPszD7t/3jmP/PN5cyZ/8wAsx0COBAH4kAciANxIFwY3z28',
+    '1djxySQfYsgPdQHLoY6/8UsWpD/FGQjCu2CWObKkcwc24f+UMTITD8ThcoUpMhUOoFHAEJnb',
+    'CxBRxg5JRxnA6QErpAmgY9MkG2TOD4OAU2yQCpwBPL4yQYKwCChigfTiDRDEArlKQBTfGSDp',
+    'BAS0MUAiSUgFAySYhOgYIDtJSD4DJISEXGKAJJCQKgbIaRLykgFym2B4zjNAxt3wSByTuSsR',
+    'j9QyQbqwhnaBzUsrDofcXJU61N18Xz9sWgNiUKGN6CU+r+2YdqVRc+SOifodX69AGZvHuKRn',
+    'EcINgU3UJdFFhLHhtTVjMdt2W8oMbXFXBD0XHz1XmEHuW/AwbZla6SXeS2Avdx4xsGPwH6Ut',
+    'uHv22OxCmcVfjyz41QxboK3ql+7uFvR3P/ye39SCGhfFa1gE9ZbsC1A7ufuGpFVNCJpNu1CI',
+    'epzZcq6W3+v2hmljh+DCnmOG8G+cwOUT/B3L33tWiJEfeI8skwu/JuthhDzmR8OiqC4op0Km',
+    'uqsvnEyNCg/+F9EHs5sht2S9tSlUfFNIiLFDl6gVjZwc6+ZSvq3Psg7gZ9Q0SUjf5RhP6PBU',
+    'TlsyzvNtB1ZaCvmWVDIyUIgp6V9ZksoFbRl/5YViwVo8g4DM10UqcK8r612pEzaqomI10MoP',
+    'ikwUbiSUKdcsmR9xSa0Y5OdZFancAiesyVvROa6TaKTBF5AjzJqdg87Zj37idQoJBnCzHuWQ',
+    'EpnzBImUAWlRY+2QicpIRk71z5USkQRuNtDCE7xHUMhigEQDOA9wxwV9Xl3aka/f60ByHOc6',
+    'NbpCRlYNupAIlY649vFTsUb0VmxFl0QjCukIiOX7DSfb3LAvmOLuHqAJ4cq3M4lfZER0YcvU',
+    'UirE642w7weu3c+ARfKpELDls6DvN4BWViG5dAgIGIEiIuW/ELCtH4oAv1GGCPAdhCI2n9uA',
+    'lFUCJpKokWp6REN9ucacqBEvGKIdwK204pgg+CFsfutGi/iIEa2BsDCtVFAi0WKkhbjErvWg',
+    'MpSdYqSfvI4fPLSO4mLVQx7GTCkfC+b0jXXSon0WOq3kyvbjTDiEz9gDsVXkQWy+UcmEHJUH',
+    '+WGPMzELv1rkyfVbVq9CjmGG/3671fDzYPuD2aLkmeVEVpQ8s7yI+cUOdYlZbmTt/34diJ2R',
+    'P1B9arNDA72uAAAAAElFTkSuQmCC',
+].join('');
+
 const AGENT_XML = `
 <node>
   <interface name="org.ucabled.Agent1">
@@ -111,14 +143,22 @@ function finderSvg(x, y) {
         `<rect x="${x + 2}" y="${y + 2}" width="3" height="3" rx="0.6" fill="#000"/>`;
 }
 
-/// Rasterize a caBLE URL into an in-memory SVG: round data modules and
-/// rounded finder patterns, like the GTK helper (minus the centre glyph).
+/// Rasterize a caBLE URL into an in-memory SVG: round data modules, rounded
+/// finder patterns and the passkey glyph in the middle, like the GTK helper.
 /// The URL is secret and must never be logged or persisted — the SVG lives
 /// only in this process's memory (GBytesIcon, never written to disk).
 function qrSvgBytes(url) {
-    const qr = qrcode(0, 'M');
+    let qr = qrcode(0, 'M');
     qr.addData(url);
     qr.make();
+
+    // The centre glyph covers data modules; bump tiny payloads to version 5
+    // (37 modules) so error correction still has enough slack.
+    if (qr.getModuleCount() < QR_MIN_MODULES) {
+        qr = qrcode(5, 'M');
+        qr.addData(url);
+        qr.make();
+    }
 
     const n = qr.getModuleCount();
     const size = n + QR_QUIET * 2;
@@ -134,6 +174,7 @@ function qrSvgBytes(url) {
     }
 
     const far = QR_QUIET + n - 7;
+    const center = Math.floor((n - QR_CENTER_MODULES) / 2) + QR_QUIET;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg"` +
         ` width="${size * QR_MODULE_PX}" height="${size * QR_MODULE_PX}"` +
         ` viewBox="0 0 ${size} ${size}">` +
@@ -142,6 +183,11 @@ function qrSvgBytes(url) {
         finderSvg(QR_QUIET, QR_QUIET) +
         finderSvg(far, QR_QUIET) +
         finderSvg(QR_QUIET, far) +
+        `<rect x="${center}" y="${center}"` +
+        ` width="${QR_CENTER_MODULES}" height="${QR_CENTER_MODULES}" fill="#fff"/>` +
+        `<image x="${center}" y="${center}"` +
+        ` width="${QR_CENTER_MODULES}" height="${QR_CENTER_MODULES}"` +
+        ` href="data:image/png;base64,${PASSKEY_PNG}"/>` +
         '</svg>';
     return new GLib.Bytes(new TextEncoder().encode(svg));
 }

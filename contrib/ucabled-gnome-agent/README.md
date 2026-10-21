@@ -96,7 +96,7 @@ sessions — the extension offers no fallback there.
 
 - English-only strings; the translated UI is the GTK helper (`po/`).
 - The "phone detected" state dims the QR instead of blurring it (St has
-  no blur filter), and the QR carries no centre passkey glyph.
+  no blur filter).
 - On the lock screen no modal can grab the focus; the prompt is skipped
   and the transaction simply times out (same as the reference design).
 - Each GNOME Shell release may break extension APIs; the version list in
