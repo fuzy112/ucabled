@@ -49,6 +49,12 @@ const SELECT_TIMEOUT_SECS = 60;
 /// QR quiet zone in modules, matching the GTK helper.
 const QR_QUIET = 4;
 
+/// SVG raster resolution in pixels per module.  Without an explicit
+/// width/height librsvg renders the code at one pixel per module and
+/// St.Icon has to scale that tiny bitmap up, which blurs the modules.
+/// The GTK helper rasterizes at the same 10 px per module.
+const QR_MODULE_PX = 10;
+
 const AGENT_XML = `
 <node>
   <interface name="org.ucabled.Agent1">
@@ -128,7 +134,9 @@ function qrSvgBytes(url) {
     }
 
     const far = QR_QUIET + n - 7;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">` +
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"` +
+        ` width="${size * QR_MODULE_PX}" height="${size * QR_MODULE_PX}"` +
+        ` viewBox="0 0 ${size} ${size}">` +
         `<rect width="${size}" height="${size}" fill="#fff"/>` +
         `<g fill="#000">${circles.join('')}</g>` +
         finderSvg(QR_QUIET, QR_QUIET) +
