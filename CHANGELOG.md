@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-21
+
 ### Security
 
 - Update the tunnel's certificate verifier to `rustls-webpki` 0.103.16,
@@ -102,7 +104,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
-[Unreleased]: https://github.com/fuzy112/ucabled/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/fuzy112/ucabled/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/fuzy112/ucabled/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/fuzy112/ucabled/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/fuzy112/ucabled/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/fuzy112/ucabled/compare/v0.1.2...v0.1.3
