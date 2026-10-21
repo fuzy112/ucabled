@@ -55,8 +55,12 @@ tokio = { version = "1", features = [
   "process",
   "io-util",
 ] }
+# `__rustls-tls` rather than `rustls-tls-webpki-roots`: the tunnel always
+# dials with its own `Connector::Rustls` config (src/tunnel.rs), so the
+# default root store that the public feature builds is never used — and it
+# would drag in the vulnerable webpki-roots 0.26 line (RUSTSEC-2026-0381).
 tokio-tungstenite = { version = "0.30", features = [
-  "rustls-tls-webpki-roots",
+  "__rustls-tls",
 ] }
 rustls = { version = "0.23", default-features = false, features = [
   "ring",
@@ -64,7 +68,8 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 # Mozilla root store for the tunnel's client TLS config (built explicitly so
 # the protocol version floor does not depend on rustls's default features).
-webpki-roots = "0.26"
+# 1.0.10 drops the distrusted emSign intermediates (RUSTSEC-2026-0381).
+webpki-roots = "1.0.10"
 qrcode = { version = "0.14", default-features = false }
 
 bluer = { version = "0.17", optional = true, features = ["bluetoothd"] }

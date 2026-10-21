@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Update the tunnel's certificate verifier to `rustls-webpki` 0.103.16,
+  which could previously accept distrusted intermediates
+  (RUSTSEC-2026-0382), and the bundled Mozilla root store to
+  `webpki-roots` 1.0.10, which carried the distrusted emSign
+  intermediates (RUSTSEC-2026-0381).
+
 ## [0.1.5] - 2026-10-20
 
 ### Added
