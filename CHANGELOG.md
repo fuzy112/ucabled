@@ -17,6 +17,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Optimize performance.
+- Debian/Ubuntu packaging: split the monolithic `ucabled` package into
+  `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
+  `ucabled-gnome-agent` (GNOME Shell extension).  Upgrades pull the
+  default agent in through a recommendation; the maintainer scripts
+  reload the bus, polkit and udev policy and restart the daemon and the
+  logged-in session agents.
 
 ### Fixed
 

@@ -1,9 +1,4 @@
 target/release/ucabled usr/bin
-target/release/ucable-agent usr/bin
-target/release/ucable-agent-helper usr/bin
 dist/90-ucabled.rules usr/lib/udev/rules.d
 dist/org.ucabled.conf usr/share/dbus-1/system.d
 dist/org.ucabled.policy usr/share/polkit-1/actions
-contrib/ucabled-gnome-agent/metadata.json usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me
-contrib/ucabled-gnome-agent/extension.js usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me
-contrib/ucabled-gnome-agent/qrcode.mjs usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me

@@ -35,10 +35,39 @@ for file in \
 	/usr/lib/sysusers.d/ucabled.conf \
 	/usr/share/dbus-1/system.d/org.ucabled.conf \
 	/usr/share/polkit-1/actions/org.ucabled.policy \
-	/usr/share/man/man1/ucabled.1.gz
+	/usr/share/man/man1/ucabled.1.gz \
+	/usr/share/man/man1/ucable-agent.1.gz \
+	/usr/share/man/man1/ucable-agent-helper.1.gz \
+	/usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me/metadata.json
 do
 	[ -e "$file" ] || fail "$file is missing"
 done
+
+# The three packages really are split: each runtime file belongs to the
+# package that should own it.
+check_owner() {
+	owner=$(dpkg -S "$2" 2>/dev/null) ||
+		fail "$2 is not owned by any package"
+	case "$owner" in
+	"$1:"*) ;;
+	*) fail "$2 is shipped by ${owner%%:*}, expected $1" ;;
+	esac
+}
+check_owner ucabled /usr/bin/ucabled
+check_owner ucabled /usr/lib/systemd/system/ucabled.service
+check_owner ucabled /usr/lib/udev/rules.d/90-ucabled.rules
+check_owner ucabled /usr/share/dbus-1/system.d/org.ucabled.conf
+check_owner ucabled /usr/share/polkit-1/actions/org.ucabled.policy
+check_owner ucable-agent /usr/bin/ucable-agent
+check_owner ucable-agent /usr/bin/ucable-agent-helper
+check_owner ucable-agent /usr/lib/systemd/user/ucable-agent.service
+check_owner ucabled-gnome-agent \
+	/usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me/metadata.json
+
+# The daemon package no longer carries the session agents.
+if dpkg -S /usr/bin/ucable-agent 2>/dev/null | grep -q '^ucabled:'; then
+	fail "ucabled still ships /usr/bin/ucable-agent"
+fi
 
 # The udev rule has to call a setfacl that exists in this installation.
 acl=$(sed -n 's/.*RUN+="\([^ "]*setfacl\) .*/\1/p' \

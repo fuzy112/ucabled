@@ -1,12 +1,35 @@
 ucabled for Debian and Ubuntu
 =============================
 
+Packages
+--------
+
+The source package builds three binary packages:
+
+    ucabled               the system daemon, its systemd unit, the udev
+                          rule, the D-Bus system policy and the polkit
+                          action
+    ucable-agent          the default per-user session agent,
+                          ucable-agent.service and the GTK4 prompt
+                          helper ucable-agent-helper
+    ucabled-gnome-agent   the optional GNOME Shell agent extension
+
+ucabled Recommends ucable-agent, so a normal "apt install ucabled" gets
+the default agent as well.  ucable-agent and ucabled-gnome-agent both
+need the daemon and register for its single agent slot, so enable only
+one of them per user.
+
 Building
 --------
 
     sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
         libgtk4-layer-shell-dev gettext
     dpkg-buildpackage -b -us -uc
+    sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
+
+On GNOME, install the extension package too:
+
+    sudo apt install ../ucabled-gnome-agent_*.deb
 
 The build needs cargo 1.92 or newer, because the gtk4 0.11 bindings
 require it.  Debian trixie and Ubuntu 24.04 ship older toolchains; build
@@ -17,6 +40,28 @@ those with a rustup toolchain instead:
 Cargo fetches the crates pinned by Cargo.lock from crates.io on the first
 build; set CARGO_NET_OFFLINE=1 to build against an already populated
 cargo cache without network access.
+
+Installing, upgrading and restarting
+------------------------------------
+
+The daemon's postinst reloads the system D-Bus policy and polkit, applies
+the udev rule so /dev/uhid gets the ucabled ACL, then starts the daemon
+on a fresh install or restarts it on an upgrade.
+ucable-agent.service is enabled for all users by debhelper; the agent's
+postinst reloads and restarts it in every logged-in session, and a fresh
+install also starts it for graphical sessions that are already up, unless
+ucabled-gnome-agent is installed.
+
+Earlier versions shipped the daemon, the session agent and the GNOME
+extension in a single ucabled package.  On upgrade apt installs
+ucable-agent automatically through the daemon's Recommends; the GNOME
+extension moved to ucabled-gnome-agent, so install that package as well
+if you used the extension.
+
+Neither maintainer script restarts anything when systemd is not running
+(for example inside a container).  On remove, ucabled.prerm stops the
+daemon; on purge, debhelper removes the enablement and postrm deletes the
+service account and the caBLE identity key.
 
 Bluetooth
 ---------
@@ -49,15 +94,18 @@ Pairing identity
 
 Phones remember this machine by the caBLE identity key in
 /var/lib/ucabled/identity.key (created through systemd's StateDirectory=).
-Removing the package keeps it; purging deletes it, and phones then have
-to be paired again after a reinstall.
+Removing the ucabled package keeps it; purging deletes it, and phones then
+have to be paired again after a reinstall.
 
 Session agent
 -------------
 
 ucable-agent.service is a user unit, enabled globally through
-/etc/systemd/user/graphical-session.target.wants/.  Log out and back in
-after installing so it starts with the graphical session.
+/etc/systemd/user/graphical-session.target.wants/.  The package's postinst
+starts it for sessions that are already logged in and new sessions start
+it at login.  If the agent is not running, start it by hand:
+
+    systemctl --user start ucable-agent.service
 
 On wlroots compositors (Sway, Hyprland) the bundled GTK4 helper can be
 presented as a layer-shell overlay by starting the agent with
@@ -67,13 +115,18 @@ ucable-agent-helper.
 GNOME Shell agent
 -----------------
 
-The package also ships /usr/share/gnome-shell/extensions/
+ucabled-gnome-agent ships /usr/share/gnome-shell/extensions/
 ucabled-agent@fuzy.me, a Shell extension that registers as the session
-agent itself and shows prompts as shell modal dialogs.  Enable it per
-user and re-login:
+agent itself and shows prompts as shell modal dialogs.  It is installed
+system-wide but stays disabled; enable it per user and re-login:
 
     gnome-extensions enable ucabled-agent@fuzy.me
 
 The daemon has a single agent slot, so disable the user service when the
-extension is in use (systemctl --user disable --now ucable-agent.service).
-Details and trade-offs: contrib/ucabled-gnome-agent/README.md upstream.
+extension is in use:
+
+    systemctl --user disable --now ucable-agent.service
+
+Removing the ucable-agent package is the cleaner way to make the choice
+permanent.  Details and trade-offs: contrib/ucabled-gnome-agent/README.md
+upstream.

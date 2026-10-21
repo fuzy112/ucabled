@@ -1,0 +1,2 @@
+target/release/ucable-agent usr/bin
+target/release/ucable-agent-helper usr/bin

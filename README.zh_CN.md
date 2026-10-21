@@ -125,7 +125,9 @@ nix.settings = {
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
 dpkg-buildpackage -b -us -uc        # 加 -d 可跳过构建依赖检查
-sudo apt install ../ucabled_*.deb
+sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
+# 在 GNOME 上，可选的 Shell 扩展是第三个包：
+sudo apt install ../ucabled-gnome-agent_*.deb
 ```
 
 构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
@@ -135,11 +137,14 @@ sudo apt install ../ucabled_*.deb
 debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 ```
 
-该包会安装守护进程、两个 helper、systemd 单元、udev 规则、D-Bus 与 polkit
-策略、手册页、shell 补全和翻译。它会创建 `ucabled` 服务账户、启动守护进程，
-并全局启用每用户会话代理；安装后请重新登录一次，让代理注册。caBLE 身份密钥
-位于 `/var/lib/ucabled/identity.key`：`apt remove` 会保留，`apt purge` 会删除
-（之后手机需要重新配对）。
+源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
+以及 D-Bus/polkit 策略）、`ucable-agent`（默认的 GTK4 会话代理及其 helper）
+和 `ucabled-gnome-agent`（可选的 GNOME Shell 扩展）。`ucabled` 推荐
+`ucable-agent`，所以 `apt install ucabled` 会一并装上默认代理。守护进程的
+postinst 会重载 D-Bus 策略、polkit 与 udev 规则，然后在新装时启动、升级时
+重启守护进程；代理的 postinst 会全局启用用户单元，并在已登录会话中重载和
+重启它。caBLE 身份密钥位于 `/var/lib/ucabled/identity.key`：`apt remove`
+会保留，`apt purge` 会删除（之后手机需要重新配对）。
 
 ## 安装（其他发行版）
 

@@ -1,0 +1,3 @@
+contrib/ucabled-gnome-agent/metadata.json usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me
+contrib/ucabled-gnome-agent/extension.js usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me
+contrib/ucabled-gnome-agent/qrcode.mjs usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me

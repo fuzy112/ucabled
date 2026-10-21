@@ -1,6 +1,8 @@
 ucabled (0.2.0~) UNRELEASED; urgency=medium
 
-  * Initial Debian packaging.
+  * Debian packaging, split into the daemon (ucabled), the default GTK4
+    session agent (ucable-agent) and the optional GNOME Shell agent
+    (ucabled-gnome-agent).
   * Ship the system daemon (ucabled), the per-user session agent
     (ucable-agent) and the GTK4 prompt helper (ucable-agent-helper)
     together with the systemd units, the udev rule, the D-Bus system

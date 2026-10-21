@@ -133,7 +133,9 @@ tools:
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
 dpkg-buildpackage -b -us -uc        # add -d to skip the build-dependency check
-sudo apt install ../ucabled_*.deb
+sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
+# On GNOME, the optional Shell extension is a third package:
+sudo apt install ../ucabled-gnome-agent_*.deb
 ```
 
 The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
@@ -144,13 +146,17 @@ rustup toolchain instead:
 debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 ```
 
-The package installs the daemon, both helpers, the systemd units, the udev
-rule, the D-Bus and polkit policies, the manual pages, the shell completions
-and the translations.  It creates the `ucabled` service account, starts the
-daemon, and enables the per-user session agent globally; log out and back in
-once so the agent registers.  The caBLE identity key lives in
-`/var/lib/ucabled/identity.key`, which `apt remove` keeps and `apt purge`
-deletes (phones then have to be paired again).
+The source package yields three binaries: `ucabled` (the system daemon, its
+systemd unit, the udev rule and the D-Bus/polkit policies), `ucable-agent`
+(the default GTK4 session agent and its helper) and `ucabled-gnome-agent`
+(the optional GNOME Shell extension).  `ucabled` recommends `ucable-agent`,
+so `apt install ucabled` gets the default agent as well.  The daemon's
+postinst reloads the D-Bus policy, polkit and the udev rule, then starts the
+daemon on a fresh install or restarts it on upgrade; the agent's postinst
+enables the user unit globally and reloads and restarts it in logged-in
+sessions.  The caBLE identity key lives in `/var/lib/ucabled/identity.key`,
+which `apt remove` keeps and `apt purge` deletes (phones then have to be
+paired again).
 
 ## Install (other distros)
 
