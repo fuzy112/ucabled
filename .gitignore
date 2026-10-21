@@ -2,6 +2,7 @@
 /result
 
 # Debian packaging build artifacts.
+/debian-build/
 /debian/.debhelper/
 /debian/*.debhelper
 /debian/*.debhelper.log

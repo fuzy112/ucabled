@@ -146,6 +146,10 @@ rustup toolchain instead:
 debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 ```
 
+On NixOS, `nix run .#deb` builds the same three packages in a rootless podman
+container and writes them to `debian-build/`, so the host needs none of the
+build dependencies above.  It only needs a working rootless podman setup.
+
 The source package yields three binaries: `ucabled` (the system daemon, its
 systemd unit, the udev rule and the D-Bus/polkit policies), `ucable-agent`
 (the default GTK4 session agent and its helper) and `ucabled-gnome-agent`
