@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.2.0-pre]
 
+### Added
+
+- New optional GNOME Shell extension `contrib/ucabled-gnome-agent`
+  (NixOS: `services.ucabled.gnomeAgent.enable`): the extension registers
+  as the session UI agent itself and shows the passkey QR prompt and the
+  device-selection question as shell modal dialogs, replacing the GTK
+  helper window on GNOME.
+
 ### Changed
 
 - Optimize performance.

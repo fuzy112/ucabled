@@ -63,3 +63,17 @@ On wlroots compositors (Sway, Hyprland) the bundled GTK4 helper can be
 presented as a layer-shell overlay by starting the agent with
 UCABLED_HELPER_LAYER_SHELL=1, or by passing --layer-shell to
 ucable-agent-helper.
+
+GNOME Shell agent
+-----------------
+
+The package also ships /usr/share/gnome-shell/extensions/
+ucabled-agent@fuzy.me, a Shell extension that registers as the session
+agent itself and shows prompts as shell modal dialogs.  Enable it per
+user and re-login:
+
+    gnome-extensions enable ucabled-agent@fuzy.me
+
+The daemon has a single agent slot, so disable the user service when the
+extension is in use (systemctl --user disable --now ucable-agent.service).
+Details and trade-offs: contrib/ucabled-gnome-agent/README.md upstream.

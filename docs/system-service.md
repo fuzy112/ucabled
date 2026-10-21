@@ -85,6 +85,11 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - agent 掉线（D-Bus 名消失）时，守护进程注销该 agent 并把在途事务按
   取消失败处理。
 
+> **替代实现**：`contrib/ucabled-gnome-agent` 是一个 GNOME Shell 扩展，它
+> 自己实现 `Agent1` 并注册为 agent（不经 `ucable-agent` 与 helper），把
+> 提示画成 shell 模态对话框。守护进程不区分两者——只认唯一名 + polkit
+> 复核；槽位唯一，二者只能取其一。
+
 ### 3.3 QR helper `ucable-agent-helper`
 
 - 默认：从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。

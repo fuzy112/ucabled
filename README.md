@@ -72,8 +72,11 @@ Add this repository to your flake and enable the module:
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
 
-  # optional: use an alternate UI helper
-  services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+  # optional: on GNOME, install the Shell extension that registers as the
+  # session agent itself and draws prompts as shell modal dialogs (then
+  # enable it per user: gnome-extensions enable ucabled-agent@fuzy.me);
+  # see contrib/ucabled-gnome-agent/README.md for the trade-offs
+  # services.ucabled.gnomeAgent.enable = true;
 
   # optional: extra helper arguments. The bundled GTK4 helper takes
   # --layer-shell, presenting the prompt as a wlr-layer-shell overlay on
@@ -235,6 +238,11 @@ Any contract-v1 helper can replace it: set `UCABLED_HELPER` (an absolute path
 or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
 flags go in `services.ucabled.helperExtraArgs` (for example
 `[ "--layer-shell" ]`).
+
+On GNOME there is also `contrib/ucabled-gnome-agent`, a Shell extension that
+registers as the session agent itself — no helper process — and draws the
+prompts as shell modal dialogs above the desktop.  See its README for the
+trade-offs (no non-GNOME fallback, single agent slot).
 
 ### SSH security keys
 

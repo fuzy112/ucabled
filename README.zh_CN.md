@@ -67,8 +67,11 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
 
-  # 可选：使用其他 UI helper
-  services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+  # 可选：在 GNOME 上安装 Shell 扩展，它自己注册为会话 agent，
+  # 把提示画成 shell 模态对话框（然后每个用户执行
+  # gnome-extensions enable ucabled-agent@fuzy.me）；
+  # 取舍见 contrib/ucabled-gnome-agent/README.md
+  # services.ucabled.gnomeAgent.enable = true;
 
   # 可选：额外的 helper 参数。内置 GTK4 helper 支持
   # --layer-shell，在 Sway、Hyprland 等 wlroots 合成器上
@@ -218,6 +221,10 @@ GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加
 任何符合 contract-v1 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
 或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
 参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
+
+在 GNOME 下还有 `contrib/ucabled-gnome-agent`：一个 Shell 扩展，它自己注册
+为会话 agent（不再有 helper 进程），把提示画成盖在桌面之上的 shell 模态
+对话框。取舍见它的 README（非 GNOME 会话没有兜底、agent 槽位唯一）。
 
 ### SSH 安全密钥
 
