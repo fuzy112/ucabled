@@ -17,6 +17,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   specification requires, instead of relying on L2CAP message
   boundaries.
 
+## [0.1.6] - 2026-10-21
+
+### Security
+
+- Update the tunnel's certificate verifier to `rustls-webpki` 0.103.16,
+  which could previously accept distrusted intermediates
+  (RUSTSEC-2026-0382), and the bundled Mozilla root store to
+  `webpki-roots` 1.0.10, which carried the distrusted emSign
+  intermediates (RUSTSEC-2026-0381).
+
 ## [0.1.5] - 2026-10-20
 
 ### Added
@@ -105,7 +115,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
-[0.2.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.1.5...HEAD
+[0.2.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/fuzy112/ucabled/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/fuzy112/ucabled/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/fuzy112/ucabled/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/fuzy112/ucabled/compare/v0.1.2...v0.1.3
