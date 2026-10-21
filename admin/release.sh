@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Cut a release: promote the -pre version in Cargo.toml and the changelog,
+# Cut a release: promote the -pre version in Cargo.toml and the changelogs,
 # commit, and create a signed tag.  Then merge master into next and open the
 # next -pre version there, so development resumes without a manual step.
 # master stays at the released version so an urgent patch can be committed
@@ -54,13 +54,31 @@ if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
     die "tag v$version already exists"
 fi
 current_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+
+# debian/changelog is the dpkg version source: its top entry must name the
+# version being released.  The package is native (3.0), so that version is
+# the plain upstream version with neither a Debian revision nor the -pre
+# suffix (a hyphen would be parsed as one).  Development drafts the entry
+# as X.Y.Z~ with distribution UNRELEASED — the trailing tilde sorts before
+# X.Y.Z, so installed development builds upgrade cleanly to the release.
+# A normal release finalizes the entry below; a hotfix must commit it
+# finalized.
+deb_head=$(head -n1 debian/changelog)
+deb_ver=$(printf '%s\n' "$deb_head" | sed -n 's/^[[:alnum:].+-]\+ (\([^()]*\)) \([^;]*\);.*/\1/p')
+deb_dist=$(printf '%s\n' "$deb_head" | sed -n 's/^[[:alnum:].+-]\+ (\([^()]*\)) \([^;]*\);.*/\2/p')
+[ -n "$deb_ver" ] || die "cannot parse the top debian/changelog entry: $deb_head"
+
 if [ "$current_version" = "$dev_version" ]; then
     grep -q "^## \[$dev_version\]$" CHANGELOG.md \
         || die "CHANGELOG.md has no [$dev_version] section"
+    [ "$deb_ver" = "$version~" ] && [ "$deb_dist" = UNRELEASED ] \
+        || die "debian/changelog top entry must read 'ucabled ($version~) UNRELEASED', got: $deb_head"
     mode=pre
 elif [ "$current_version" = "$version" ]; then
     grep -q "^## \[$version\] - [0-9]" CHANGELOG.md \
         || die "CHANGELOG.md has no '## [$version] - <date>' section"
+    [ "$deb_ver" = "$version" ] && [ "$deb_dist" != UNRELEASED ] \
+        || die "debian/changelog top entry must read 'ucabled ($version) <dist>' with a real distribution, got: $deb_head"
     mode=hotfix
 else
     die "Cargo.toml is at $current_version; prepare $dev_version on next, or commit the final $version directly on master for a patch release"
@@ -135,6 +153,15 @@ if [ "$mode" = pre ]; then
     else
         sed -i "s|^\[$dev_version\]: .*|[$version]: https://github.com/fuzy112/ucabled/releases/tag/v$version|" CHANGELOG.md
     fi
+
+    # Finalize the debian/changelog entry drafted on next: drop the
+    # pre-release tilde from the version, flip the distribution and restamp
+    # the trailer date.  The entry body stays minimal; CHANGELOG.md is the
+    # human-readable history and ships in the package via debian/ucabled.docs.
+    sed -i "1s/^ucabled ($version~) UNRELEASED;/ucabled ($version) unstable;/" debian/changelog
+    deb_maintainer=$(sed -n 's/^ -- \(.\+\)  [A-Z][a-z][a-z], .*/\1/p' debian/changelog | head -n1)
+    [ -n "$deb_maintainer" ] || die "debian/changelog has no trailer line to restamp"
+    sed -i "0,/^ -- /s|^ -- .*| -- $deb_maintainer  $(date -R)|" debian/changelog
 fi
 
 # Refresh the lockfile's ucabled version entry, then the checks that must pass
@@ -216,10 +243,22 @@ if [ "$mode" = pre ]; then
     sed -i "0,/^## \[$version\] - $today$/s//## [$next_dev_version]\n\n&/" "$next_wt/CHANGELOG.md"
     sed -i "0,/^\[$version\]:/s//[$next_dev_version]: https:\/\/github.com\/fuzy112\/ucabled\/compare\/v$version...HEAD\n&/" "$next_wt/CHANGELOG.md"
 
+    # Open the matching debian/changelog development entry on next: the
+    # trailing tilde keeps installed development builds below the release.
+    deb_next_ver="${next_dev_version%-pre}~"
+    {
+        printf 'ucabled (%s) UNRELEASED; urgency=medium\n\n' "$deb_next_ver"
+        printf '  * See CHANGELOG.md for the changes in this release.\n\n'
+        printf ' -- %s  %s\n\n' "$deb_maintainer" "$(date -R)"
+        cat "$next_wt/debian/changelog"
+    } > "$next_wt/debian/changelog.new"
+    mv "$next_wt/debian/changelog.new" "$next_wt/debian/changelog"
+
     lock_version=$(awk '/^name = "ucabled"$/{getline; print; exit}' "$next_wt/Cargo.lock")
     if ! grep -q "^version = \"$next_dev_version\"$" "$next_wt/Cargo.toml" ||
         [ "$lock_version" != "version = \"$next_dev_version\"" ] ||
-        ! grep -q "^## \[$next_dev_version\]$" "$next_wt/CHANGELOG.md"; then
+        ! grep -q "^## \[$next_dev_version\]$" "$next_wt/CHANGELOG.md" ||
+        ! head -n1 "$next_wt/debian/changelog" | grep -q "^ucabled ($deb_next_ver) UNRELEASED;"; then
         undo_next
         die "could not bump next to $next_dev_version; next was left unchanged"
     fi
@@ -253,12 +292,14 @@ fi
 if [ "$mode" = pre ]; then
     version_summary="  - Bumped Cargo.toml and Cargo.lock to $version."
     changelog_summary="  - Stamped CHANGELOG.md with the [$version] - $today section."
+    debian_summary="  - Finalized debian/changelog ($version, unstable)."
     tag_summary="  - Committed \"Release $version\" on master and signed tag v$version."
     next_summary="  - Merged master into next and opened $next_dev_version there."
     push_refs="refs/heads/master refs/heads/next refs/heads/website"
 else
     version_summary="  - Left Cargo.toml and Cargo.lock at $version."
     changelog_summary="  - Used the changelog section already committed on master."
+    debian_summary="  - Used the debian/changelog entry already committed on master."
     tag_summary="  - Signed tag v$version on the direct release commit."
     next_summary="  - Left next untouched; merge master into it by hand."
     push_refs="refs/heads/master refs/heads/website"
@@ -270,6 +311,7 @@ Release $version is ready:
 
 $version_summary
 $changelog_summary
+$debian_summary
 $tag_summary
 $next_summary
   - Left master at $version.

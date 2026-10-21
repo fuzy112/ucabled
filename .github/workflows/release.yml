@@ -1,7 +1,7 @@
 name: Release
 
 # A pushed v* tag (created signed, by admin/release.sh) publishes the
-# GitHub release.  The job re-verifies that tag, manifest and changelog
+# GitHub release.  The job re-verifies that tag, manifest and changelogs
 # agree and that the tag carries a valid signature before publishing.
 # No binary tarballs: nix-built binaries link against /nix/store and are
 # not portable to other distributions, so the release carries the
@@ -31,6 +31,10 @@ jobs:
           || { echo "Cargo.toml version does not match $TAG"; exit 1; }
         grep -q "^## \[$version\] - [0-9]" CHANGELOG.md \
           || { echo "CHANGELOG.md has no '## [$version] - <date>' section"; exit 1; }
+        head -n1 debian/changelog | grep -q "^ucabled ($version) " \
+          || { echo "debian/changelog top entry does not match $TAG"; exit 1; }
+        ! head -n1 debian/changelog | grep -q UNRELEASED \
+          || { echo "debian/changelog top entry is still UNRELEASED"; exit 1; }
         [ "$(git cat-file -t "$TAG")" = tag ] \
           || { echo "$TAG is a lightweight tag; create it with git tag -s"; exit 1; }
 
