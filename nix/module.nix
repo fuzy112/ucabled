@@ -72,7 +72,7 @@ in
     gnomeAgent = {
       enable = lib.mkEnableOption ''
         the GNOME Shell agent extension, installed system-wide. Each user
-        still has to run `gnome-extensions enable ucabled-agent@fuzy.me`.
+        still has to run `gnome-extensions enable ucable-gnome-agent@fuzy.me`.
         The extension registers as *the* session agent itself, replacing
         the ucable-agent user service on the daemon's single agent slot;
         on GNOME-only machines disable the service (`systemd.user.services.
@@ -140,7 +140,7 @@ in
     environment.systemPackages =
       [ polkitAction ]
       ++ lib.optional cfg.gnomeAgent.enable
-        self.packages.${pkgs.stdenv.hostPlatform.system}.ucabled-gnome-agent;
+        self.packages.${pkgs.stdenv.hostPlatform.system}.ucable-gnome-agent;
 
     # BlueZ needs no polkit rule: it registers no polkit actions, and the
     # D-Bus policy above already grants the daemon access to org.bluez.

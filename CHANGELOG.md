@@ -8,7 +8,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- New optional GNOME Shell extension `contrib/ucabled-gnome-agent`
+- New optional GNOME Shell extension `contrib/ucable-gnome-agent`
   (NixOS: `services.ucabled.gnomeAgent.enable`): the extension registers
   as the session UI agent itself and shows the passkey QR prompt and the
   device-selection question as shell modal dialogs, replacing the GTK
@@ -19,7 +19,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Optimize performance.
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into
   `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
-  `ucabled-gnome-agent` (GNOME Shell extension).  Upgrades pull the
+  `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
   default agent in through a recommendation; the maintainer scripts
   reload the bus, polkit and udev policy and restart the daemon and the
   logged-in session agents.

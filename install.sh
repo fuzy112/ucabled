@@ -136,7 +136,7 @@ if ((UNINSTALL)); then
         "$PREFIX/share/zsh/site-functions/_ucable-agent-helper"
     rm -f "$PREFIX/share/fish/vendor_completions.d/ucabled.fish" \
         "$PREFIX/share/fish/vendor_completions.d/ucable-agent-helper.fish"
-    rm -rf "$PREFIX/share/gnome-shell/extensions/ucabled-agent@fuzy.me"
+    rm -rf "$PREFIX/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me"
 
     systemctl daemon-reload || true
     systemctl reload dbus 2>/dev/null || true
@@ -238,10 +238,10 @@ install -m 0644 -o root -g root "$DIST/org.ucabled.policy" \
     "$POLKIT_ACTIONS_DIR/org.ucabled.policy"
 
 # GNOME Shell agent extension. Present-but-disabled is inert; each user
-# opts in with `gnome-extensions enable ucabled-agent@fuzy.me`.
-GNOME_EXT_SRC="$ROOT/contrib/ucabled-gnome-agent"
+# opts in with `gnome-extensions enable ucable-gnome-agent@fuzy.me`.
+GNOME_EXT_SRC="$ROOT/contrib/ucable-gnome-agent"
 if [[ -d "$GNOME_EXT_SRC" ]]; then
-    GNOME_EXT_DIR="$PREFIX/share/gnome-shell/extensions/ucabled-agent@fuzy.me"
+    GNOME_EXT_DIR="$PREFIX/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me"
     install -d -m 0755 "$GNOME_EXT_DIR"
     for f in metadata.json extension.js qrcode.mjs; do
         install -m 0644 -o root -g root "$GNOME_EXT_SRC/$f" "$GNOME_EXT_DIR/$f"

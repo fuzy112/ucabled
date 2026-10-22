@@ -12,10 +12,10 @@ The source package builds three binary packages:
     ucable-agent          the default per-user session agent,
                           ucable-agent.service and the GTK4 prompt
                           helper ucable-agent-helper
-    ucabled-gnome-agent   the optional GNOME Shell agent extension
+    ucable-gnome-agent    the optional GNOME Shell agent extension
 
 ucabled Recommends ucable-agent, so a normal "apt install ucabled" gets
-the default agent as well.  ucable-agent and ucabled-gnome-agent both
+the default agent as well.  ucable-agent and ucable-gnome-agent both
 need the daemon and register for its single agent slot, so enable only
 one of them per user.
 
@@ -37,7 +37,7 @@ development snapshots and below the 0.2.0 release.  A release tarball has no
 
 On GNOME, install the extension package too:
 
-    sudo apt install ../ucabled-gnome-agent_*.deb
+    sudo apt install ../ucable-gnome-agent_*.deb
 
 The build needs cargo 1.92 or newer, because the gtk4 0.11 bindings
 require it.  Debian trixie and Ubuntu 24.04 ship older toolchains; build
@@ -64,12 +64,12 @@ on a fresh install or restarts it on an upgrade.
 ucable-agent.service is enabled for all users by debhelper; the agent's
 postinst reloads and restarts it in every logged-in session, and a fresh
 install also starts it for graphical sessions that are already up, unless
-ucabled-gnome-agent is installed.
+ucable-gnome-agent is installed.
 
 Earlier versions shipped the daemon, the session agent and the GNOME
 extension in a single ucabled package.  On upgrade apt installs
 ucable-agent automatically through the daemon's Recommends; the GNOME
-extension moved to ucabled-gnome-agent, so install that package as well
+extension moved to ucable-gnome-agent, so install that package as well
 if you used the extension.
 
 Neither maintainer script restarts anything when systemd is not running
@@ -129,12 +129,12 @@ ucable-agent-helper.
 GNOME Shell agent
 -----------------
 
-ucabled-gnome-agent ships /usr/share/gnome-shell/extensions/
-ucabled-agent@fuzy.me, a Shell extension that registers as the session
+ucable-gnome-agent ships /usr/share/gnome-shell/extensions/
+ucable-gnome-agent@fuzy.me, a Shell extension that registers as the session
 agent itself and shows prompts as shell modal dialogs.  It is installed
 system-wide but stays disabled; enable it per user and re-login:
 
-    gnome-extensions enable ucabled-agent@fuzy.me
+    gnome-extensions enable ucable-gnome-agent@fuzy.me
 
 The daemon has a single agent slot, so disable the user service when the
 extension is in use:
@@ -142,5 +142,5 @@ extension is in use:
     systemctl --user disable --now ucable-agent.service
 
 Removing the ucable-agent package is the cleaner way to make the choice
-permanent.  Details and trade-offs: contrib/ucabled-gnome-agent/README.md
+permanent.  Details and trade-offs: contrib/ucable-gnome-agent/README.md
 upstream.

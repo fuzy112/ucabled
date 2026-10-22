@@ -69,8 +69,8 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 
   # 可选：在 GNOME 上安装 Shell 扩展，它自己注册为会话 agent，
   # 把提示画成 shell 模态对话框（然后每个用户执行
-  # gnome-extensions enable ucabled-agent@fuzy.me）；
-  # 取舍见 contrib/ucabled-gnome-agent/README.md
+  # gnome-extensions enable ucable-gnome-agent@fuzy.me）；
+  # 取舍见 contrib/ucable-gnome-agent/README.md
   # services.ucabled.gnomeAgent.enable = true;
 
   # 可选：额外的 helper 参数。内置 GTK4 helper 支持
@@ -130,7 +130,7 @@ dpkg-buildpackage -b -us -uc \
     --hook-done=debian/dev-version.sh
 sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 # 在 GNOME 上，可选的 Shell 扩展是第三个包：
-sudo apt install ../ucabled-gnome-agent_*.deb
+sudo apt install ../ucable-gnome-agent_*.deb
 ```
 
 从 Git 检出构建、但当前提交不是干净的发布标签时，属于开发构建：上面两个
@@ -160,7 +160,7 @@ rootless podman 可用。默认构建两个受支持的发行版，也可只构�
 
 源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
 以及 D-Bus/polkit 策略）、`ucable-agent`（默认的 GTK4 会话代理及其 helper）
-和 `ucabled-gnome-agent`（可选的 GNOME Shell 扩展）。`ucabled` 推荐
+和 `ucable-gnome-agent`（可选的 GNOME Shell 扩展）。`ucabled` 推荐
 `ucable-agent`，所以 `apt install ucabled` 会一并装上默认代理。守护进程的
 postinst 会重载 D-Bus 策略、polkit 与 udev 规则，然后在新装时启动、升级时
 重启守护进程；代理的 postinst 会全局启用用户单元，并在已登录会话中重载和
@@ -248,7 +248,7 @@ GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加
 或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
 参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
 
-在 GNOME 下还有 `contrib/ucabled-gnome-agent`：一个 Shell 扩展，它自己注册
+在 GNOME 下还有 `contrib/ucable-gnome-agent`：一个 Shell 扩展，它自己注册
 为会话 agent（不再有 helper 进程），把提示画成盖在桌面之上的 shell 模态
 对话框。取舍见它的 README（非 GNOME 会话没有兜底、agent 槽位唯一）。
 

@@ -15,7 +15,7 @@
     {
       packages = forAllSystems (pkgs: {
         ucabled = pkgs.callPackage ./nix/package.nix { };
-        ucabled-gnome-agent = pkgs.callPackage ./nix/gnome-agent.nix { };
+        ucable-gnome-agent = pkgs.callPackage ./nix/gnome-agent.nix { };
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.ucabled;
       });
       # `nix run .#deb` builds the Debian packages in rootless podman
@@ -30,7 +30,7 @@
       });
       overlays.ucabled = final: _prev: {
         ucabled = final.callPackage ./nix/package.nix { };
-        ucabled-gnome-agent = final.callPackage ./nix/gnome-agent.nix { };
+        ucable-gnome-agent = final.callPackage ./nix/gnome-agent.nix { };
       };
       overlays.default = self.overlays.ucabled;
       nixosModules.ucabled = import ./nix/module.nix { inherit self; };

@@ -45,16 +45,16 @@ services.ucabled.gnomeAgent.enable = true;   # installs the extension system-wid
 then, per user, enable it and re-login (Wayland cannot reload the shell):
 
 ```console
-$ gnome-extensions enable ucabled-agent@fuzy.me
+$ gnome-extensions enable ucable-gnome-agent@fuzy.me
 ```
 
 ### Manual
 
 ```console
-$ mkdir -p ~/.local/share/gnome-shell/extensions/ucabled-agent@fuzy.me
+$ mkdir -p ~/.local/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me
 $ cp metadata.json extension.js qrcode.mjs \
-    ~/.local/share/gnome-shell/extensions/ucabled-agent@fuzy.me/
-$ gnome-extensions enable ucabled-agent@fuzy.me
+    ~/.local/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/
+$ gnome-extensions enable ucable-gnome-agent@fuzy.me
 ```
 
 Log out and back in (Wayland) or restart the shell (X11: Alt+F2, `r`).

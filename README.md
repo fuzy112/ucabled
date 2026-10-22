@@ -74,8 +74,8 @@ Add this repository to your flake and enable the module:
 
   # optional: on GNOME, install the Shell extension that registers as the
   # session agent itself and draws prompts as shell modal dialogs (then
-  # enable it per user: gnome-extensions enable ucabled-agent@fuzy.me);
-  # see contrib/ucabled-gnome-agent/README.md for the trade-offs
+  # enable it per user: gnome-extensions enable ucable-gnome-agent@fuzy.me);
+  # see contrib/ucable-gnome-agent/README.md for the trade-offs
   # services.ucabled.gnomeAgent.enable = true;
 
   # optional: extra helper arguments. The bundled GTK4 helper takes
@@ -138,7 +138,7 @@ dpkg-buildpackage -b -us -uc \
     --hook-done=debian/dev-version.sh
 sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 # On GNOME, the optional Shell extension is a third package:
-sudo apt install ../ucabled-gnome-agent_*.deb
+sudo apt install ../ucable-gnome-agent_*.deb
 ```
 
 A build from a Git checkout that is not a clean release tag is a development
@@ -172,7 +172,7 @@ UID/GID configuration is needed; the output is chowned back to the caller.
 
 The source package yields three binaries: `ucabled` (the system daemon, its
 systemd unit, the udev rule and the D-Bus/polkit policies), `ucable-agent`
-(the default GTK4 session agent and its helper) and `ucabled-gnome-agent`
+(the default GTK4 session agent and its helper) and `ucable-gnome-agent`
 (the optional GNOME Shell extension).  `ucabled` recommends `ucable-agent`,
 so `apt install ucabled` gets the default agent as well.  The daemon's
 postinst reloads the D-Bus policy, polkit and the udev rule, then starts the
@@ -268,7 +268,7 @@ or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
 flags go in `services.ucabled.helperExtraArgs` (for example
 `[ "--layer-shell" ]`).
 
-On GNOME there is also `contrib/ucabled-gnome-agent`, a Shell extension that
+On GNOME there is also `contrib/ucable-gnome-agent`, a Shell extension that
 registers as the session agent itself — no helper process — and draws the
 prompts as shell modal dialogs above the desktop.  See its README for the
 trade-offs (no non-GNOME fallback, single agent slot).

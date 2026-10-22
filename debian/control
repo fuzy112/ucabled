@@ -25,7 +25,7 @@ Depends: ${shlibs:Depends},
          polkitd | policykit-1,
          systemd
 Recommends: ucable-agent
-Suggests: ucabled-gnome-agent
+Suggests: ucable-gnome-agent
 Description: virtual FIDO2 key that relays passkeys to a phone
  ucabled registers a virtual USB HID FIDO2 device with the kernel
  (/dev/uhid) and relays WebAuthn registration and authentication
@@ -40,7 +40,7 @@ Description: virtual FIDO2 key that relays passkeys to a phone
  .
  This package contains the system daemon, the udev rule, the D-Bus and
  polkit policies and the systemd unit.  Install ucable-agent (the default
- GTK4 session agent) or ucabled-gnome-agent (a GNOME Shell extension) to
+ GTK4 session agent) or ucable-gnome-agent (a GNOME Shell extension) to
  show the prompts; the daemon cannot complete a ceremony without one.
 
 Package: ucable-agent
@@ -56,10 +56,10 @@ Description: per-user session agent for ucabled
  ucable-agent-helper, a GTK4 window that shows the passkey QR code and
  the device-selection question.
  .
- This is the default session agent.  ucabled-gnome-agent can replace it
+ This is the default session agent.  ucable-gnome-agent can replace it
  on GNOME; the daemon has a single agent slot, so enable only one.
 
-Package: ucabled-gnome-agent
+Package: ucable-gnome-agent
 Architecture: all
 Depends: ${misc:Depends},
          ucabled (= ${binary:Version})
@@ -75,4 +75,4 @@ Description: GNOME Shell agent extension for ucabled
  It replaces ucable-agent, the default session agent.  The daemon has a
  single agent slot, so disable ucable-agent.service when using it.  The
  extension is installed system-wide but stays disabled until each user
- runs "gnome-extensions enable ucabled-agent@fuzy.me".
+ runs "gnome-extensions enable ucable-gnome-agent@fuzy.me".

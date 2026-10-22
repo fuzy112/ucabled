@@ -22,7 +22,7 @@ configure)
 	# so the new binary takes effect without a re-login.
 	start_now=
 	if [ -z "$2" ] &&
-		! dpkg-query -W -f='${Status}' ucabled-gnome-agent 2>/dev/null |
+		! dpkg-query -W -f='${Status}' ucable-gnome-agent 2>/dev/null |
 			grep -q ' install ok installed$'; then
 		start_now=1
 	fi

@@ -19,7 +19,7 @@ License: GPL-3+
  On Debian systems, the complete text of the GNU General Public License
  version 3 can be found in /usr/share/common-licenses/GPL-3.
 
-Files: contrib/ucabled-gnome-agent/qrcode.mjs
+Files: contrib/ucable-gnome-agent/qrcode.mjs
 Copyright: 2009 Kazuhiko Arase
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a

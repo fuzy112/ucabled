@@ -1,5 +1,5 @@
 {
-  "uuid": "ucabled-agent@fuzy.me",
+  "uuid": "ucable-gnome-agent@fuzy.me",
   "name": "ucabled passkey agent",
   "description": "Registers with the ucabled system daemon and shows passkey prompts (QR code, device selection) as GNOME Shell dialogs",
   "shell-version": [

@@ -9,7 +9,7 @@ if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
 The GNOME Shell agent is installed but stays disabled.  Enable it per
 user, then log out and back in (Wayland cannot reload the shell):
 
-    gnome-extensions enable ucabled-agent@fuzy.me
+    gnome-extensions enable ucable-gnome-agent@fuzy.me
 
 It replaces ucable-agent, the default session agent.  If both are
 installed, disable the service so they do not compete for the daemon's

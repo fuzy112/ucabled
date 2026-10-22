@@ -45,7 +45,7 @@ for file in \
 	/usr/share/man/man1/ucabled.1.gz \
 	/usr/share/man/man1/ucable-agent.1.gz \
 	/usr/share/man/man1/ucable-agent-helper.1.gz \
-	/usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me/metadata.json
+	/usr/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/metadata.json
 do
 	[ -e "$file" ] || fail "$file is missing"
 done
@@ -68,8 +68,8 @@ check_owner ucabled /usr/share/polkit-1/actions/org.ucabled.policy
 check_owner ucable-agent /usr/bin/ucable-agent
 check_owner ucable-agent /usr/bin/ucable-agent-helper
 check_owner ucable-agent /usr/lib/systemd/user/ucable-agent.service
-check_owner ucabled-gnome-agent \
-	/usr/share/gnome-shell/extensions/ucabled-agent@fuzy.me/metadata.json
+check_owner ucable-gnome-agent \
+	/usr/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/metadata.json
 
 # The daemon package no longer carries the session agents.
 if dpkg -S /usr/bin/ucable-agent 2>/dev/null | grep -q '^ucabled:'; then
