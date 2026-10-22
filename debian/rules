@@ -117,10 +117,13 @@ override_dh_auto_install:
 override_dh_installsystemd:
 	dh_installsystemd --no-start --no-stop-on-upgrade
 
-# Announce the package split once, in ucabled's NEWS.  The agent packages are
-# always installed alongside it (Depends/Recommends) and would otherwise carry
-# an identical copy of the same note.
+# CHANGELOG.md is upstream history and dh_installdocs already installs it.
+# Left visible, dh_installchangelogs mistakes it for the package's own
+# changelog and renames it over the native changelog, hiding debian/changelog
+# from /usr/share/doc/ucabled.  Announce the package split once, in ucabled's
+# NEWS: the agent packages are always installed alongside it
+# (Depends/Recommends) and would otherwise carry an identical copy.
 override_dh_installchangelogs:
-	dh_installchangelogs
+	dh_installchangelogs -X CHANGELOG.md
 	rm -f debian/ucable-agent/usr/share/doc/ucable-agent/NEWS.Debian* \
 		debian/ucable-gnome-agent/usr/share/doc/ucable-gnome-agent/NEWS.Debian*
