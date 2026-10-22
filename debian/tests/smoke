@@ -17,13 +17,20 @@ fail() {
 }
 
 version=$(dpkg-query -W -f='${Version}' ucabled)
-expected=${version%%-*}
+base=${version%%[~-]*}
+# A development package is X.Y.Z~YYYYMMDD.gHASH and may come from the next
+# branch (Cargo reports X.Y.Z-pre) or from a dirty release checkout (X.Y.Z).
+# A release package is X.Y.Z and must match the Cargo version alone.
+case $version in
+*~*) also="$base-pre" ;;
+*) also=$base ;;
+esac
 
 # The binaries run, and the version they report matches the package.
 for bin in ucabled ucable-agent ucable-agent-helper; do
 	actual=$("$bin" --version) || fail "$bin --version failed"
-	[ "$actual" = "$bin $expected" ] ||
-		fail "$bin reports '$actual', expected '$bin $expected'"
+	[ "$actual" = "$bin $base" ] || [ "$actual" = "$bin $also" ] ||
+		fail "$bin reports '$actual', expected '$bin $base' or '$bin $also'"
 done
 
 # Everything the daemon, the agent and the session manager read at runtime.

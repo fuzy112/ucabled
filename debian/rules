@@ -24,7 +24,9 @@ export UCABLED_LOCALEDIR = /usr/share/locale
 
 # Override to build with a different toolchain, for example one installed
 # by rustup when the distribution's rustc is older than Cargo.toml's MSRV:
-#   dpkg-buildpackage -b -us -uc -d -- CARGO=...   (or debian/rules binary CARGO=...)
+#   dpkg-buildpackage -b -us -uc -d \
+#       --rules-file="debian/rules CARGO=..."
+# The dev-version hooks are documented in README.Debian.
 CARGO ?= cargo
 
 # Three binary packages: the daemon, the default GTK4 session agent and the

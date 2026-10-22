@@ -9,5 +9,6 @@
 /debian/debhelper-build-stamp
 /debian/files
 /debian/*.substvars
+/debian/changelog.ucabled-dev
 /debian/ucabled/
 /debian/tmp/

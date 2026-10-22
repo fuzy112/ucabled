@@ -132,18 +132,32 @@ tools:
 ```bash
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
-dpkg-buildpackage -b -us -uc        # add -d to skip the build-dependency check
+# add -d to skip the build-dependency check
+dpkg-buildpackage -b -us -uc \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 # On GNOME, the optional Shell extension is a third package:
 sudo apt install ../ucabled-gnome-agent_*.deb
 ```
+
+A build from a Git checkout that is not a clean release tag is a development
+build: the hooks append the committer date and short hash of HEAD to the
+version, for example `0.2.0~20261022.gaf437b0`, which sorts above earlier
+development snapshots and below the `0.2.0` release.  A release tarball has no
+`.git`, so its version stays as packaged.  `nix run .#deb` applies the same
+suffix automatically.
 
 The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
 Where the distribution is older (Debian trixie, Ubuntu 24.04), build with a
 rustup toolchain instead:
 
 ```bash
-debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+# -d: the distribution's cargo/rustc are older than the Build-Depends
+dpkg-buildpackage -b -us -uc -d \
+    --rules-file="debian/rules CARGO=$HOME/.cargo/bin/cargo" \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 ```
 
 On NixOS, `nix run .#deb` builds the same three packages in rootless podman

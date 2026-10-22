@@ -124,17 +124,30 @@ nix.settings = {
 ```bash
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
-dpkg-buildpackage -b -us -uc        # 加 -d 可跳过构建依赖检查
+# 加 -d 可跳过构建依赖检查
+dpkg-buildpackage -b -us -uc \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 # 在 GNOME 上，可选的 Shell 扩展是第三个包：
 sudo apt install ../ucabled-gnome-agent_*.deb
 ```
 
+从 Git 检出构建、但当前提交不是干净的发布标签时，属于开发构建：上面两个
+hook 会把 HEAD 的提交日期和短哈希加到版本号里，例如
+`0.2.0~20261022.gaf437b0`；它排在更早的开发快照之后、`0.2.0` 正式版之前。
+发布 tarball 没有 `.git`，版本号保持打包时的原样。`nix run .#deb` 会自动
+加上同样的后缀。
+
 构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
 工具链更旧（Debian trixie、Ubuntu 24.04），改用 rustup 安装的工具链：
 
 ```bash
-debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+# -d：发行版的 cargo/rustc 低于 Build-Depends 要求
+dpkg-buildpackage -b -us -uc -d \
+    --rules-file="debian/rules CARGO=$HOME/.cargo/bin/cargo" \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 ```
 
 在 NixOS 上，`nix run .#deb` 会在 rootless podman 容器里构建同样的三个包，

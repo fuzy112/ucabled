@@ -17,6 +17,7 @@ pkgs.writeShellApplication {
   name = "ucabled-deb";
   runtimeInputs = with pkgs; [
     coreutils
+    gawk
     git
     gnugrep
     gnused
@@ -30,7 +31,9 @@ pkgs.writeShellApplication {
     Build the three Debian packages in podman containers, one image per
     distribution.  Each DISTRO is debian13 or ubuntu26.04 ("all" means
     both); with no argument both are built.  Artifacts land in
-    <out>/<distro>/.
+    <out>/<distro>/.  A development build (a dirty tree, or a checkout
+    that is not a clean release tag) gets the commit date and short hash
+    in its version; a release tarball does not.
 
     It runs rootless by default; with sudo it uses a rootful build.  The
     container images are built on first use and cached by podman.  The
@@ -128,6 +131,12 @@ pkgs.writeShellApplication {
         podman --root "$podman_root" --runroot "$podman_runroot" "$@"
     }
 
+    # A release tarball has no .git, and a clean checkout at a release tag
+    # is a release build; both keep the changelog version.  Every other
+    # tree gets the commit date and short hash, computed here because the
+    # container's copy of the tree has no .git.
+    dev_version=$(cd "$repo" && debian/dev-version.sh --print)
+
     mkdir -p "$out"
 
     for distro in "''${distros[@]}"; do
@@ -163,6 +172,7 @@ pkgs.writeShellApplication {
         -e CARGO=/usr/local/cargo/bin/cargo \
         -e CARGO_HOME=/cache/cargo \
         -e CARGO_TERM_COLOR=never \
+        -e "UCABLED_DEV_VERSION=$dev_version" \
         -w /src \
         "$image" \
         bash -c '
@@ -184,6 +194,9 @@ pkgs.writeShellApplication {
           cd /tmp/ucabled-deb
           debian/rules clean
           ln -s /cache/target target
+          # dpkg-buildpackage reads the version before debian/rules runs;
+          # the suffix was computed on the host, where .git still exists.
+          debian/dev-version.sh
 
           # -nc: the clean above ran before the target symlink was installed.
           # -d: cargo and rustc come from the toolchain in the image, not
