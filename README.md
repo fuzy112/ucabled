@@ -165,8 +165,7 @@ postinst reloads the D-Bus policy, polkit and the udev rule, then starts the
 daemon on a fresh install or restarts it on upgrade; the agent's postinst
 enables the user unit globally and reloads and restarts it in logged-in
 sessions.  The caBLE identity key lives in `/var/lib/ucabled/identity.key`,
-which `apt remove` keeps and `apt purge` deletes (phones then have to be
-paired again).
+which `apt remove` keeps and `apt purge` deletes.
 
 ## Install (other distros)
 

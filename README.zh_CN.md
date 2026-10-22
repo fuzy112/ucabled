@@ -152,7 +152,7 @@ rootless podman 可用。默认构建两个受支持的发行版，也可只构�
 postinst 会重载 D-Bus 策略、polkit 与 udev 规则，然后在新装时启动、升级时
 重启守护进程；代理的 postinst 会全局启用用户单元，并在已登录会话中重载和
 重启它。caBLE 身份密钥位于 `/var/lib/ucabled/identity.key`：`apt remove`
-会保留，`apt purge` 会删除（之后手机需要重新配对）。
+会保留，`apt purge` 会删除。
 
 ## 安装（其他发行版）
 

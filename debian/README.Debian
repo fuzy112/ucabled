@@ -89,13 +89,13 @@ the token, for example with
 
 which grants the app access to every device node on the host.
 
-Pairing identity
-----------------
+Identity key
+------------
 
-Phones remember this machine by the caBLE identity key in
-/var/lib/ucabled/identity.key (created through systemd's StateDirectory=).
-Removing the ucabled package keeps it; purging deletes it, and phones then
-have to be paired again after a reinstall.
+The daemon keeps a persistent caBLE identity key in
+/var/lib/ucabled/identity.key (created through systemd's StateDirectory=),
+reserved for future linking support.  Removing the ucabled package keeps
+it; purging deletes it.
 
 Session agent
 -------------
