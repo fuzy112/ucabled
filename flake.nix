@@ -18,8 +18,10 @@
         ucabled-gnome-agent = pkgs.callPackage ./nix/gnome-agent.nix { };
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.ucabled;
       });
-      # `nix run .#deb` builds the Debian packages in a rootless podman
-      # container, so the host needs no Debian build dependencies.
+      # `nix run .#deb` builds the Debian packages in rootless podman
+      # containers (one per distribution), so the host needs no Debian
+      # build dependencies.  admin/release-debs.sh signs and uploads the
+      # result at release time.
       apps = forAllSystems (pkgs: {
         deb = {
           type = "app";

@@ -25,32 +25,49 @@ pkgs.writeShellApplication {
   text = ''
     usage() {
       cat <<'EOF'
-    Usage: nix run .#deb [-- --help]
+    Usage: nix run .#deb [-- [--help] [DISTRO ...]]
 
-    Build the three Debian packages in a podman container.  It runs
-    rootless by default; with sudo it uses a rootful build.  The container
-    image is built on first use and cached by podman; the cargo registry
-    and target directory are kept in named volumes.
+    Build the three Debian packages in podman containers, one image per
+    distribution.  Each DISTRO is debian13 or ubuntu26.04 ("all" means
+    both); with no argument both are built.  Artifacts land in
+    <out>/<distro>/.
+
+    It runs rootless by default; with sudo it uses a rootful build.  The
+    container images are built on first use and cached by podman.  The
+    cargo registry is kept in a shared named volume; the target directory
+    is per distribution, because objects linked against one
+    distribution's glibc must not be reused for another.
 
     Environment:
       UCABLED_DEB_OUT    output directory (default: <repo>/debian-build)
-      UCABLED_DEB_IMAGE  container image tag
+      UCABLED_DEB_IMAGE  container image name (default:
+                         localhost/ucabled-deb-builder)
     EOF
     }
 
-    case "''${1:-}" in
-      -h | --help)
-        usage
-        exit 0
-        ;;
-      "")
-        ;;
-      *)
-        echo "ucabled-deb: unexpected argument: $1" >&2
-        usage >&2
-        exit 2
-        ;;
-    esac
+    distros=()
+    for arg in "$@"; do
+      case "$arg" in
+        -h | --help)
+          usage
+          exit 0
+          ;;
+        all)
+          distros=(debian13 ubuntu26.04)
+          ;;
+        debian13 | ubuntu26.04)
+          distros+=("$arg")
+          ;;
+        *)
+          echo "ucabled-deb: unexpected argument: $arg" >&2
+          usage >&2
+          exit 2
+          ;;
+      esac
+    done
+    if [ "''${#distros[@]}" -eq 0 ]; then
+      distros=(debian13 ubuntu26.04)
+    fi
 
     repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
     if [ -z "$repo" ] || [ ! -f "$repo/debian/control" ]; then
@@ -86,9 +103,8 @@ pkgs.writeShellApplication {
     rust_version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' "$repo/Cargo.toml")
     rust_version=''${rust_version:-1.92}
 
-    image="''${UCABLED_DEB_IMAGE:-localhost/ucabled-deb-builder:$rust_version-trixie}"
+    image_name="''${UCABLED_DEB_IMAGE:-localhost/ucabled-deb-builder}"
     out="''${UCABLED_DEB_OUT:-$repo/debian-build}"
-    containerfile=${./debian-builder.Containerfile}
 
     # NixOS only writes /etc/containers/policy.json when
     # virtualisation.containers is enabled.  Keep podman's config and image
@@ -103,7 +119,9 @@ pkgs.writeShellApplication {
     podman_config="$podman_state/config"
     podman_root="$podman_state/storage"
     mkdir -p "$podman_config/.config/containers" "$podman_runroot"
-    cp ${policy} "$podman_config/.config/containers/policy.json"
+    # install, not cp: the store copy is read-only, and plain cp cannot
+    # overwrite the read-only destination from a previous run.
+    install -m 0644 ${policy} "$podman_config/.config/containers/policy.json"
 
     run_podman() {
       HOME="$podman_config" XDG_CONFIG_HOME="$podman_config/.config" \
@@ -111,55 +129,71 @@ pkgs.writeShellApplication {
     }
 
     mkdir -p "$out"
-    rm -f "$out"/*.deb "$out"/*.buildinfo "$out"/*.changes
 
-    run_podman --storage-driver=vfs build \
-      --pull=missing \
-      --network=host \
-      --build-arg "RUST_VERSION=$rust_version" \
-      -t "$image" \
-      -f "$containerfile" \
-      "$repo/nix"
+    for distro in "''${distros[@]}"; do
+      case "$distro" in
+        debian13)
+          containerfile=${./debian-builder.Containerfile}
+          image="$image_name:$rust_version-trixie"
+          ;;
+        ubuntu26.04)
+          containerfile=${./debian-builder-ubuntu.Containerfile}
+          image="$image_name:$rust_version-ubuntu26.04"
+          ;;
+      esac
+      outdir="$out/$distro"
+      mkdir -p "$outdir"
+      rm -f "$outdir"/*.deb "$outdir"/*.buildinfo "$outdir"/*.changes
 
-    run_podman --storage-driver=vfs run \
-      --rm \
-      --network=host \
-      -v "$repo:/src:ro" \
-      -v "$out:/out" \
-      -v ucabled-deb-cargo:/cache/cargo \
-      -v ucabled-deb-target:/cache/target \
-      -e CARGO=/usr/local/cargo/bin/cargo \
-      -e CARGO_HOME=/cache/cargo \
-      -e CARGO_TERM_COLOR=never \
-      -w /src \
-      "$image" \
-      bash -c '
-        set -euo pipefail
+      run_podman --storage-driver=vfs build \
+        --pull=missing \
+        --network=host \
+        --build-arg "RUST_VERSION=$rust_version" \
+        -t "$image" \
+        -f "$containerfile" \
+        "$repo/nix"
 
-        # Build from a copy so dpkg-buildpackage can write to the parent
-        # directory without dropping artifacts into the host checkout, and
-        # so a clean target cannot remove the cargo cache.
-        rm -rf /tmp/ucabled-deb
-        mkdir -p /tmp/ucabled-deb
-        tar -C /src \
-          --exclude=.git \
-          --exclude=target \
-          --exclude=result \
-          --exclude=site \
-          --exclude=debian-build \
-          -cf - . | tar -C /tmp/ucabled-deb -xf -
+      run_podman --storage-driver=vfs run \
+        --rm \
+        --network=host \
+        -v "$repo:/src:ro" \
+        -v "$outdir:/out" \
+        -v ucabled-deb-cargo:/cache/cargo \
+        -v "ucabled-deb-target-$distro:/cache/target" \
+        -e CARGO=/usr/local/cargo/bin/cargo \
+        -e CARGO_HOME=/cache/cargo \
+        -e CARGO_TERM_COLOR=never \
+        -w /src \
+        "$image" \
+        bash -c '
+          set -euo pipefail
 
-        cd /tmp/ucabled-deb
-        debian/rules clean
-        ln -s /cache/target target
+          # Build from a copy so dpkg-buildpackage can write to the parent
+          # directory without dropping artifacts into the host checkout, and
+          # so a clean target cannot remove the cargo cache.
+          rm -rf /tmp/ucabled-deb
+          mkdir -p /tmp/ucabled-deb
+          tar -C /src \
+            --exclude=.git \
+            --exclude=target \
+            --exclude=result \
+            --exclude=site \
+            --exclude=debian-build \
+            -cf - . | tar -C /tmp/ucabled-deb -xf -
 
-        # -nc: the clean above ran before the target symlink was installed.
-        # -d: cargo and rustc come from the Rust image, not from apt, so the
-        #     Build-Depends version check would reject the distribution ones.
-        dpkg-buildpackage -nc -b -us -uc -d
+          cd /tmp/ucabled-deb
+          debian/rules clean
+          ln -s /cache/target target
 
-        cp -v /tmp/*.deb /tmp/*.buildinfo /tmp/*.changes /out/
-      '
+          # -nc: the clean above ran before the target symlink was installed.
+          # -d: cargo and rustc come from the toolchain in the image, not
+          #     from apt, so the Build-Depends version check would reject the
+          #     distribution ones.
+          dpkg-buildpackage -nc -b -us -uc -d
+
+          cp -v /tmp/*.deb /tmp/*.buildinfo /tmp/*.changes /out/
+        '
+    done
 
     if [ "$(id -u)" -eq 0 ] && [ -n "''${SUDO_UID:-}" ]; then
       chown -R "''${SUDO_UID}:''${SUDO_GID:-$(id -g "$SUDO_UID")}" "$out"
@@ -167,6 +201,6 @@ pkgs.writeShellApplication {
 
     echo
     echo "Packages written to $out:"
-    ls -l "$out"
+    ls -lR "$out"
   '';
 }
