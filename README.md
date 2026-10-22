@@ -146,9 +146,13 @@ rustup toolchain instead:
 debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 ```
 
-On NixOS, `nix run .#deb` builds the same three packages in a rootless podman
-container and writes them to `debian-build/`, so the host needs none of the
-build dependencies above.  It only needs a working rootless podman setup.
+On NixOS, `nix run .#deb` builds the same three packages in rootless podman
+containers and writes them to `debian-build/<distro>/`, so the host needs
+none of the build dependencies above.  It only needs a working rootless
+podman setup.  Both supported distributions are built by default; pass a
+distribution to build just one (`nix run .#deb -- debian13` or
+`ubuntu26.04`).  Ubuntu 24.04 LTS is not a target: gtk4-layer-shell first
+appeared in Ubuntu 25.04.
 With `sudo nix run .#deb`, podman runs rootful instead, so no subordinate
 UID/GID configuration is needed; the output is chowned back to the caller.
 
@@ -370,7 +374,11 @@ argument to choose another).  Push `master`, `next` and `website` first and
 wait for their checks, then push the tag.
 `.github/workflows/release.yml` checks tag/manifest/changelog consistency and
 the tag signature, then publishes the GitHub release with the changelog
-section as notes.
+section as notes.  The Debian packages are then built, signed and uploaded
+locally by `admin/release-debs.sh`: it takes the version from the tag on
+HEAD, runs `nix run .#deb -- all`, signs each .deb with a detached
+GPG signature and uploads the assets to the release.  Keeping this step
+local means the signing key never leaves the maintainer's machine.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell

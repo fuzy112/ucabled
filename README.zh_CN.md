@@ -138,8 +138,11 @@ debian/rules binary CARGO=$HOME/.cargo/bin/cargo
 ```
 
 在 NixOS 上，`nix run .#deb` 会在 rootless podman 容器里构建同样的三个包，
-产物写到 `debian-build/`，宿主机无需安装上述构建依赖；前提是 rootless
-podman 可用。加 `sudo` 运行则改用 rootful podman，不需要配置 subuid/subgid，
+产物写到 `debian-build/<发行版>/`，宿主机无需安装上述构建依赖；前提是
+rootless podman 可用。默认构建两个受支持的发行版，也可只构建其一
+（`nix run .#deb -- debian13` 或 `ubuntu26.04`）。Ubuntu 24.04 LTS 不是
+目标：gtk4-layer-shell 从 Ubuntu 25.04 起才进入仓库。
+加 `sudo` 运行则改用 rootful podman，不需要配置 subuid/subgid，
 产物会 chown 回调用者。
 
 源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
@@ -339,6 +342,10 @@ nix flake check
 指定）。先推送 `master`、`next` 和 `website` 并等待相应检查通过，再推送标签。
 `.github/workflows/release.yml` 会检查标签/manifest/changelog 的一致性以及
 标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
+随后由 `admin/release-debs.sh` 在本地构建、签名并上传 Debian 包：
+版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，为每个
+.deb 生成 GPG 分离签名，并把资产上传到该 release。这一步留在本地执行，
+签名密钥就不会离开维护者的机器。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
 （以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加
