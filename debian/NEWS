@@ -1,12 +1,12 @@
 ucabled (0.2.0~) unstable; urgency=medium
 
-  The Debian package is now split into three: ucabled (the system daemon),
-  ucable-agent (the default GTK4 session agent and its helper) and
-  ucable-gnome-agent (the GNOME Shell agent extension).
-
+  The Debian package is now split into two: ucabled (the system daemon)
+  and ucable-agent (the default GTK4 session agent and its helper).
   apt installs ucable-agent automatically through ucabled's Recommends.
-  If you used the GNOME Shell extension that earlier versions shipped in
-  the ucabled package, install ucable-gnome-agent and enable it per user:
+
+  The new optional GNOME Shell extension is packaged separately as
+  ucable-gnome-agent.  It replaces ucable-agent on GNOME and stays
+  disabled until each user enables it:
 
       gnome-extensions enable ucable-gnome-agent@fuzy.me
 

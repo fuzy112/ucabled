@@ -66,11 +66,11 @@ postinst reloads and restarts it in every logged-in session, and a fresh
 install also starts it for graphical sessions that are already up, unless
 ucable-gnome-agent is installed.
 
-Earlier versions shipped the daemon, the session agent and the GNOME
-extension in a single ucabled package.  On upgrade apt installs
-ucable-agent automatically through the daemon's Recommends; the GNOME
-extension moved to ucable-gnome-agent, so install that package as well
-if you used the extension.
+Earlier versions shipped the daemon and the session agent in a single
+ucabled package.  On upgrade apt installs ucable-agent automatically
+through the daemon's Recommends.  The GNOME extension is a new optional
+package; install ucable-gnome-agent and enable it per user if you want
+to replace the GTK4 session agent.
 
 Neither maintainer script restarts anything when systemd is not running
 (for example inside a container).  On remove, ucabled.prerm stops the
