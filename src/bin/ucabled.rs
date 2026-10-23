@@ -430,21 +430,29 @@ async fn daemon_loop(
                                     agent: ui.generation(),
                                 });
                             }
-                            Some(CtapAction::CancelRelay) => match pending.take() {
-                                Some(Pending::Relay { abort, .. }) => {
-                                    abort.abort();
-                                    notifier.hide();
-                                    tracing::info!("cancelled caBLE transaction");
+                            Some(CtapAction::CancelRelay { cid: cancel_cid }) => {
+                                // Only the channel the cancel arrived on may
+                                // lose its transaction: INIT resynchronizes
+                                // one channel and must not disturb another.
+                                if pending.as_ref().is_none_or(|p| p.cid() != cancel_cid) {
+                                    continue;
                                 }
-                                Some(Pending::Select { .. }) => {
-                                    // The host cancelled because another
-                                    // authenticator (the user touched it) won
-                                    // the selection; drop our prompt.
-                                    notifier.hide();
-                                    tracing::info!("device selection cancelled by the host");
+                                match pending.take() {
+                                    Some(Pending::Relay { abort, .. }) => {
+                                        abort.abort();
+                                        notifier.hide();
+                                        tracing::info!("cancelled caBLE transaction");
+                                    }
+                                    Some(Pending::Select { .. }) => {
+                                        // The host cancelled because another
+                                        // authenticator (the user touched it) won
+                                        // the selection; drop our prompt.
+                                        notifier.hide();
+                                        tracing::info!("device selection cancelled by the host");
+                                    }
+                                    None => {}
                                 }
-                                None => {}
-                            },
+                            }
                             None => {}
                         }
                     }
