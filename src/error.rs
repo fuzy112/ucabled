@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::ctap::{CTAP1_ERR_TIMEOUT, CTAP2_ERR_KEEPALIVE_CANCEL, CTAP2_ERR_NO_CREDENTIALS};
+use crate::ctap::{CTAP1_ERR_TIMEOUT, CTAP2_ERR_KEEPALIVE_CANCEL, CTAP2_ERR_NOT_ALLOWED};
 
 /// Why a caBLE transaction failed, in terms the CTAP host understands.
 #[derive(Debug)]
@@ -31,7 +31,15 @@ impl TransactionError {
         match self {
             Self::Cancelled => CTAP2_ERR_KEEPALIVE_CANCEL,
             Self::Timeout | Self::Transport(_) => CTAP1_ERR_TIMEOUT,
-            Self::Failed(_) => CTAP2_ERR_NO_CREDENTIALS,
+            // NOT_ALLOWED, not NO_CREDENTIALS: a failed Noise handshake
+            // (wrong phone, tunnel tampering) or a protocol violation means
+            // this attempt failed, not that the phone has no passkey for the
+            // site; only a phone-reported 0x2e keeps that meaning.  This is
+            // protocol accuracy, not a browser-visible signal: Firefox 158
+            // maps 0x32, 0x2e, 0x2d, 0x05 and 0x7f to the same generic
+            // NotAllowedError and does not retry another authenticator on
+            // its own.
+            Self::Failed(_) => CTAP2_ERR_NOT_ALLOWED,
         }
     }
 
@@ -82,8 +90,19 @@ mod tests {
         );
         assert_eq!(
             TransactionError::failed(anyhow::anyhow!("x")).ctap_status(),
-            0x2e
+            0x32
         );
+    }
+
+    #[test]
+    fn session_failures_are_not_allowed() {
+        // The session boundary reports a failed handshake or an unexpected
+        // tunnel message as Failed; the host must see NOT_ALLOWED, not
+        // NO_CREDENTIALS, so it does not treat the attempt as "no passkey".
+        for message in ["caBLE handshake failed", "unexpected message type 9"] {
+            let err = TransactionError::failed(anyhow::anyhow!(message));
+            assert_eq!(err.ctap_status(), CTAP2_ERR_NOT_ALLOWED);
+        }
     }
 
     #[test]
