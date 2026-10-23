@@ -58,6 +58,15 @@ pub fn to_components(eid: &[u8; EID_PLAINTEXT_SIZE]) -> EidComponents {
     }
 }
 
+/// Encrypt an EID plaintext into the 20-byte advertisement block (16 bytes of
+/// AES-256 plus a 4-byte truncated HMAC).
+///
+/// # Panics
+///
+/// Panics when the reserved flag bits in `eid` are non-zero: PXP requires them
+/// to stay zero until a feature advertises their meaning, and every in-repo
+/// caller builds the plaintext through [`plaintext_from_components`], which
+/// leaves them zero.
 pub fn encrypt(eid: &[u8; EID_PLAINTEXT_SIZE], key: &[u8; EID_KEY_SIZE]) -> [u8; ADVERT_SIZE] {
     assert_eq!(eid[FLAGS_OFFSET], 0);
     let cipher = Aes256::new((&key[..KEY_HALF]).into());

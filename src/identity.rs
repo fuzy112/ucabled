@@ -43,6 +43,12 @@ pub fn state_dir() -> PathBuf {
 /// random one when none exists. A corrupt or unreadable existing file is an
 /// error, not a silent regeneration: losing the key is visible, accidentally
 /// replacing it must not be.
+///
+/// Two concurrent callers that both see the file missing would each generate
+/// a key and the last rename would win, leaving one caller with an in-memory
+/// key that differs from the disk.  That is not reachable in the supported
+/// single-daemon setup: the daemon claims `org.ucabled` with `do_not_queue`
+/// before it gets here, so a second instance fails to start.
 pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
     let path = dir.join(IDENTITY_FILE_NAME);
     match fs::read(&path) {

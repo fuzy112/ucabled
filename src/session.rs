@@ -78,8 +78,15 @@ pub struct DesktopSession {
 }
 
 impl DesktopSession {
-    /// The post-handshake message the phone sent right after the handshake
-    /// (padded CBOR; see Chromium's `DecodePaddedCBORMap`).
+    /// The post-handshake message the phone sent right after the handshake.
+    ///
+    /// This is a CBOR map padded to a 512-byte boundary (Chromium's
+    /// `EncodePaddedCBORMap`): the last two bytes are the padding length as a
+    /// native-endian `u16`, preceded by that many zero bytes.  Older phones
+    /// use a one-byte length as the final byte instead (`DecodePaddedCBORMap8`,
+    /// which Chromium still accepts).  Consumers must strip the padding before
+    /// handing the bytes to a strict CBOR parser; no in-tree consumer parses
+    /// it yet.
     pub fn post_handshake(&self) -> &[u8] {
         &self.post_handshake
     }
