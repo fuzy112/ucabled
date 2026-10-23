@@ -159,8 +159,11 @@ in
         # keeps this watchdog fed at half the interval.
         Type = "notify";
         WatchdogSec = "30s";
-        # Persistent caBLE identity key lives in /var/lib/ucabled.
+        # Persistent caBLE identity key lives in /var/lib/ucabled.  The unit
+        # directory is tightened from systemd's 0755 default; the key file
+        # itself is written 0600.
         StateDirectory = "ucabled";
+        StateDirectoryMode = "0700";
         # The daemon only needs /dev/uhid plus the system bus and the network.
         NoNewPrivileges = true;
         PrivateTmp = true;
