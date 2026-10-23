@@ -227,7 +227,7 @@ if [ "$mode" = pre ]; then
             || printf 'release.sh: warning: could not reset %s\n' "$next_wt" >&2
     }
 
-    if ! git -C "$next_wt" merge --quiet --no-edit master; then
+    if ! git -C "$next_wt" merge --quiet --no-ff --no-edit master; then
         undo_next
         die "master and tag v$version are ready, but next was left unchanged; merge master into next by hand, then open $next_dev_version"
     fi
