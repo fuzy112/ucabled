@@ -540,7 +540,10 @@ async fn daemon_loop(
                     tracing::debug!(?request, "ignoring stale cancellation");
                     continue;
                 }
-                match pending.take().unwrap() {
+                let Some(p) = pending.take() else {
+                    continue;
+                };
+                match p {
                     Pending::Relay { cid, abort, .. } => {
                         abort.abort();
                         let reports = transport.cancel_relay(cid);
