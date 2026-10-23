@@ -17,11 +17,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   # Only the files the build consumes: the crate, the gettext catalogs
   # compiled in postInstall and the manual pages/completions installed from
-  # dist.  A change anywhere else in the repo (docs, site, CI) leaves this
-  # source and thus the output path unchanged, so the Cachix entry an
-  # earlier push published stays valid and the workflow's path filter can
-  # skip such commits.  Keep this in sync with the paths filter in
-  # .github/workflows/rust.yml.
+  # dist.  A change anywhere else in the repo (tests, docs, site, CI,
+  # scripts) leaves this source and thus the output path unchanged, so the
+  # Cachix entry an earlier push published stays valid.  The workflow's
+  # path filter in .github/workflows/rust.yml is deliberately wider: it
+  # also triggers on what the non-package checks consume.
   src = lib.fileset.toSource {
     root = ./..;
     fileset = lib.fileset.unions [

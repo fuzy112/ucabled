@@ -5,12 +5,16 @@ on:
     # next is the experimental branch; it publishes to the same cache so
     # testers can substitute instead of building.
     branches: ["master", "next"]
-    # Only run when something the checks consume changes.  package.nix
-    # limits its src to the same set, so a commit elsewhere (docs, site)
-    # cannot change the output path and its Cachix entry stays valid.
-    # Keep in sync with nix/package.nix and the pull_request filter below.
+    # Only run when something the checks consume changes: the crate, the
+    # integration tests (run by the plain cargo steps on the checkout),
+    # the Nix packaging, the gettext catalogs, the GNOME extension
+    # (packaged, and scanned for msgids by check-po.sh) and the shell
+    # scripts shellcheck lints.  package.nix limits its own src to a
+    # subset of this list, so a commit touching only files here cannot
+    # change the package's output path and its Cachix entry stays valid.
     paths:
       - "src/**"
+      - "tests/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "flake.nix"
@@ -19,13 +23,17 @@ on:
       - "nix/**"
       - "po/**"
       - "dist/**"
-      - "admin/check-po.sh"
+      - "admin/**"
+      - "contrib/**"
+      - "debian/**"
+      - "install.sh"
       - ".github/workflows/rust.yml"
   pull_request:
     branches: ["master"]
     # The same filter as on push above.
     paths:
       - "src/**"
+      - "tests/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "flake.nix"
@@ -34,7 +42,10 @@ on:
       - "nix/**"
       - "po/**"
       - "dist/**"
-      - "admin/check-po.sh"
+      - "admin/**"
+      - "contrib/**"
+      - "debian/**"
+      - "install.sh"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
 
