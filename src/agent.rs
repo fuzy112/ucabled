@@ -425,6 +425,7 @@ fn build_crossroads(
             let register_conn = conn.clone();
             let register_limiter = limiter.clone();
             let register_uids = sender_uids.clone();
+            let register_cancel = cancel_tx.clone();
             builder.method_with_cr_async(
                 "RegisterAgent",
                 ("path",),
@@ -434,6 +435,7 @@ fn build_crossroads(
                     let conn = register_conn.clone();
                     let limiter = register_limiter.clone();
                     let sender_uids = register_uids.clone();
+                    let cancel_tx = register_cancel.clone();
                     async move {
                         let Some(sender) = ctx.message().sender().map(|s| s.to_string()) else {
                             return ctx.reply(Err(MethodErr::failed(&"missing sender")));
@@ -484,14 +486,12 @@ fn build_crossroads(
                             ))));
                         }
                         let authorized_uid = uid;
-                        let mut guard = slot.lock().unwrap();
-                        guard.generation += 1;
-                        let generation = guard.generation;
-                        guard.current = Some(Agent {
+                        let agent = Agent {
                             destination: sender.clone(),
                             path: path.to_string(),
                             uid: authorized_uid,
-                        });
+                        };
+                        let (generation, replaced) = install_agent(&slot, agent);
                         tracing::info!(
                             %sender,
                             uid = authorized_uid,
@@ -499,6 +499,15 @@ fn build_crossroads(
                             generation,
                             "agent registered"
                         );
+                        if let Some(previous) = replaced {
+                            // Registration is last-wins, but the replaced
+                            // agent's window (and the QR secret in it) and the
+                            // transaction bound to it would otherwise keep the
+                            // shared HID channel locked until completion or
+                            // timeout.  Abort it through its registration
+                            // generation, which no successor can match.
+                            let _ = cancel_tx.send(CancelRequest::AgentGone(previous)).await;
+                        }
                         ctx.reply(Ok(()))
                     }
                 },
@@ -727,6 +736,19 @@ async fn dispatch_commands(
     }
 }
 
+/// Install `agent` as the current agent, returning its registration
+/// generation and, when an agent was already registered, the generation it
+/// replaced.  Callers signal the daemon for a replaced generation so a
+/// transaction still bound to the previous agent is aborted instead of
+/// holding the HID channel until its own timeout.
+fn install_agent(slot: &Arc<Mutex<AgentSlot>>, agent: Agent) -> (u64, Option<u64>) {
+    let mut guard = slot.lock().unwrap();
+    guard.generation += 1;
+    let generation = guard.generation;
+    let replaced = guard.current.replace(agent).is_some();
+    (generation, replaced.then(|| generation - 1))
+}
+
 /// Drop the slot's agent if it belongs to `sender`, returning the dropped
 /// agent's registration generation.  Callers signal the daemon so an
 /// in-flight transaction is aborted rather than leaving the shared HID
@@ -846,6 +868,34 @@ mod tests {
         assert!(client.available());
         assert!(clear_if_matches(&slot, Some(":1.7")).is_some());
         assert!(!client.available());
+    }
+
+    #[test]
+    fn replacing_an_agent_reports_the_previous_generation() {
+        let slot = Arc::new(Mutex::new(AgentSlot::default()));
+        let agent = |name: &str| Agent {
+            destination: name.into(),
+            path: "/org/ucabled/Agent".into(),
+            uid: 1000,
+        };
+
+        // The first registration replaces nothing.
+        assert_eq!(install_agent(&slot, agent(":1.7")), (1, None));
+
+        // A new registration is last-wins and reports the agent it replaced,
+        // so the daemon can abort that agent's in-flight transaction.
+        assert_eq!(install_agent(&slot, agent(":1.8")), (2, Some(1)));
+        assert_eq!(
+            slot.lock()
+                .unwrap()
+                .current()
+                .map(|a| a.destination.as_str()),
+            Some(":1.8")
+        );
+
+        // After the agent leaves there is nothing to abort on re-register.
+        assert!(clear_if_matches(&slot, Some(":1.8")).is_some());
+        assert_eq!(install_agent(&slot, agent(":1.9")), (3, None));
     }
 
     #[test]
