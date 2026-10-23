@@ -36,6 +36,7 @@ const BUS_NAME = 'org.ucabled';
 const MANAGER_PATH = '/org/ucabled/Manager';
 const MANAGER_IFACE = 'org.ucabled.Manager1';
 const AGENT_PATH = '/org/ucabled/GnomeAgent';
+const AGENT_IFACE = 'org.ucabled.Agent1';
 const ERR_NOT_AUTHORIZED = 'org.ucabled.NotAuthorized';
 
 /// Registration is retried on transient failures (daemon not up yet); the
@@ -352,11 +353,51 @@ export default class UcabledAgentExtension extends Extension {
             AGENT_XML, this._agentFacade);
         this._dbusObject.export(Gio.DBus.system, AGENT_PATH);
 
+        // Defence in depth: the shipped bus policy already denies
+        // unprivileged sends to our unique name, so only the daemon can reach
+        // this object.  Filtering the method calls by sender as well keeps a
+        // missing or relaxed org.ucabled.conf from handing the daemon's
+        // authority to another local process.
+        this._daemonOwner = null;
+        this._agentFilter = null;
+        if (typeof Gio.DBus.system.add_filter === 'function') {
+            this._agentFilter = Gio.DBus.system.add_filter(
+                (_conn, message, incoming) => {
+                    if (!incoming ||
+                        message.get_message_type() !==
+                            Gio.DBusMessageType.METHOD_CALL ||
+                        message.get_path() !== AGENT_PATH)
+                        return message;
+                    // Fail closed: the filter is the only check when the bus
+                    // policy is missing or relaxed, so a call is accepted
+                    // only when it provably comes from the current daemon.
+                    // Until watch_name has resolved the owner (and after the
+                    // name disappears) every call is refused.
+                    const sender = message.get_sender();
+                    if (!this._daemonOwner ||
+                        message.get_interface() !== AGENT_IFACE ||
+                        sender !== this._daemonOwner) {
+                        console.warn(
+                            `ucabled: ignoring agent call from ${sender}`);
+                        return null;
+                    }
+                    return message;
+                });
+        } else {
+            console.warn(
+                'ucabled: Gio.DBus.system.add_filter is unavailable; ' +
+                'only the shipped bus policy guards the agent object');
+        }
+
         // Register now, and again whenever the daemon's name reappears.
         this._nameWatch = Gio.DBus.system.watch_name(
             BUS_NAME, Gio.BusNameWatcherFlags.NONE,
-            () => this._register(),
+            (_conn, _name, owner) => {
+                this._daemonOwner = owner;
+                this._register();
+            },
             () => {
+                this._daemonOwner = null;
                 this._registered = false;
             });
         this._register();
@@ -374,6 +415,10 @@ export default class UcabledAgentExtension extends Extension {
         if (this._nameWatch) {
             Gio.DBus.system.unwatch_name(this._nameWatch);
             this._nameWatch = null;
+        }
+        if (this._agentFilter && typeof Gio.DBus.system.remove_filter === 'function') {
+            Gio.DBus.system.remove_filter(this._agentFilter);
+            this._agentFilter = null;
         }
         for (const id of this._timers)
             GLib.source_remove(id);
