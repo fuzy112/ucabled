@@ -43,10 +43,39 @@ jobs:
     - name: Verify the tag signature
       env:
         TAG: ${{ github.ref_name }}
+        EXPECTED_FPR: ${{ vars.RELEASE_KEY_FPR }}
       run: |
         set -euo pipefail
+        # The pubkey in the tagged tree is only the vehicle for the check;
+        # the trust anchor is the RELEASE_KEY_FPR repository variable,
+        # which someone with mere push access cannot change.  The repo
+        # admin must additionally enable tag protection for v* (Settings →
+        # Tags), so a pushed tag cannot be moved or replaced afterwards.
+        [ -n "$EXPECTED_FPR" ] \
+          || { echo "repository variable RELEASE_KEY_FPR is not set"; exit 1; }
         gpg --batch --import .github/release-signing-key.asc
-        git tag -v "$TAG"
+        # Split the tag object into the signed payload and the signature,
+        # then verify with gpg directly: VALIDSIG reports the fingerprint
+        # of the (sub)key that actually made the signature.
+        git cat-file tag "$TAG" > tag-object
+        sig_line=$(grep -n '^-----BEGIN PGP SIGNATURE-----$' tag-object | cut -d: -f1)
+        head -n "$((sig_line - 1))" tag-object > tag-payload
+        tail -n "+$sig_line" tag-object > tag-signature
+        status=$(gpg --batch --status-fd=1 --verify tag-signature tag-payload)
+        # VALIDSIG field 3 is the key that made the signature (a signing
+        # subkey, if one is used); an optional trailing field is the primary
+        # key's fingerprint.  Accept either as the release key, so a routine
+        # switch to a signing subkey does not break every release.
+        line=$(printf '%s\n' "$status" \
+          | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3, (NF >= 14 ? $NF : $3); exit }')
+        [ -n "$line" ] || { echo "no VALIDSIG status from gpg"; exit 1; }
+        fpr=${line% *}
+        primary=${line#* }
+        if [ "$fpr" != "$EXPECTED_FPR" ] && [ "$primary" != "$EXPECTED_FPR" ]; then
+          echo "tag signed by unexpected key $fpr (primary $primary, want $EXPECTED_FPR)"
+          exit 1
+        fi
+        echo "tag signature by $fpr (primary $primary) matches RELEASE_KEY_FPR"
 
     - name: Extract the changelog section
       env:
