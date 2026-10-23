@@ -194,7 +194,7 @@ sudo install -Dm755 target/release/ucable-agent-helper /usr/local/bin/ucable-age
 for po in po/*.po; do
   lang=$(basename "$po" .po)
   sudo install -d /usr/local/share/locale/$lang/LC_MESSAGES
-  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo
+  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable.mo
 done
 
 # 专用服务账户、内核模块与 udev 规则
@@ -373,9 +373,10 @@ libadwaita，以维持桌面中立。
 - `src/bin/cable-advert-probe.rs`：显示一个提供 BLE 数据通道的 caBLE 二维码，
   并报告手机是否广播了 L2CAP PSM
 
-翻译目录位于 `po/`。新增或修改 helper 字符串后，在 dev shell 里运行
-`admin/update-pot.sh` 重新生成 `po/ucable-agent-helper-gtk.pot`，并把新的
-msgid 合并进每个目录。helper 是唯一被翻译的组件。
+翻译目录位于 `po/`，由 GTK helper 和 GNOME Shell 扩展共享（gettext 域
+`ucable`）。在任一侧新增或修改可翻译字符串后，在 dev shell 里运行
+`admin/update-pot.sh` 重新生成 `po/ucable.pot`，并把新的 msgid 合并进
+每个目录；CI 中的 `admin/check-po.sh` 会校验它们保持同步。
 
 可选的 CTAP 2.3 BLE 数据通道（L2CAP CoC）是实验性的，默认关闭：用
 `--features l2cap` 构建并设置 `UCABLED_BLE_CHANNEL=1`。iPhone 不提供它

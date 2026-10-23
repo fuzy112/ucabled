@@ -67,7 +67,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     for po in po/*.po; do
       lang=$(basename "$po" .po)
       mkdir -p "$out/share/locale/$lang/LC_MESSAGES"
-      msgfmt "$po" -o "$out/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
+      msgfmt "$po" -o "$out/share/locale/$lang/LC_MESSAGES/ucable.mo"
     done
 
     # Manual pages and shell completions.

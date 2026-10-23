@@ -97,8 +97,11 @@ grep -qx 'ExecStart=/usr/bin/ucable-agent' /usr/lib/systemd/user/ucable-agent.se
 getent passwd ucabled >/dev/null || fail "the ucabled user is missing"
 getent group ucabled >/dev/null || fail "the ucabled group is missing"
 
-# At least one compiled gettext catalog for the GTK4 helper.
-ls /usr/share/locale/*/LC_MESSAGES/ucable-agent-helper-gtk.mo >/dev/null 2>&1 ||
+# At least one compiled gettext catalog for the GTK4 helper, and one in the
+# GNOME Shell extension's own locale/ directory (same shared catalogs).
+ls /usr/share/locale/*/LC_MESSAGES/ucable.mo >/dev/null 2>&1 ||
 	fail "no gettext catalog installed"
+ls /usr/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/locale/*/LC_MESSAGES/ucable.mo >/dev/null 2>&1 ||
+	fail "no GNOME extension gettext catalog installed"
 
 echo "smoke test passed"

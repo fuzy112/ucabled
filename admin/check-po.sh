@@ -11,20 +11,27 @@ set -euo pipefail
 root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 cd "$root"
 
-domain=ucable-agent-helper-gtk
-
-sources=()
+rust_sources=()
+js_sources=()
 while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-    sources+=("$line")
+    case "$line" in
+        *.rs) rust_sources+=("$line") ;;
+        *.js) js_sources+=("$line") ;;
+        *) echo "check-po.sh: no extractor for $line" >&2; exit 1 ;;
+    esac
 done <po/POTFILES.in
 
 # Re-extract the current source strings, ignoring locations so ordinary
 # edits do not matter.  Every catalog must contain exactly these msgids.
 current="$(mktemp)"
 trap 'rm -f "$current"' EXIT
-xgettext --language=Rust --keyword=tr --keyword=n_ --from-code=UTF-8 \
-    --no-location -o "$current" "${sources[@]}"
+((${#rust_sources[@]})) && xgettext --language=Rust \
+    --keyword=tr --keyword=n_ --from-code=UTF-8 \
+    --no-location -o "$current" "${rust_sources[@]}"
+((${#js_sources[@]})) && xgettext --language=JavaScript \
+    --keyword=_ --from-code=UTF-8 \
+    --no-location -j -o "$current" "${js_sources[@]}"
 
 status=0
 for po in po/*.po; do

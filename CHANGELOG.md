@@ -12,9 +12,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (NixOS: `services.ucabled.gnomeAgent.enable`): the extension registers
   as the session UI agent itself and shows the passkey QR prompt and the
   device-selection question as shell modal dialogs, replacing the GTK
-  helper window on GNOME.
+  helper window on GNOME.  Its dialogs are translated into the same
+  languages as the GTK helper.
 
 ### Changed
+
+- The gettext domain is renamed from `ucable-agent-helper-gtk` to
+  `ucable`, and the GTK helper and the GNOME Shell extension now share
+  the same catalogs in `po/`.
 
 - Optimize performance.
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into

@@ -1,10 +1,11 @@
 {
   lib,
   stdenvNoCC,
+  gettext,
 }:
 
-# The GNOME Shell agent extension: pure GJS, nothing to build. Version
-# tracks the daemon it talks to.
+# The GNOME Shell agent extension: pure GJS, nothing to build but the
+# gettext catalogs.  Version tracks the daemon it talks to.
 stdenvNoCC.mkDerivation {
   pname = "ucable-gnome-agent";
   version = (lib.importTOML ../Cargo.toml).package.version;
@@ -13,10 +14,21 @@ stdenvNoCC.mkDerivation {
 
   dontBuild = true;
 
+  nativeBuildInputs = [ gettext ];
+
   installPhase = ''
     runHook preInstall
-    install -Dm644 metadata.json extension.js qrcode.mjs \
-      -t $out/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me
+    extdir=$out/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me
+    install -Dm644 metadata.json extension.js qrcode.mjs -t "$extdir"
+    # Translations are shared with the GTK helper (gettext domain "ucable");
+    # gnome-shell looks them up in the extension's own locale/ directory
+    # (Extension.initTranslations()).
+    for po in ${../po}/*.po; do
+      lang=''${po##*/}
+      lang=''${lang%.po}
+      install -d "$extdir/locale/$lang/LC_MESSAGES"
+      msgfmt "$po" -o "$extdir/locale/$lang/LC_MESSAGES/ucable.mo"
+    done
     runHook postInstall
   '';
 

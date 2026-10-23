@@ -11,5 +11,6 @@
     "50"
   ],
   "url": "https://github.com/fuzy112/ucabled",
+  "gettext-domain": "ucable",
   "version": 1
 }

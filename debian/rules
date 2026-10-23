@@ -34,6 +34,7 @@ CARGO ?= cargo
 # this file only places what no dh_* helper covers.
 DAEMON_DIR = debian/ucabled
 AGENT_DIR = debian/ucable-agent
+GNOME_AGENT_DIR = debian/ucable-gnome-agent
 
 %:
 	dh $@
@@ -98,12 +99,18 @@ override_dh_auto_install:
 	install -Dm644 dist/completions/ucable-agent-helper.fish \
 		$(AGENT_DIR)/usr/share/fish/vendor_completions.d/ucable-agent-helper.fish
 
-	# gettext catalogs for the GTK4 helper (the only localized binary).
+	# gettext catalogs, one compiled copy per consumer of the shared
+	# "ucable" domain: the GTK4 helper finds them in the system localedir,
+	# the GNOME Shell extension in its own locale/ subdirectory (the path
+	# Extension.initTranslations() binds).
 	for po in po/*.po; do \
 		lang=$${po#po/}; lang=$${lang%.po}; \
 		install -d $(AGENT_DIR)/usr/share/locale/$$lang/LC_MESSAGES; \
 		msgfmt "$$po" -o \
-			$(AGENT_DIR)/usr/share/locale/$$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo; \
+			$(AGENT_DIR)/usr/share/locale/$$lang/LC_MESSAGES/ucable.mo; \
+		install -d $(GNOME_AGENT_DIR)/usr/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/locale/$$lang/LC_MESSAGES; \
+		msgfmt "$$po" -o \
+			$(GNOME_AGENT_DIR)/usr/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/locale/$$lang/LC_MESSAGES/ucable.mo; \
 	done
 
 # dh_installsystemd enables ucabled.service and removes that enablement on

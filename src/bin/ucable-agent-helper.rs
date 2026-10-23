@@ -52,7 +52,7 @@ const QR_MIN_VERSION: i16 = 5;
 const PASSKEY_ICON: &[u8; 100 * 100] = include_bytes!("resources/passkey.gray");
 
 /// gettext domain for this helper's catalogs.
-const GETTEXT_DOMAIN: &str = "ucable-agent-helper-gtk";
+const GETTEXT_DOMAIN: &str = "ucable";
 
 /// Where gettext catalogs are installed.  `UCABLED_LOCALEDIR` wins when set
 /// at build time; otherwise the directory is derived from the executable's

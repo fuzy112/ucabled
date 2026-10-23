@@ -28,7 +28,7 @@ import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
-import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import qrcode from './qrcode.mjs';
 
@@ -114,16 +114,16 @@ const AGENT_XML = `
 </node>`;
 
 /// The caption under the QR code, phrased after the CTAP command waiting on
-/// the other end. The extension is English-only for now; the GTK helper is
-/// the translated UI.
+/// the other end.  Translations are shared with the GTK helper through the
+/// "ucable" gettext domain (po/).
 function scanCaption(requestType) {
     switch (requestType) {
     case 'mc':
-        return 'Scan with your phone\nto store a passkey';
+        return _('Scan with your phone\nto store a passkey');
     case 'ga':
-        return 'Scan with your phone\nto authenticate with passkeys';
+        return _('Scan with your phone\nto authenticate with passkeys');
     default:
-        return 'Scan with your phone';
+        return _('Scan with your phone');
     }
 }
 
@@ -231,7 +231,7 @@ class QrDialog extends ModalDialog.ModalDialog {
         this.contentLayout.add_child(layout);
 
         this.setButtons([{
-            label: 'Cancel',
+            label: _('Cancel'),
             action: () => this.close(global.get_current_time()),
             key: Clutter.KEY_Escape,
             default: true,
@@ -250,7 +250,7 @@ class QrDialog extends ModalDialog.ModalDialog {
         if (this._qrIcon)
             this._qrIcon.opacity = 110;
         this._caption.text =
-            'Phone detected.\nConfirm the sign-in on your phone.';
+            _('Phone detected.\nConfirm the sign-in on your phone.');
     }
 
     /// Like the reference helper, an expired code is announced but the
@@ -259,7 +259,7 @@ class QrDialog extends ModalDialog.ModalDialog {
         this._qrIcon.destroy();
         this._qrIcon = null;
         this._caption.text =
-            'Code expired.\nClose this dialog and start again.';
+            _('Code expired.\nClose this dialog and start again.');
     }
 
     closeFromDaemon() {
@@ -281,13 +281,13 @@ class SelectDialog extends ModalDialog.ModalDialog {
         const layout = new St.BoxLayout({vertical: true});
         layout.set_style('spacing: 12px;');
         layout.add_child(new St.Label({
-            text: 'Passkey request',
+            text: _('Passkey request'),
             style_class: 'prompt-dialog-headline',
             x_align: Clutter.ActorAlign.CENTER,
         }));
         layout.add_child(new St.Label({
-            text: 'A security key is also connected.\n' +
-                'Use your phone\u2019s passkey instead?',
+            text: _('A security key is also connected.\n' +
+                'Use your phone’s passkey instead?'),
             style_class: 'prompt-dialog-description',
             x_align: Clutter.ActorAlign.CENTER,
         }));
@@ -295,13 +295,13 @@ class SelectDialog extends ModalDialog.ModalDialog {
 
         this.setButtons([
             {
-                label: 'Use security key',
+                label: _('Use security key'),
                 action: () => this.answer(false),
                 key: Clutter.KEY_Escape,
                 default: true,
             },
             {
-                label: 'Use phone',
+                label: _('Use phone'),
                 action: () => this.answer(true),
             },
         ]);
@@ -328,6 +328,11 @@ class SelectDialog extends ModalDialog.ModalDialog {
 
 export default class UcabledAgentExtension extends Extension {
     enable() {
+        // Bind the "ucable" domain (shared with the GTK helper) to this
+        // extension's locale/ directory; every _() lookup happens at
+        // runtime, after this point.
+        this.initTranslations();
+
         this._dialogs = new Map(); // tid -> QrDialog | SelectDialog
         this._timers = new Set(); // GLib source ids
         this._registerTimer = null;

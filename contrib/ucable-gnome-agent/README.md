@@ -26,6 +26,8 @@ satisfies exactly like the `ucable-agent` process.
   dialog when a physical security key is also connected.
 - **Daemon notices** (e.g. refused tunnel redirects) as shell
   notifications.
+- **Translated UI**: shares the GTK helper's gettext catalogs (`po/`,
+  domain `ucable`), installed into the extension's `locale/` directory.
 
 ## Requirements
 
@@ -55,6 +57,18 @@ $ mkdir -p ~/.local/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me
 $ cp metadata.json extension.js qrcode.mjs \
     ~/.local/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me/
 $ gnome-extensions enable ucable-gnome-agent@fuzy.me
+```
+
+Translations (shared with the GTK helper, gettext domain `ucable`) need
+the compiled catalogs in the extension's `locale/` directory:
+
+```console
+$ ext=~/.local/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me
+$ for po in ../../po/*.po; do
+      lang=$(basename "$po" .po)
+      mkdir -p "$ext/locale/$lang/LC_MESSAGES"
+      msgfmt "$po" -o "$ext/locale/$lang/LC_MESSAGES/ucable.mo"
+  done
 ```
 
 Log out and back in (Wayland) or restart the shell (X11: Alt+F2, `r`).
@@ -94,7 +108,6 @@ sessions — the extension offers no fallback there.
 
 ## Limitations
 
-- English-only strings; the translated UI is the GTK helper (`po/`).
 - The "phone detected" state dims the QR instead of blurring it (St has
   no blur filter).
 - On the lock screen no modal can grab the focus; the prompt is skipped
@@ -109,4 +122,7 @@ sessions — the extension offers no fallback there.
 - `qrcode.mjs` — vendored MIT QR encoder
   ([kazuhikoarase/qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator),
   `js/dist/qrcode.mjs`). Do not edit; update by re-downloading upstream.
-- `metadata.json` — extension manifest.
+- `metadata.json` — extension manifest (also declares the `ucable`
+  gettext domain).
+- `locale/` (generated at install time) — compiled catalogs from the
+  repository's shared `po/`, one `LC_MESSAGES/ucable.mo` per language.
