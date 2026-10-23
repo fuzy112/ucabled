@@ -25,6 +25,20 @@ const UHID_READ_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// Log every Nth consecutive write failure (the first is always logged).
 const WRITE_FAILURE_LOG_EVERY: u32 = 100;
 
+/// Budget for one HID input report write, and how many times it is tried
+/// before the rest of the response is abandoned.  A host that stops reading
+/// must not block the daemon's event loop: `write_input` waits for
+/// writability, and without a bound a wedged reader would hang it forever.
+const WRITE_REPORT_TIMEOUT: Duration = Duration::from_millis(250);
+const WRITE_REPORT_ATTEMPTS: u32 = 2;
+
+/// Whole-response budget.  The per-report bound keeps one wedged write from
+/// blocking the loop forever; this bounds the sum, so a host that accepts
+/// every report just under its budget cannot hold the daemon for
+/// `reports * attempts * WRITE_REPORT_TIMEOUT` (tens of seconds for a
+/// maximum-size CTAPHID response).
+const WRITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Bytes of an input report needed to log its CID and command (cid + cmd).
 const HID_REPORT_LOG_PREFIX: usize = 5;
 
@@ -750,7 +764,22 @@ async fn daemon_loop(
                     }
                 };
                 let reports = transport.complete_relay(cid, &payload);
-                write_all(&device, reports, &mut write_failures).await;
+                if !write_all(&device, reports, &mut write_failures).await {
+                    // The host is not reading, so it will never assemble this
+                    // reply.  Keeping the phone's assertion state (and a
+                    // multi-credential session) alive for a reply nobody can
+                    // use would only extend the tunnel's lifetime; drop it.
+                    tracing::warn!("reply not delivered; dropping the transaction state");
+                    if let Some(p) = pending.take() {
+                        match p {
+                            Pending::Relay { abort, .. } | Pending::Session { abort, .. } => {
+                                abort.abort()
+                            }
+                            Pending::Select { .. } => {}
+                        }
+                    }
+                    continue;
+                }
                 // The phone still holds assertion state when more
                 // credentials remain: keep the session open for
                 // getNextAssertion follow-ups.  A first reply turns the
@@ -876,21 +905,54 @@ async fn daemon_loop(
     }
 }
 
-/// Write response reports to the host, tolerating transient failures so a
-/// hiccup does not kill an in-flight transaction. Persistent failure is
-/// handled by the read path, which eventually restarts the daemon.
-async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u32) {
-    for r in reports {
-        match device.write_input(&r).await {
-            Ok(()) => *failures = 0,
-            Err(e) => {
-                *failures += 1;
-                if *failures == 1 || failures.is_multiple_of(WRITE_FAILURE_LOG_EVERY) {
-                    tracing::warn!("uhid write failed ({failures} times): {e}");
+/// Write one response's reports to the host.
+///
+/// Each report is retried within [`WRITE_REPORT_TIMEOUT`], and the whole
+/// response is bounded by [`WRITE_RESPONSE_TIMEOUT`].  When one still cannot
+/// be written, the rest of the response is abandoned: writing later reports
+/// after a gap would leave the host reassembling a message with a missing
+/// frame.  The host learns about the truncated reply only from its own
+/// transaction timeout (CTAPHID has no end marker); abandoning the rest
+/// mainly frees the daemon and the HID channel for the next request.
+async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u32) -> bool {
+    let total = reports.len();
+    let response_deadline = tokio::time::Instant::now() + WRITE_RESPONSE_TIMEOUT;
+    for (index, r) in reports.iter().enumerate() {
+        let mut last_error = None;
+        for _ in 0..WRITE_REPORT_ATTEMPTS {
+            let attempt_deadline =
+                (tokio::time::Instant::now() + WRITE_REPORT_TIMEOUT).min(response_deadline);
+            match tokio::time::timeout_at(attempt_deadline, device.write_input(r)).await {
+                Ok(Ok(())) => {
+                    *failures = 0;
+                    last_error = None;
+                    break;
+                }
+                Ok(Err(e)) => last_error = Some(e),
+                Err(_) => {
+                    last_error = Some(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "uhid write timed out waiting for the host to read",
+                    ));
                 }
             }
         }
+        if let Some(e) = last_error {
+            *failures += 1;
+            if *failures == 1 || failures.is_multiple_of(WRITE_FAILURE_LOG_EVERY) {
+                tracing::warn!("uhid write failed ({failures} times): {e}");
+            }
+            if index + 1 < total {
+                tracing::warn!(
+                    written = index,
+                    total,
+                    "abandoning the rest of a response the host is not reading"
+                );
+            }
+            return false;
+        }
     }
+    true
 }
 
 #[cfg(test)]
