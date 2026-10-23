@@ -165,7 +165,7 @@ impl<'a> Decoder<'a> {
         if h >> 5 != MAJOR_BYTES {
             return None;
         }
-        let len = self.argument(h & ARG_MASK)? as usize;
+        let len = usize::try_from(self.argument(h & ARG_MASK)?).ok()?;
         self.take(len)
     }
 
@@ -175,7 +175,7 @@ impl<'a> Decoder<'a> {
         if h >> 5 != MAJOR_TEXT {
             return None;
         }
-        let len = self.argument(h & ARG_MASK)? as usize;
+        let len = usize::try_from(self.argument(h & ARG_MASK)?).ok()?;
         String::from_utf8(self.take(len)?.to_vec()).ok()
     }
 
@@ -187,7 +187,7 @@ impl<'a> Decoder<'a> {
         if h >> 5 != MAJOR_TEXT {
             return None;
         }
-        let len = self.argument(h & ARG_MASK)? as usize;
+        let len = usize::try_from(self.argument(h & ARG_MASK)?).ok()?;
         std::str::from_utf8(self.take(len)?).ok()
     }
 
@@ -209,7 +209,7 @@ impl<'a> Decoder<'a> {
             }
             MAJOR_BYTES | MAJOR_TEXT => {
                 let len = self.argument(info)?;
-                self.take(len as usize)?;
+                self.take(usize::try_from(len).ok()?)?;
             }
             MAJOR_ARRAY => {
                 let n = self.argument(info)?;
