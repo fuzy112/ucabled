@@ -122,6 +122,25 @@ jobs:
         [ "$oldest" = "$declared" ] \
           || { echo "toolchain $have is older than the declared MSRV $declared"; exit 1; }
 
+    # Ordering two version strings only compares numbers; actually compiling
+    # with the declared toolchain catches a locked dependency that quietly
+    # raised its own MSRV past ours.
+    - name: Install the declared MSRV toolchain
+      id: msrv
+      run: |
+        set -euo pipefail
+        declared=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+        rustup toolchain install --profile minimal --no-self-update "$declared"
+        echo "declared=$declared" >> "$GITHUB_OUTPUT"
+
+    # The GTK build dependencies come from the flake dev shell; invoke the
+    # rustup shim explicitly so the shell's newer cargo is not used.
+    - name: Compile at the declared MSRV
+      run: |
+        nix develop --command \
+          "$HOME/.cargo/bin/cargo" "+${{ steps.msrv.outputs.declared }}" \
+          check --locked --workspace --all-targets
+
     - name: Build the package
       run: nix build .#ucabled -L
 
