@@ -172,18 +172,76 @@ impl DesktopFlow {
 
         let mut tunnel_id = [0u8; 16];
         derive(&self.qr_secret, &[], Purpose::TunnelId, &mut tunnel_id);
-        let mut psk = [0u8; 32];
-        derive(&self.qr_secret, &self.plaintext_eid, Purpose::Psk, &mut psk);
+        // `Zeroizing`: the PSK is needed until both handshake attempts are
+        // done, and the dial or a non-L2CAP handshake can return early.
+        let mut psk = zeroize::Zeroizing::new([0u8; 32]);
+        derive(
+            &self.qr_secret,
+            &self.plaintext_eid,
+            Purpose::Psk,
+            &mut *psk,
+        );
         // The QR secret is no longer needed once the tunnel ID and PSK exist.
         self.qr_secret.zeroize();
 
-        let mut transport = self
+        let transport = self
             .connect_transport(&components, &tunnel_id, command_len)
             .await?;
 
-        let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
-        // The PSK now lives inside the handshake state.
-        psk.zeroize();
+        // Whether the data channel was picked from the BLE advertisement
+        // suffix rather than the tunnel.
+        #[cfg(feature = "l2cap")]
+        let over_l2cap = matches!(transport, CableTransport::L2cap(_));
+        #[cfg(not(feature = "l2cap"))]
+        let over_l2cap = false;
+
+        let mut link = match self.handshake(transport, &psk).await {
+            Ok(link) => link,
+            // The L2CAP channel is selected by the advertisement suffix,
+            // which is outside the EID's authenticated block; a BLE-range
+            // attacker can rebroadcast the phone's EID with their own PSM and
+            // win the first-match race in `ble::scan`.  A handshake failure on
+            // that channel may therefore be channel steering rather than a
+            // phone problem, so retry over the tunnel.  The spec allows the
+            // authenticator to attempt more than one channel from the QR
+            // intersection, and a phone that lost the race is still listening
+            // there.
+            Err(e) if over_l2cap => {
+                tracing::warn!(
+                    "caBLE handshake failed over the L2CAP channel ({e}); the advertised \
+                     PSM is not integrity-protected, so this may be channel steering; \
+                     trying the WebSocket channel"
+                );
+                let transport = self.connect_websocket(&components, &tunnel_id).await?;
+                self.handshake(transport, &psk).await?
+            }
+            Err(e) => return Err(e),
+        };
+
+        let handshake_hash = link.handshake_hash;
+        let post_handshake = tokio::time::timeout(POST_HANDSHAKE_TIMEOUT, recv_raw(&mut link))
+            .await
+            .map_err(|_| TransactionError::Timeout)?
+            .map_err(TransactionError::transport)?;
+        tracing::info!(
+            len = post_handshake.len(),
+            "received post-handshake message"
+        );
+
+        Ok(DesktopSession {
+            link,
+            post_handshake,
+            handshake_hash,
+        })
+    }
+
+    /// Run the Noise handshake over an open data channel.
+    async fn handshake(
+        &self,
+        mut transport: CableTransport,
+        psk: &[u8; 32],
+    ) -> Result<CableLink, TransactionError> {
+        let mut handshake = HandshakeInitiator::new_qr(psk, &self.identity);
         let initial = handshake.build_initial_message();
         transport
             .send(initial)
@@ -198,25 +256,9 @@ impl DesktopFlow {
             .process_response(&response)
             .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("caBLE handshake failed")))?;
         tracing::info!("caBLE handshake complete");
-
-        let mut link = CableLink {
+        Ok(CableLink {
             transport,
             crypter,
-            handshake_hash,
-        };
-
-        let post_handshake = tokio::time::timeout(POST_HANDSHAKE_TIMEOUT, recv_raw(&mut link))
-            .await
-            .map_err(|_| TransactionError::Timeout)?
-            .map_err(TransactionError::transport)?;
-        tracing::info!(
-            len = post_handshake.len(),
-            "received post-handshake message"
-        );
-
-        Ok(DesktopSession {
-            link,
-            post_handshake,
             handshake_hash,
         })
     }
