@@ -101,7 +101,9 @@ pub async fn phone_setup(
     derive(qr_secret, &[], Purpose::EidKey, &mut eid_key);
 
     let url = format!("{tunnel_base}/cable/new/{}", hex::encode(tunnel_id));
-    let (ws, response) = tunnel::dial(&url).await?;
+    // This phone stand-in serves only the mock-phone tool and the tests,
+    // which dial the local relay over cleartext ws://.
+    let (ws, response) = tunnel::dial_cleartext(&url).await?;
 
     let routing_id = match routing_id_from_server {
         Some(id) => id,

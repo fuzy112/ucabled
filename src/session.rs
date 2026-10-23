@@ -37,7 +37,10 @@ pub enum Channel {
 }
 
 pub struct DesktopFlow {
-    /// e.g. "wss://cable.ua5v.com" or "ws://127.0.0.1:9000" for tests.
+    /// Test/development override pointing at a local relay (may be
+    /// cleartext `ws://`); production flows leave it `None` and dial the
+    /// EID-selected domain over `wss`.  Never wire this to configuration
+    /// or phone-supplied data.
     pub tunnel_base: Option<String>,
     /// Channel selected from the BLE advert (WebSocket unless it carried a PSM).
     pub channel: Channel,
@@ -260,9 +263,16 @@ impl DesktopFlow {
             hex::encode(tunnel_id)
         );
         tracing::info!("connecting caBLE tunnel");
-        let (ws, _response) = tunnel::dial(&url)
-            .await
-            .map_err(TransactionError::transport)?;
+        // A `tunnel_base` override exists for the local test relay and the
+        // development tools, so it may dial cleartext; the production path
+        // (None) builds a wss:// URL from the EID-selected domain and goes
+        // through the strict entry point that refuses ws://.
+        let dialed = if self.tunnel_base.is_some() {
+            tunnel::dial_cleartext(&url).await
+        } else {
+            tunnel::dial(&url).await
+        };
+        let (ws, _response) = dialed.map_err(TransactionError::transport)?;
         Ok(CableTransport::Websocket(Box::new(ws)))
     }
 }
