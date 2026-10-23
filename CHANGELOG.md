@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0-pre]
 
+### Added
+
+- GitHub releases now carry a source tarball (`ucabled-X.Y.Z.tar.zst`)
+  archived from the signed tag, with a detached GPG signature, alongside
+  the Debian/Ubuntu packages.  GitHub's automatic "Source code" archives
+  are regenerated on demand and stay unsigned.
+
+### Fixed
+
+- Every matching passkey now reaches the browser's account picker.  When
+  the phone answered a sign-in with more than one credential, only the
+  first was relayed and the rest were lost; the follow-up requests now
+  continue on the same caBLE session.
+
+- A stale reply from a cancelled transaction can no longer be delivered
+  as the answer to the next request on the same HID channel.
+
+- Several CTAP-HID state-machine details were tightened: a multi-frame
+  request that arrives while a transaction is in progress is refused
+  instead of overwriting it, truncated multi-frame requests expire after
+  10 seconds even if frames keep trickling in, and the reserved channel
+  0, INIT resynchronization, stray continuation frames and LOCK are
+  answered per the specification.
+
 ### Security
 
 - Each passkey QR code now carries a fresh, per-transaction identity key
@@ -14,12 +38,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
   from the same machine — neither by a phone that scans them nor by
   anyone who records several of them.
 
-### Added
+- The installer pins `PATH` and rejects a `setfacl`/`nologin` resolved
+  through a writable directory before baking it into the root-executed
+  udev rule, so a poisoned environment can no longer turn installation
+  into persistent root code execution.
 
-- GitHub releases now carry a source tarball (`ucabled-X.Y.Z.tar.zst`)
-  archived from the signed tag, with a detached GPG signature, alongside
-  the Debian/Ubuntu packages.  GitHub's automatic "Source code" archives
-  are regenerated on demand and stay unsigned.
+- Release tag verification now compares the signing-key fingerprint
+  against a repository variable, so an account with push access but
+  without the release key can no longer substitute the key stored in the
+  tagged tree.
+
+- The helper contract is v2: the relying party is passed as `--rp
+  <value>` and the transaction URL is only read from stdin, so a relying
+  party identifier cannot flip helper modes and the transaction secret
+  cannot appear in a world-readable command line.
+
+- Agent registration attempts are limited per user instead of per D-Bus
+  connection, so extra connections can no longer multiply the polkit
+  authorization work they cause.
 
 ## [0.2.0] - 2026-10-23
 
@@ -49,7 +85,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `ucable`, and the GTK helper and the GNOME Shell extension now share
   the same catalogs in `po/`.
 
-- Optimize performance.
+- Faster sign-in round trips: the CTAPHID, hidraw and tunnel paths copy
+  less, and the request path parses and allocates less per command.
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into
   `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
   `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
