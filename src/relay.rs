@@ -6,6 +6,7 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
 use rand::rngs::OsRng;
 use std::time::Duration;
+use zeroize::Zeroize;
 
 use crate::ble::{AdvertObservation, BleError};
 use crate::error::TransactionError;
@@ -79,7 +80,7 @@ pub async fn run_qr_transaction(
     // The EID key decrypts only the advertisement, so erase it once the
     // advert wait is over — on every outcome, like the QR secret and PSK.
     let advert = crate::ble::await_advert_full(&eid_key, BLE_ADVERT_TIMEOUT).await;
-    crate::secure_erase(&mut eid_key);
+    eid_key.zeroize();
     let advert = match advert {
         Ok(advert) => advert,
         Err(BleError::Timeout) => return Err(TransactionError::Timeout),

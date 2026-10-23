@@ -4,6 +4,7 @@ use p256::ecdh::diffie_hellman;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
 use rand::rngs::OsRng;
+use zeroize::Zeroize;
 
 use crate::crypter::Crypter;
 use crate::noise::{KN_PSK0_PROTOCOL_NAME, NK_PSK0_PROTOCOL_NAME, Noise};
@@ -107,12 +108,12 @@ impl HandshakeInitiator {
         self.noise.mix_key(&shared_ee);
         // The raw ECDH output is a plain array, not a zeroizing type, so
         // wipe it once it is mixed in.
-        crate::secure_erase(&mut shared_ee);
+        shared_ee.zeroize();
 
         if let Some(identity) = &self.identity {
             let mut shared_se = ecdh(identity, peer_point_bytes)?;
             self.noise.mix_key(&shared_se);
-            crate::secure_erase(&mut shared_se);
+            shared_se.zeroize();
         }
 
         let plaintext = self.noise.decrypt_and_hash(ciphertext)?;
@@ -195,7 +196,7 @@ fn respond_inner(
     if let Some(id) = &identity {
         let mut es = ecdh(id, peer_point_bytes)?;
         noise.mix_key(&es);
-        crate::secure_erase(&mut es);
+        es.zeroize();
     }
 
     let plaintext = noise.decrypt_and_hash(ciphertext)?;
@@ -209,12 +210,12 @@ fn respond_inner(
 
     let mut shared_ee = ecdh(&ephemeral, peer_point_bytes)?;
     noise.mix_key(&shared_ee);
-    crate::secure_erase(&mut shared_ee);
+    shared_ee.zeroize();
 
     if let Some(peer) = peer_identity {
         let mut shared_se = ecdh(&ephemeral, peer)?;
         noise.mix_key(&shared_se);
-        crate::secure_erase(&mut shared_se);
+        shared_se.zeroize();
     }
 
     let my_ciphertext = noise.encrypt_and_hash(&[]);

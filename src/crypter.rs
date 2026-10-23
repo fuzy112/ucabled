@@ -2,6 +2,7 @@
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
+use zeroize::Zeroize;
 
 const PADDING_GRANULARITY: usize = 32;
 /// AES-GCM authentication tag appended to every ciphertext.
@@ -14,12 +15,13 @@ fn padded_size(message_len: usize) -> usize {
     (message_len + 1 + PADDING_GRANULARITY - 1) & !(PADDING_GRANULARITY - 1)
 }
 
+/// The ciphers wipe their expanded AES round keys on drop (the `zeroize`
+/// feature of the `aes` crate), so the raw keys must not be stored: they
+/// are wiped right after the ciphers are built.  The GHASH `H` element
+/// inside `Aes256Gcm` is not wipeable (polyval has no zeroize support),
+/// which is acceptable: recovering the AES key from H = E_K(0) is a
+/// known-plaintext attack on AES itself.
 pub struct Crypter {
-    // The raw keys are kept alongside the ciphers so `Drop` can wipe them;
-    // the ciphers cache the expanded AES key schedule, which would otherwise
-    // be recomputed on every message.
-    read_key: [u8; 32],
-    write_key: [u8; 32],
     read_cipher: Aes256Gcm,
     write_cipher: Aes256Gcm,
     read_seq: u32,
@@ -27,12 +29,14 @@ pub struct Crypter {
 }
 
 impl Crypter {
-    pub fn new(read_key: [u8; 32], write_key: [u8; 32]) -> Self {
+    pub fn new(mut read_key: [u8; 32], mut write_key: [u8; 32]) -> Self {
+        let read_cipher = Aes256Gcm::new((&read_key).into());
+        let write_cipher = Aes256Gcm::new((&write_key).into());
+        read_key.zeroize();
+        write_key.zeroize();
         Self {
-            read_cipher: Aes256Gcm::new((&read_key).into()),
-            write_cipher: Aes256Gcm::new((&write_key).into()),
-            read_key,
-            write_key,
+            read_cipher,
+            write_cipher,
             read_seq: 0,
             write_seq: 0,
         }
@@ -87,13 +91,6 @@ impl Crypter {
         // Strip the padding in place instead of copying the message out.
         plaintext.truncate(plaintext.len() - padding_len - 1);
         Some(plaintext)
-    }
-}
-
-impl Drop for Crypter {
-    fn drop(&mut self) {
-        crate::secure_erase(&mut self.read_key);
-        crate::secure_erase(&mut self.write_key);
     }
 }
 

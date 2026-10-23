@@ -36,6 +36,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   specification requires, instead of relying on L2CAP message
   boundaries.
 
+### Security
+
+- Wipe transaction secrets more thoroughly: the AES ciphers now erase
+  their expanded round keys on drop (the `aes` crate's `zeroize`
+  feature), the HKDF intermediate buffers in the Noise handshake are
+  erased after use, and all hand-written erase calls moved to the
+  `zeroize` crate (already in the dependency tree through p256).
+
 ## [0.1.6] - 2026-10-21
 
 ### Security

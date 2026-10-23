@@ -16,8 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use p256::SecretKey;
 use rand::rngs::OsRng;
-
-use crate::secure_erase;
+use zeroize::Zeroize;
 
 pub const IDENTITY_FILE_NAME: &str = "identity.key";
 
@@ -48,7 +47,7 @@ pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
             // Do not leave the key in a heap buffer; wipe it once parsed.
             let key = SecretKey::from_slice(&bytes)
                 .with_context(|| format!("invalid identity key in {}", path.display()));
-            secure_erase(&mut bytes);
+            bytes.zeroize();
             key
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -58,7 +57,7 @@ pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
             let mut bytes = key.to_bytes();
             let written = write_private(&path, &bytes)
                 .with_context(|| format!("writing identity key to {}", path.display()));
-            secure_erase(&mut bytes[..]);
+            bytes.zeroize();
             written?;
             tracing::info!(path = %path.display(), "generated a new persistent identity key");
             Ok(key)

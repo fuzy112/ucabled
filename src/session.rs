@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use p256::SecretKey;
 use std::time::Duration;
+use zeroize::Zeroize;
 
 use crate::eid;
 use crate::error::TransactionError;
@@ -71,7 +72,7 @@ impl DesktopFlow {
         let mut psk = [0u8; 32];
         derive(&self.qr_secret, &self.plaintext_eid, Purpose::Psk, &mut psk);
         // The QR secret is no longer needed once the tunnel ID and PSK exist.
-        crate::secure_erase(&mut self.qr_secret);
+        self.qr_secret.zeroize();
 
         let mut transport = self
             .connect_transport(&components, &tunnel_id, ctap_command.len())
@@ -79,7 +80,7 @@ impl DesktopFlow {
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
         // The PSK now lives inside the handshake state.
-        crate::secure_erase(&mut psk);
+        psk.zeroize();
         let initial = handshake.build_initial_message();
         transport
             .send(initial)
