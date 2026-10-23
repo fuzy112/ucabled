@@ -177,7 +177,12 @@ fn parse_qr_cbor(data: &[u8]) -> Option<ParsedQr> {
         let key = d.uint()?;
         match key {
             k if k == QR_KEY_PUBLIC_KEY as u64 => {
-                public_key = Some(d.bytes()?.try_into().ok()?);
+                let bytes: [u8; COMPRESSED_PUBLIC_KEY_SIZE] = d.bytes()?.try_into().ok()?;
+                // Chromium's qr::Parse decompresses and validates the point;
+                // 33 well-sized bytes are not necessarily a P-256 point, and a
+                // bad one must be rejected here, not later at ECDH.
+                p256::PublicKey::from_sec1_bytes(&bytes).ok()?;
+                public_key = Some(bytes);
             }
             k if k == QR_KEY_SECRET as u64 => {
                 secret = Some(d.bytes()?.try_into().ok()?);
@@ -233,7 +238,11 @@ mod tests {
 
     #[test]
     fn parse_ignores_transport_channels() {
-        let public_key = [0x11u8; COMPRESSED_PUBLIC_KEY_SIZE];
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let compressed = key.public_key().to_encoded_point(true);
+        let public_key: [u8; COMPRESSED_PUBLIC_KEY_SIZE] =
+            compressed.as_bytes().try_into().unwrap();
         let secret = [0x22u8; QR_SECRET_SIZE];
         let url = encode_qr_url(
             &public_key,
@@ -246,5 +255,24 @@ mod tests {
         let parsed = parse_qr_url(&url).unwrap();
         assert_eq!(parsed.compressed_public_key, public_key);
         assert_eq!(parsed.secret, secret);
+    }
+
+    #[test]
+    fn parse_rejects_a_key_that_is_not_a_curve_point() {
+        // 0x11 is not a valid SEC1 tag for a point; a compressed point whose
+        // x coordinate is not below the field prime is off-curve as well.
+        let mut off_curve = [0xffu8; COMPRESSED_PUBLIC_KEY_SIZE];
+        off_curve[0] = 0x02;
+        for bad_key in [[0x11u8; COMPRESSED_PUBLIC_KEY_SIZE], off_curve] {
+            let url = encode_qr_url(
+                &bad_key,
+                &[0x22u8; QR_SECRET_SIZE],
+                2,
+                false,
+                RequestType::GetAssertion,
+                &[TRANSPORT_WEBSOCKET],
+            );
+            assert!(parse_qr_url(&url).is_none(), "key {bad_key:02x?}");
+        }
     }
 }
