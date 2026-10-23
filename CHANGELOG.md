@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0-pre]
 
+### Security
+
+- Each passkey QR code now carries a fresh, per-transaction identity key
+  instead of the installation's persistent one, matching Chromium.  QR
+  codes shown by one installation can no longer be recognised as coming
+  from the same machine — neither by a phone that scans them nor by
+  anyone who records several of them.
+
 ### Added
 
 - GitHub releases now carry a source tarball (`ucabled-X.Y.Z.tar.zst`)

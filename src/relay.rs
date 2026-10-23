@@ -41,16 +41,17 @@ fn ble_channel_enabled() -> bool {
 /// `on_qr` is invoked with the QR contents once; the caller decides how to
 /// present it (terminal, GTK window, ...). `on_advert` is invoked when the
 /// phone's BLE advert has been received, so the UI can stop waiting.
-///
-/// `identity` is the daemon's persistent identity key (see
-/// [`crate::identity`]); its public key goes into the QR code.
 pub async fn run_qr_transaction(
     ctap_command: &[u8],
     request_type: RequestType,
-    identity: &SecretKey,
     on_qr: impl FnOnce(&str),
     on_advert: impl FnOnce(),
 ) -> Result<Vec<u8>, TransactionError> {
+    // Fresh identity per transaction, like Chromium (a fresh random QR key
+    // per WebAuthn ceremony, `crypto::RandBytes` in ConfigureDiscoveries):
+    // a persistent identity would make every QR code from this desktop
+    // linkable by whoever sees them and by the phone.
+    let identity = SecretKey::random(&mut OsRng);
     let compressed = identity.public_key().to_encoded_point(true);
     let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
 
@@ -95,7 +96,7 @@ pub async fn run_qr_transaction(
         tunnel_base: None,
         channel,
         qr_secret,
-        identity: identity.clone(),
+        identity,
         plaintext_eid: advert.plaintext_eid,
         handshake_timeout: crate::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: crate::tunnel::DIAL_TIMEOUT,
