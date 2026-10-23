@@ -53,27 +53,33 @@ const REGISTER_TIMEOUT: Duration = Duration::from_secs(25);
 /// so a hung polkit cannot stall a transaction for long.
 const RECHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Minimum spacing between RegisterAgent attempts from one sender.  Every
+/// Minimum spacing between RegisterAgent attempts from one uid.  Every
 /// attempt costs a polkit round trip and any local uid may call, so an
-/// unauthenticated flood would otherwise spam polkitd.  Legitimate agents
-/// register once per session; the agent's 2s retry loop stays well clear of
-/// this interval.
+/// unauthenticated flood would otherwise spam polkitd; keying on the uid
+/// (resolved once per connection, see [`SenderUids`]) keeps extra
+/// connections of one uid from multiplying that budget.  Legitimate
+/// agents register once per session; the agent's 2s retry loop stays well
+/// clear of this interval.
 const REGISTER_MIN_INTERVAL: Duration = Duration::from_secs(1);
-/// Bound on remembered senders, so a crowd of unique names cannot grow the
-/// limiter without bound; at capacity the oldest entry is evicted.
+/// Bound on remembered uids, so a crowd of them cannot grow the limiter
+/// without bound; at capacity the oldest entry is evicted.
 const REGISTER_LIMITER_MAX: usize = 64;
+/// Bound on cached connection uids, so a uid that opens many system-bus
+/// connections cannot grow the map without bound; at capacity an arbitrary
+/// entry is dropped and re-resolved on its next call.
+const SENDER_UIDS_MAX: usize = 64;
 
-/// Per-sender rate limit for RegisterAgent.
+/// Per-uid rate limit for RegisterAgent.
 #[derive(Default)]
 struct RegisterLimiter {
-    last: HashMap<String, Instant>,
+    last: HashMap<u32, Instant>,
 }
 
 impl RegisterLimiter {
-    /// Whether `sender` may attempt a registration at `now`; an allowed
+    /// Whether `uid` may attempt a registration at `now`; an allowed
     /// attempt is recorded.
-    fn check(&mut self, sender: &str, now: Instant) -> bool {
-        if let Some(last) = self.last.get_mut(sender) {
+    fn check(&mut self, uid: u32, now: Instant) -> bool {
+        if let Some(last) = self.last.get_mut(&uid) {
             if now.duration_since(*last) < REGISTER_MIN_INTERVAL {
                 return false;
             }
@@ -85,12 +91,44 @@ impl RegisterLimiter {
                 .last
                 .iter()
                 .min_by_key(|(_, at)| *at)
-                .map(|(name, _)| name.clone())
+                .map(|(uid, _)| *uid)
         {
             self.last.remove(&oldest);
         }
-        self.last.insert(sender.to_string(), now);
+        self.last.insert(uid, now);
         true
+    }
+}
+
+/// uids resolved for unique bus names, so one connection costs a single
+/// GetConnectionUnixUser (not one per registration attempt and another after
+/// polkit).  The routing task evicts an entry when its name vanishes
+/// (NameOwnerChanged with an empty new owner), and a live unique name never
+/// changes uid, so an entry can only go stale after the name is gone — where
+/// it is no longer reachable.  The map is bounded: callers may open many
+/// connections, and a cache miss only costs one more lookup.
+#[derive(Default)]
+struct SenderUids {
+    map: HashMap<String, u32>,
+}
+
+impl SenderUids {
+    fn get(&self, sender: &str) -> Option<u32> {
+        self.map.get(sender).copied()
+    }
+
+    fn insert(&mut self, sender: &str, uid: u32) {
+        if !self.map.contains_key(sender)
+            && self.map.len() >= SENDER_UIDS_MAX
+            && let Some(victim) = self.map.keys().next().cloned()
+        {
+            self.map.remove(&victim);
+        }
+        self.map.insert(sender.to_string(), uid);
+    }
+
+    fn evict(&mut self, sender: &str) {
+        self.map.remove(sender);
     }
 }
 
@@ -252,6 +290,7 @@ pub fn start(
     select_tx: mpsc::Sender<(u64, bool)>,
 ) -> Result<AgentClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
+    let sender_uids = Arc::new(Mutex::new(SenderUids::default()));
     let (tx, rx) = mpsc::unbounded_channel();
 
     let (resource, conn) =
@@ -261,7 +300,13 @@ pub fn start(
         tracing::error!("system bus connection lost: {err}");
     });
 
-    let crossroads = build_crossroads(&slot, cancel_tx.clone(), select_tx, conn.clone());
+    let crossroads = build_crossroads(
+        &slot,
+        cancel_tx.clone(),
+        select_tx,
+        conn.clone(),
+        &sender_uids,
+    );
     let streams = handle.block_on(register_on_bus(&conn))?;
 
     handle.spawn(route_messages(
@@ -270,6 +315,7 @@ pub fn start(
         streams,
         slot.clone(),
         cancel_tx.clone(),
+        sender_uids,
     ));
     handle.spawn(dispatch_commands(conn, rx, slot.clone(), cancel_tx.clone()));
 
@@ -280,16 +326,14 @@ pub fn start(
     })
 }
 
-/// Check whether `sender` may act as the UI agent, returning its uid.
+/// Check whether `sender` may act as the UI agent.
 ///
 /// Runs on the daemon's existing bus connection over the async API, so it
 /// neither opens a new connection nor blocks a worker thread; the caller
-/// awaits it.  Only the machine-local polkit round trip is on the path.
-async fn authorize(
-    conn: &Arc<SyncConnection>,
-    sender: &str,
-    timeout: Duration,
-) -> Result<Option<u32>> {
+/// awaits it.  Only the machine-local polkit round trip is on the path.  The
+/// uid is resolved separately (and cached), because polkit identifies the
+/// caller by unique name, not by uid.
+async fn authorize(conn: &Arc<SyncConnection>, sender: &str, timeout: Duration) -> Result<bool> {
     let mut details: PropMap = PropMap::new();
     let value: Box<dyn RefArg + 'static> = Box::new(sender.to_string());
     details.insert("name".to_string(), Variant(value));
@@ -313,18 +357,17 @@ async fn authorize(
         .await
         .context("polkit CheckAuthorization")?;
 
-    if !authorized {
-        return Ok(None);
-    }
+    Ok(authorized)
+}
 
+/// Resolve the unix uid of the connection holding `sender`.
+async fn connection_uid(conn: &Arc<SyncConnection>, sender: &str) -> Result<u32> {
     let dbus = Proxy::new(DBUS_BUS, DBUS_PATH, Duration::from_secs(5), conn.clone());
-    // A failure here means we cannot tell which user we just authorized; do not
-    // register with a fabricated uid, refuse the registration instead.
     let (uid,): (u32,) = dbus
         .method_call(DBUS_INTERFACE, "GetConnectionUnixUser", (sender,))
         .await
         .context("GetConnectionUnixUser")?;
-    Ok(Some(uid))
+    Ok(uid)
 }
 
 type MatchStream = (MsgMatch, MessageReceiver<Message>);
@@ -362,8 +405,10 @@ fn build_crossroads(
     cancel_tx: mpsc::Sender<CancelRequest>,
     select_tx: mpsc::Sender<(u64, bool)>,
     conn: Arc<SyncConnection>,
+    sender_uids: &Arc<Mutex<SenderUids>>,
 ) -> Crossroads {
     let limiter = Arc::new(Mutex::new(RegisterLimiter::default()));
+    let sender_uids = sender_uids.clone();
     let mut crossroads = Crossroads::new();
     // Registration authorizes through polkit over the async bus API, so the
     // crossroads must be able to spawn the method's future.
@@ -379,6 +424,7 @@ fn build_crossroads(
             let register_slot = slot.clone();
             let register_conn = conn.clone();
             let register_limiter = limiter.clone();
+            let register_uids = sender_uids.clone();
             builder.method_with_cr_async(
                 "RegisterAgent",
                 ("path",),
@@ -387,12 +433,36 @@ fn build_crossroads(
                     let slot = register_slot.clone();
                     let conn = register_conn.clone();
                     let limiter = register_limiter.clone();
+                    let sender_uids = register_uids.clone();
                     async move {
                         let Some(sender) = ctx.message().sender().map(|s| s.to_string()) else {
                             return ctx.reply(Err(MethodErr::failed(&"missing sender")));
                         };
-                        if !limiter.lock().unwrap().check(&sender, Instant::now()) {
-                            tracing::warn!(%sender, "agent registration rate-limited");
+                        // Resolve the caller's uid before any polkit work: the
+                        // limit is per uid, so extra connections from one
+                        // account share a single budget instead of
+                        // multiplying the polkit round trips.  A uid cannot
+                        // change for a live unique name, so caching it is
+                        // safe; route_messages evicts the entry when the name
+                        // disappears.
+                        let cached_uid = { sender_uids.lock().unwrap().get(&sender) };
+                        let uid = match cached_uid {
+                            Some(uid) => uid,
+                            None => match connection_uid(&conn, &sender).await {
+                                Ok(uid) => {
+                                    sender_uids.lock().unwrap().insert(&sender, uid);
+                                    uid
+                                }
+                                Err(e) => {
+                                    tracing::warn!(%sender, "cannot resolve caller uid: {e:#}");
+                                    return ctx.reply(Err(MethodErr::failed(
+                                        &"cannot resolve caller uid",
+                                    )));
+                                }
+                            },
+                        };
+                        if !limiter.lock().unwrap().check(uid, Instant::now()) {
+                            tracing::warn!(%sender, uid, "agent registration rate-limited");
                             return ctx.reply(Err(MethodErr::from((
                                 "org.freedesktop.DBus.Error.LimitsExceeded",
                                 "too many registration attempts",
@@ -406,22 +476,29 @@ fn build_crossroads(
                                     .reply(Err(MethodErr::failed(&"authorization check failed")));
                             }
                         };
-                        let Some(uid) = authorized else {
+                        if !authorized {
                             tracing::warn!(%sender, "agent registration denied by polkit");
                             return ctx.reply(Err(MethodErr::from((
                                 ERR_NOT_AUTHORIZED,
                                 "only the active local session may register an agent",
                             ))));
-                        };
+                        }
+                        let authorized_uid = uid;
                         let mut guard = slot.lock().unwrap();
                         guard.generation += 1;
                         let generation = guard.generation;
                         guard.current = Some(Agent {
                             destination: sender.clone(),
                             path: path.to_string(),
-                            uid,
+                            uid: authorized_uid,
                         });
-                        tracing::info!(%sender, %path, uid, generation, "agent registered");
+                        tracing::info!(
+                            %sender,
+                            uid = authorized_uid,
+                            %path,
+                            generation,
+                            "agent registered"
+                        );
                         ctx.reply(Ok(()))
                     }
                 },
@@ -506,6 +583,7 @@ async fn route_messages(
     streams: MatchStreams,
     slot: Arc<Mutex<AgentSlot>>,
     cancel_tx: mpsc::Sender<CancelRequest>,
+    sender_uids: Arc<Mutex<SenderUids>>,
 ) {
     let (_method_match, mut methods) = streams.methods;
     let (_signal_match, mut signals) = streams.signals;
@@ -518,8 +596,12 @@ async fn route_messages(
             sig = signals.next() => {
                 let Some(sig) = sig else { break };
                 if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>()
-                    && new_owner.is_empty()
-                        && let Some(generation) = clear_if_matches(&slot, Some(&name)) {
+                    && new_owner.is_empty() {
+                        // The name is gone for good, so its cached uid can
+                        // never be used again; drop it so a long-lived bus
+                        // does not accumulate one entry per vanished peer.
+                        sender_uids.lock().unwrap().evict(&name);
+                        if let Some(generation) = clear_if_matches(&slot, Some(&name)) {
                             // Awaited delivery: this is the backstop that
                             // frees the shared HID channel and must not be
                             // lost to a momentarily full queue.
@@ -527,6 +609,7 @@ async fn route_messages(
                                 .send(CancelRequest::AgentGone(generation))
                                 .await;
                         }
+                }
             }
         }
     }
@@ -710,10 +793,10 @@ enum Recheck {
     Inconclusive,
 }
 
-fn recheck(result: &Result<Option<u32>>) -> Recheck {
+fn recheck(result: &Result<bool>) -> Recheck {
     match result {
-        Ok(Some(_)) => Recheck::Authorized,
-        Ok(None) => Recheck::Denied,
+        Ok(true) => Recheck::Authorized,
+        Ok(false) => Recheck::Denied,
         Err(_) => Recheck::Inconclusive,
     }
 }
@@ -819,11 +902,32 @@ mod tests {
     }
 
     #[test]
+    fn sender_uid_cache_is_bounded_and_keeps_existing_entries() {
+        let mut uids = SenderUids::default();
+        uids.insert(":1.1", 1000);
+        assert_eq!(uids.get(":1.1"), Some(1000));
+
+        for i in 0..SENDER_UIDS_MAX + 10 {
+            uids.insert(&format!(":1.{}", i + 2), 1001);
+        }
+        assert_eq!(uids.map.len(), SENDER_UIDS_MAX);
+
+        // Updating a cached sender must not evict another entry.
+        let existing = uids.map.keys().next().unwrap().clone();
+        uids.insert(&existing, 7);
+        assert_eq!(uids.map.len(), SENDER_UIDS_MAX);
+        assert_eq!(uids.get(&existing), Some(7));
+
+        uids.evict(&existing);
+        assert_eq!(uids.get(&existing), None);
+    }
+
+    #[test]
     fn recheck_distinguishes_denial_from_failure() {
         use Recheck::*;
-        assert_eq!(recheck(&Ok(Some(1000))), Authorized);
+        assert_eq!(recheck(&Ok(true)), Authorized);
         // A definite denial means the session is no longer active.
-        assert_eq!(recheck(&Ok(None)), Denied);
+        assert_eq!(recheck(&Ok(false)), Denied);
         // An inconclusive check (bus/polkit failure) must not be treated as
         // a denial, or a hiccup would deregister a healthy agent.
         assert_eq!(
@@ -863,28 +967,31 @@ mod tests {
     }
 
     #[test]
-    fn register_limiter_throttles_per_sender() {
+    fn register_limiter_throttles_per_uid() {
         let mut limiter = RegisterLimiter::default();
         let t0 = Instant::now();
-        assert!(limiter.check(":1.1", t0));
-        assert!(!limiter.check(":1.1", t0 + Duration::from_millis(100)));
-        // Another sender is unaffected.
-        assert!(limiter.check(":1.2", t0 + Duration::from_millis(100)));
-        // After the interval the same sender may try again, and a denied
+        assert!(limiter.check(1000, t0));
+        assert!(!limiter.check(1000, t0 + Duration::from_millis(100)));
+        // Extra connections from the same uid share the bucket, so a second
+        // connection cannot multiply the polkit round trips.
+        assert!(!limiter.check(1000, t0 + Duration::from_millis(100)));
+        // Another uid is unaffected.
+        assert!(limiter.check(1001, t0 + Duration::from_millis(100)));
+        // After the interval the same uid may try again, and a denied
         // attempt does not push the window out.
-        assert!(limiter.check(":1.1", t0 + REGISTER_MIN_INTERVAL));
+        assert!(limiter.check(1000, t0 + REGISTER_MIN_INTERVAL));
     }
 
     #[test]
-    fn register_limiter_bounds_remembered_senders() {
+    fn register_limiter_bounds_remembered_uids() {
         let mut limiter = RegisterLimiter::default();
         let t0 = Instant::now();
-        for i in 0..REGISTER_LIMITER_MAX {
-            assert!(limiter.check(&format!(":1.{i}"), t0));
+        for uid in 0..REGISTER_LIMITER_MAX as u32 {
+            assert!(limiter.check(uid, t0));
         }
         assert_eq!(limiter.last.len(), REGISTER_LIMITER_MAX);
-        // A new sender evicts the oldest entry instead of growing the map.
-        assert!(limiter.check(":1.new", t0));
+        // A new uid evicts the oldest entry instead of growing the map.
+        assert!(limiter.check(9999, t0));
         assert_eq!(limiter.last.len(), REGISTER_LIMITER_MAX);
     }
 }
