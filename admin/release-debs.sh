@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Build, sign and upload the Debian packages for a release.  The packages
-# are built locally with `nix run .#deb` (real Debian/Ubuntu toolchains in
-# containers), signed with the maintainer's own GPG key as detached
-# signatures and uploaded to the GitHub release that the Release workflow
-# created from the signed tag.  Building in CI instead would either put a
-# private key on the runners or ship unsigned binaries; keeping the whole
-# chain local extends the tag's trust to the artifacts.
+# Build, sign and upload the release artifacts for a release.  The Debian
+# packages are built locally with `nix run .#deb` (real Debian/Ubuntu
+# toolchains in containers), and the source tarball comes from
+# `git archive` on the tag; everything is signed with the maintainer's own
+# GPG key as detached signatures and uploaded to the GitHub release that
+# the Release workflow created from the signed tag.  Building in CI
+# instead would either put a private key on the runners or ship unsigned
+# binaries; keeping the whole chain local extends the tag's trust to the
+# artifacts.
+#
+# The uploaded tarball is the stable, signed source download.  GitHub's
+# automatic "Source code" archives are regenerated on demand and their
+# bytes are not guaranteed stable (a compression change rewrote every
+# archive hash in January 2023), so they cannot carry a meaningful
+# signature and stay unsigned.
 #
 # Run after admin/release.sh: push the branches and the tag, wait for the
 # Release workflow to publish the release, then run this from master (which
@@ -35,8 +43,9 @@ version=${tag#v}
 # The container build packages the working tree, so it must be exactly the
 # tagged release commit -- a dirty tree would leak into the .deb contents.
 [ -z "$(git status --porcelain)" ] || die "working tree is not clean"
-command -v gpg >/dev/null || die "gpg not found; it is needed to sign the packages"
+command -v gpg >/dev/null || die "gpg not found; it is needed to sign the artifacts"
 command -v gh >/dev/null || die "gh not found; it is needed to upload the assets"
+command -v zstd >/dev/null || die "zstd not found; it is needed to pack the source tarball"
 gh release view "$tag" >/dev/null 2>&1 \
     || die "GitHub release $tag does not exist yet; push the tag and wait for the Release workflow"
 
@@ -64,6 +73,16 @@ for distro in debian13 ubuntu26.04; do
         assets+=("$renamed" "$renamed.asc")
     done
 done
+
+# The source tarball, archived from the signed tag itself.  `git archive`
+# output is deterministic for a given commit, and zstd frames carry no
+# timestamp or original name, so re-running this script produces
+# byte-identical tarballs.
+tarball=$out/ucabled-$version.tar.zst
+git archive --format=tar --prefix="ucabled-$version/" "$tag" \
+    | zstd -19 >"$tarball"
+gpg --armor --detach-sign "$tarball"
+assets+=("$tarball" "$tarball.asc")
 
 gh release upload --clobber "$tag" "${assets[@]}"
 

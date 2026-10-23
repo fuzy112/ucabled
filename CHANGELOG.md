@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0-pre]
 
+### Added
+
+- GitHub releases now carry a source tarball (`ucabled-X.Y.Z.tar.zst`)
+  archived from the signed tag, with a detached GPG signature, alongside
+  the Debian/Ubuntu packages.  GitHub's automatic "Source code" archives
+  are regenerated on demand and stay unsigned.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

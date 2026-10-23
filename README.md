@@ -410,11 +410,15 @@ argument to choose another).  Push `master`, `next` and `website` first and
 wait for their checks, then push the tag.
 `.github/workflows/release.yml` checks tag/manifest/changelog consistency and
 the tag signature, then publishes the GitHub release with the changelog
-section as notes.  The Debian packages are then built, signed and uploaded
-locally by `admin/release-debs.sh`: it takes the version from the tag on
-HEAD, runs `nix run .#deb -- all`, signs each .deb with a detached
-GPG signature and uploads the assets to the release.  Keeping this step
-local means the signing key never leaves the maintainer's machine.
+section as notes.  The release artifacts are then built, signed and
+uploaded locally by `admin/release-debs.sh`: it takes the version from
+the tag on HEAD, runs `nix run .#deb -- all`, packs the source tarball
+with `git archive` on the tag, signs each artifact with a detached GPG
+signature and uploads everything to the release.  The uploaded tarball is
+the stable, signed source download; GitHub's automatic "Source code"
+archives are regenerated on demand, their bytes are not guaranteed
+stable, and they stay unsigned.  Keeping this step local means the
+signing key never leaves the maintainer's machine.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell

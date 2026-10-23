@@ -377,10 +377,13 @@ nix flake check
 指定）。先推送 `master`、`next` 和 `website` 并等待相应检查通过，再推送标签。
 `.github/workflows/release.yml` 会检查标签/manifest/changelog 的一致性以及
 标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
-随后由 `admin/release-debs.sh` 在本地构建、签名并上传 Debian 包：
-版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，为每个
-.deb 生成 GPG 分离签名，并把资产上传到该 release。这一步留在本地执行，
-签名密钥就不会离开维护者的机器。
+随后由 `admin/release-debs.sh` 在本地构建、签名并上传发布产物：
+版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，并用
+`git archive` 从 tag 打包源码 tarball，为每个产物生成 GPG
+分离签名后上传到该 release。上传的 tarball 是稳定且带签名的源码
+下载；GitHub 自动生成的 "Source code" 归档是按需重新生成的，字节
+内容不保证稳定，因此保持不签名。这一步留在本地执行，签名密钥就
+不会离开维护者的机器。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
 （以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加
