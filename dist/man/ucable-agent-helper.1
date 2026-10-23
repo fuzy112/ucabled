@@ -4,6 +4,7 @@
 ucable\-agent\-helper \- QR code and device\-selection window for ucabled
 .SH SYNOPSIS
 .B ucable\-agent\-helper
+.RB [ \-\-rp " RP" ]
 .RB [ \-\-select ]
 .RB [ \-\-layer\-shell ]
 .RB [ \-\-timeout " SECS" ]
@@ -22,7 +23,16 @@ renders it as a QR code; a later
 line blurs the code and asks the user to confirm on the phone.
 In select mode it asks whether to use the phone instead of another connected
 security key.
+.PP
+The URL is a per-transaction secret, so it only ever travels over standard
+input.  Everything on the command line is display-only and world-readable
+via /proc; unknown arguments, including any FIDO:/ URL, are ignored.
 .SH OPTIONS
+.TP
+.BI \-\-rp " RP"
+Show the relying party
+.I RP
+above the QR code.  Display-only.
 .TP
 .B \-\-select
 Show the device\-selection window instead of the QR window.

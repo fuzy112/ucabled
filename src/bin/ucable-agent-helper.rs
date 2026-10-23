@@ -125,23 +125,38 @@ struct Options {
     timeout: Duration,
     rp: Option<String>,
     layer_shell: bool,
-    url: Option<String>,
     request_type: Option<RequestKind>,
 }
 
-fn parse_args() -> Options {
+/// Outcome of parsing argv: run the UI, or answer the standard informational
+/// options and exit.
+enum ParsedArgs {
+    Run(Options),
+    Help,
+    Version,
+}
+
+fn parse_args<I>(args: I) -> ParsedArgs
+where
+    I: IntoIterator<Item = String>,
+{
     let mut opts = Options {
         select: false,
         timeout: Duration::from_secs(300),
         rp: None,
         layer_shell: env_truthy("UCABLED_HELPER_LAYER_SHELL"),
-        url: None,
         request_type: None,
     };
 
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // Informational options are parsed here rather than in a separate
+            // pre-scan, so a value-taking option consumes them first: an RP
+            // that happens to be `--help` (or any other flag-looking string)
+            // is data, never an option.
+            "-h" | "--help" => return ParsedArgs::Help,
+            "-V" | "--version" => return ParsedArgs::Version,
             "--select" => opts.select = true,
             "--layer-shell" => opts.layer_shell = true,
             "--timeout" => {
@@ -154,6 +169,15 @@ fn parse_args() -> Options {
                     opts.request_type = RequestKind::from_wire(&value);
                 }
             }
+            "--rp" => {
+                if let Some(value) = args.next() {
+                    opts.rp = Some(value);
+                }
+            }
+            // Anything else is ignored: argv is display-only by contract.
+            // In particular a FIDO:/ argument is *not* accepted as the URL —
+            // stdin is the only channel for it, so the transaction secret
+            // can never sit in a world-readable /proc/<pid>/cmdline.
             _ => {
                 if let Some(secs) = arg
                     .strip_prefix("--timeout=")
@@ -162,17 +186,14 @@ fn parse_args() -> Options {
                     opts.timeout = Duration::from_secs(secs);
                 } else if let Some(value) = arg.strip_prefix("--request-type=") {
                     opts.request_type = RequestKind::from_wire(value);
-                } else if arg.starts_with("FIDO:/") && opts.url.is_none() {
-                    // Historical tolerance; the contract sends the URL on stdin.
-                    opts.url = Some(arg);
-                } else if !arg.starts_with('-') && opts.rp.is_none() {
-                    opts.rp = Some(arg);
+                } else if let Some(value) = arg.strip_prefix("--rp=") {
+                    opts.rp = Some(value.to_string());
                 }
             }
         }
     }
 
-    opts
+    ParsedArgs::Run(opts)
 }
 
 fn env_truthy(name: &str) -> bool {
@@ -554,7 +575,7 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     content.append(&stack);
     set_window_content(window, &content, layer_shell);
 
-    watch_stdin(picture, caption, stack.clone(), opts.url.clone());
+    watch_stdin(picture, caption, stack.clone());
 
     if !opts.timeout.is_zero() {
         let stack = stack.clone();
@@ -576,12 +597,7 @@ fn found_caption() -> String {
 
 /// Fill the QR once the URL arrives on stdin, and blur the code when the
 /// daemon reports `found`.
-fn watch_stdin(
-    picture: gtk::Picture,
-    caption: gtk::Label,
-    stack: gtk::Stack,
-    initial_url: Option<String>,
-) {
+fn watch_stdin(picture: gtk::Picture, caption: gtk::Label, stack: gtk::Stack) {
     let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     {
@@ -598,12 +614,6 @@ fn watch_stdin(
     }
 
     let mut got_url = false;
-    if let Some(url) = initial_url {
-        if let Some(texture) = qr_texture(&url) {
-            picture.set_paintable(Some(&texture));
-        }
-        got_url = true;
-    }
 
     glib::timeout_add_local(Duration::from_millis(50), move || {
         let mut pending = queue.lock().unwrap();
@@ -721,40 +731,41 @@ fn activate(app: &gtk::Application, opts: Options) {
     window.present();
 }
 
-fn main() {
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                println!(
-                    "ucable-agent-helper {} — QR/selection window for ucable-agent\n\
-                     \n\
-                     Usage: ucable-agent-helper [RP] [--select] [--layer-shell]\n\
-                     \x20                            [--timeout SECS] [--request-type mc|ga]\n\
-                     \n\
-                     The caBLE URL is read from the first stdin line; a later\n\
-                     \"found\" line blurs the code and asks to confirm on the\n\
-                     phone. In --select mode the exit status answers:\n\
-                     \x20 0 = use the phone, 1 = decline.\n\
-                     \n\
-                     Environment:\n\
-                     \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
-                     \n\
-                     Options:\n\
-                     \x20 -h, --help     print this help\n\
-                     \x20 -V, --version  print the version",
-                    env!("CARGO_PKG_VERSION")
-                );
-                std::process::exit(0);
-            }
-            "-V" | "--version" => {
-                println!("ucable-agent-helper {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
-            }
-            _ => {}
-        }
-    }
+fn print_help() {
+    println!(
+        "ucable-agent-helper {} — QR/selection window for ucable-agent\n\
+         \n\
+         Usage: ucable-agent-helper [--rp RP] [--select] [--layer-shell]\n\
+         \x20                            [--timeout SECS] [--request-type mc|ga]\n\
+         \n\
+         The caBLE URL is read from the first stdin line (never\n\
+         argv: the URL is a secret and argv is world-readable);\n\
+         a later \"found\" line blurs the code and asks to confirm\n\
+         on the phone. In --select mode the exit status answers:\n\
+         \x20 0 = use the phone, 1 = decline.\n\
+         \n\
+         Environment:\n\
+         \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
+         \n\
+         Options:\n\
+         \x20 -h, --help     print this help\n\
+         \x20 -V, --version  print the version",
+        env!("CARGO_PKG_VERSION")
+    );
+}
 
-    let opts = parse_args();
+fn main() {
+    let opts = match parse_args(std::env::args().skip(1)) {
+        ParsedArgs::Help => {
+            print_help();
+            return;
+        }
+        ParsedArgs::Version => {
+            println!("ucable-agent-helper {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        ParsedArgs::Run(opts) => opts,
+    };
     init_i18n();
 
     let app = gtk::Application::builder()
@@ -813,6 +824,67 @@ mod tests {
             scan_caption(RequestKind::from_wire("weird")),
             "Scan with your phone"
         );
+    }
+
+    #[test]
+    fn flag_shaped_rp_values_are_data_not_options() {
+        let layer_shell_default = env_truthy("UCABLED_HELPER_LAYER_SHELL");
+        for rp in [
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+            "--select",
+            "--layer-shell",
+        ] {
+            // Both spellings must consume the next token as the RP value.
+            for args in [
+                vec!["--rp".to_string(), rp.to_string()],
+                vec![format!("--rp={rp}")],
+            ] {
+                match parse_args(args) {
+                    ParsedArgs::Run(opts) => {
+                        assert_eq!(opts.rp.as_deref(), Some(rp), "RP {rp} was not kept");
+                        assert!(!opts.select, "RP {rp} flipped --select");
+                        assert_eq!(opts.layer_shell, layer_shell_default);
+                    }
+                    _ => panic!("RP {rp} was parsed as an informational option"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bare_informational_options_still_win() {
+        assert!(matches!(
+            parse_args(["--help".to_string()]),
+            ParsedArgs::Help
+        ));
+        assert!(matches!(
+            parse_args(["-V".to_string()]),
+            ParsedArgs::Version
+        ));
+        assert!(matches!(
+            parse_args(["--select".to_string(), "-h".to_string()]),
+            ParsedArgs::Help
+        ));
+    }
+
+    #[test]
+    fn options_after_the_rp_are_parsed() {
+        match parse_args([
+            "--rp".to_string(),
+            "example.com".to_string(),
+            "--select".to_string(),
+            "--timeout=7".to_string(),
+        ]) {
+            ParsedArgs::Run(opts) => {
+                assert_eq!(opts.rp.as_deref(), Some("example.com"));
+                assert!(opts.select);
+                assert_eq!(opts.timeout, Duration::from_secs(7));
+            }
+            _ => panic!("expected run options"),
+        }
     }
 
     #[test]

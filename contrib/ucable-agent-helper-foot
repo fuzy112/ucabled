@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Minimal ucable-agent helper (Contract v1) built on the foot terminal.
+# Minimal ucable-agent helper (Contract v2) built on the foot terminal.
 # Dependencies: foot, qrencode, bash.
 #
 # Select with:
@@ -11,6 +11,9 @@
 # Contract notes:
 # - The caBLE URL arrives on stdin and is only ever piped into qrencode
 #   inside the terminal; it never touches argv, logs, or the filesystem.
+# - argv is display-only: the RP arrives as `--rp <value>`, and anything
+#   else — in particular a FIDO:/ argument — is ignored. stdin is the only
+#   URL channel.
 # - foot attaches its child to a pty, so the agent's stdin pipe cannot be
 #   read from inside the terminal directly. A 0600 FIFO under
 #   $XDG_RUNTIME_DIR forwards the stream; a FIFO stores nothing on disk,
@@ -33,8 +36,11 @@ while [ $# -gt 0 ]; do
         --select) mode=select ;;
         --timeout) timeout_s=$2; shift ;;
         --request-type) rtype=$2; shift ;;
-        FIDO:/*) ;; # legacy tolerance: the URL belongs on stdin, ignore
-        *) rp=$1 ;;
+        --rp) rp=$2; shift ;;
+        --rp=*) rp=${1#--rp=} ;;
+        # argv is display-only; anything unknown (in particular a FIDO:/
+        # URL, which must only ever arrive on stdin) is ignored.
+        *) ;;
     esac
     shift
 done

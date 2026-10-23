@@ -1,4 +1,4 @@
-# UI helper 进程契约（Contract v1）
+# UI helper 进程契约（Contract v2）
 
 > 状态：已实现。契约以 `src/bin/ucable-agent.rs`（发现与调用方）与
 > `src/bin/ucable-agent-helper.rs`（自带参考实现）的当前行为为准。
@@ -51,11 +51,14 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
 ### 3.1 QR 模式
 
 ```
-<helper> [RP] --timeout <SECS> [--request-type <mc|ga>]
+<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>]
 ```
 
-- `RP`：可选的位置参数，依赖方（relying party）域名字符串，**仅用于显示**
-  （参考实现把它画在标题下方）。agent 只在其非空时传入。
+- `--rp <RP>`：可选的**带值选项**，依赖方（relying party）域名字符串，
+  **仅用于显示**（参考实现把它画在标题下方）。agent 只在其非空时传入。
+  RP 来自 CTAP 载荷、内容不受信，因此必须以选项值的形式传递（参考实现
+  也接受 `--rp=<RP>`），而不是位置参数——位置参数会让以 `-` 开头的值
+  被误解析为标志位。
 - `--timeout <SECS>`：十进制秒数，agent 原样透传守护进程给出的超时值。
 - `--request-type <mc|ga>`：本次转发的 CTAP 命令，`mc` 对应
   `authenticatorMakeCredential`（在手机上保存通行密钥），`ga` 对应
@@ -65,6 +68,12 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
   的 helper 忽略即可，此时文案应退化为不涉及操作类型的说法。该值不是秘密，
   可以显示。
 
+> **argv 整体仅用于显示。** argv 上的所有内容都是非秘密的展示数据
+> （RP、超时、请求类型），任何本地用户都能通过 `/proc/<pid>/cmdline`
+> 读到。caBLE URL **绝不**经 argv 传递（见 §4）：helper 必须忽略 argv
+> 上任何形如 `FIDO:/…` 的参数，也不得提供任何从 argv 接收 URL 的
+> 备用通道。
+
 ### 3.2 Select 模式
 
 ```
@@ -72,10 +81,7 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
 ```
 
 - 用于"检测到另一把安全密钥，是否改用手机"的选择窗口。
-- 没有 RP 位置参数，也没有 `--request-type`：该窗口与具体命令无关。
-
-> 参考实现的解析器还把 argv 中以 `FIDO:/` 开头的参数当作 QR URL。这只是
-> 历史容错：按契约 URL 必须走 stdin（见 §4），agent 从不在 argv 里传 URL。
+- 没有 `--rp`，也没有 `--request-type`：该窗口与具体命令无关。
 
 ## 4. stdin
 
@@ -136,19 +142,25 @@ agent 传递的信息只有退出码（§6）。
 
 ## 9. 版本
 
-本文件描述 **Contract v1**。
+本文件描述 **Contract v2**。与 v1 的差异：
+
+- RP 由位置参数改为带值选项 `--rp <RP>`（v1 的 `[RP]` 会让以 `-` 开头
+  的 RP 被当作标志位解析）；
+- 删除了 v1 参考实现把 argv 上的 `FIDO:/…` 当作 URL 的历史容错：stdin
+  现在是 URL 的唯一通道，helper 必须忽略 argv 上的 `FIDO:/` 参数。
 
 > 建议后续在 argv 上增加 `--protocol-version <N>`（或等价的
 > `--contract-version`），让 agent 在启动前声明契约版本，helper 可就地
 > 拒绝不理解的版本而不是静默错行为。当前版本未实现该标志；在它落地前，
-> 双方只能按 v1 假定兼容。
+> 双方只能按 v2 假定兼容。
 
 ## 10. 实现一个新 helper 的清单
 
-1. 接受 `<helper> [RP] --timeout <SECS>`（QR）与
-   `<helper> --select --timeout <SECS>`（选择）两种调用。
+1. 接受 `<helper> [--rp <RP>] --timeout <SECS>`（QR）与
+   `<helper> --select --timeout <SECS>`（选择）两种调用；argv 仅用于
+   显示，忽略一切不认识的参数（包括任何 `FIDO:/…`）。
 2. QR 模式下从 stdin 第一行读 URL；**不要**把 URL 写进 argv、日志、临时
-   文件或任何持久位置。
+   文件或任何持久位置，也不要接受 argv 上的 URL。
 3. QR 模式继续消费 stdin 后续行，识别 `found` 并给出"检测到手机"的反馈。
 4. QR 模式让用户能取消（关窗 / Esc / 按钮），并自行在 `--timeout` 后收场。
 5. Select 模式不读 stdin，提供"用手机"与"保留安全密钥"两条路径。

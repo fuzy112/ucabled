@@ -461,7 +461,10 @@ fn show_window(
     };
     let mut command = Command::new(helper);
     if let Some(rp) = &rp {
-        command.arg(rp);
+        // A valued option, never a bare positional: the RP comes from the
+        // CTAP payload and may begin with '-', which a positional slot would
+        // hand to the helper's flag parser.
+        command.arg("--rp").arg(rp);
     }
     command
         .arg("--timeout")

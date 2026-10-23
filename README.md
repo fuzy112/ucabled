@@ -286,7 +286,7 @@ Esc or the agent.  Its strings are localized with gettext (the Nix package
 installs the catalogs).  Build with `--features adwaita` for GNOME-native window
 chrome.
 
-Any contract-v1 helper can replace it: set `UCABLED_HELPER` (an absolute path
+Any contract-v2 helper can replace it: set `UCABLED_HELPER` (an absolute path
 or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
 flags go in `services.ucabled.helperExtraArgs` (for example
 `[ "--layer-shell" ]`).
