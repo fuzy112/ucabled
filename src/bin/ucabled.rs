@@ -269,8 +269,20 @@ async fn daemon_loop(
 ) -> Result<()> {
     // Warn (do not fix) when /dev/uhid is writable by anyone but the ucabled
     // account: a loose node lets a local process create arbitrary virtual HID
-    // devices.  We deliberately do not tighten permissions ourselves.
-    if let Some(reason) = ucabled::uhid_perm::loose_reason(std::path::Path::new("/dev/uhid")) {
+    // devices.  We deliberately do not tighten permissions ourselves.  The
+    // check is repeated whenever a host opens the device, because udev can
+    // re-grant a stale `uaccess` ACL after startup (a seat change re-applies
+    // it) or a fixed rule can tighten it again.
+    let mut uhid_loose = match ucabled::uhid_perm::loose_reason(std::path::Path::new("/dev/uhid")) {
+        Ok(reason) => reason,
+        Err(e) => {
+            // Unknown is not "tight": keep the previous state (none yet) and
+            // let the next successful check decide.
+            tracing::debug!("cannot inspect /dev/uhid permissions: {e}");
+            None
+        }
+    };
+    if let Some(reason) = &uhid_loose {
         tracing::warn!(
             "/dev/uhid is writable by more than the ucabled account ({reason}); a local \
              process could create arbitrary virtual HID devices (e.g. a keyboard). A stale \
@@ -687,6 +699,32 @@ async fn daemon_loop(
                     UhidEvent::Open => {
                         open_count += 1;
                         tracing::info!("hidraw opened by a process");
+                        // Host activity is also the cheapest udev-event
+                        // surrogate: re-audit now so a permission change
+                        // since startup (or a fix) shows up in the journal.
+                        let reason =
+                            ucabled::uhid_perm::loose_reason(std::path::Path::new("/dev/uhid"));
+                        match reason {
+                            Ok(reason) if reason != uhid_loose => {
+                                match &reason {
+                                    Some(reason) => tracing::warn!(
+                                        "/dev/uhid became writable by more than the ucabled \
+                                         account ({reason}); check for a stale `uaccess` udev tag"
+                                    ),
+                                    None => tracing::info!(
+                                        "/dev/uhid is no longer broadly writable; permissions \
+                                         are tight"
+                                    ),
+                                }
+                                uhid_loose = reason;
+                            }
+                            Ok(_) => {}
+                            // A failed stat says nothing about the permissions;
+                            // do not turn it into a "tight" transition.
+                            Err(e) => {
+                                tracing::debug!("cannot re-inspect /dev/uhid permissions: {e}");
+                            }
+                        }
                     }
                     UhidEvent::Close => {
                         if open_count == 0 {
