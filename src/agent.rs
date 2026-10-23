@@ -31,6 +31,22 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::qr::RequestType;
 
 pub const BUS_NAME: &str = "org.ucabled";
+
+/// Another process already owns [`BUS_NAME`].
+///
+/// Typed so the daemon can tell a name conflict (fatal: two daemons must not
+/// compete for the HID device) from a transient bus failure that may fall
+/// back to the terminal UI.
+#[derive(Debug)]
+pub struct NameTaken;
+
+impl std::fmt::Display for NameTaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the bus name is owned by another process")
+    }
+}
+
+impl std::error::Error for NameTaken {}
 pub const MANAGER_PATH: &str = "/org/ucabled/Manager";
 pub const MANAGER_INTERFACE: &str = "org.ucabled.Manager1";
 pub const AGENT_INTERFACE: &str = "org.ucabled.Agent1";
@@ -382,9 +398,24 @@ struct MatchStreams {
 /// Request the bus name and install the method-call and NameOwnerChanged
 /// matches, returning the guards (dropping them stops matching) and streams.
 async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<MatchStreams> {
-    conn.request_name(BUS_NAME, false, false, false)
+    // `do_not_queue`: a second daemon must fail immediately with a clear
+    // error instead of sitting in the name queue until systemd's start
+    // timeout kills it.  Single-instance exclusion itself is enforced by the
+    // state-directory lock (`instance::acquire`), because `--no-ui` and the
+    // terminal fallback never get this far.
+    let reply = conn
+        .request_name(BUS_NAME, false, false, true)
         .await
         .with_context(|| format!("request bus name {BUS_NAME}"))?;
+    // With do_not_queue a taken name is an Ok(Exists) reply, not an error.
+    use dbus::nonblock::stdintf::org_freedesktop_dbus::RequestNameReply;
+    if !matches!(
+        reply,
+        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner
+    ) {
+        return Err(anyhow::Error::new(NameTaken))
+            .with_context(|| format!("request name {BUS_NAME} reply {reply:?}"));
+    }
     let method = conn
         .add_match(MatchRule::new_method_call())
         .await

@@ -46,9 +46,9 @@ pub fn state_dir() -> PathBuf {
 ///
 /// Two concurrent callers that both see the file missing would each generate
 /// a key and the last rename would win, leaving one caller with an in-memory
-/// key that differs from the disk.  That is not reachable in the supported
-/// single-daemon setup: the daemon claims `org.ucabled` with `do_not_queue`
-/// before it gets here, so a second instance fails to start.
+/// key that differs from the disk.  The daemon prevents that with the
+/// exclusive lock on this directory (see [`crate::instance`]), which it takes
+/// before calling this function; the bus name is only a UI-ownership marker.
 pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
     let path = dir.join(IDENTITY_FILE_NAME);
     match fs::read(&path) {

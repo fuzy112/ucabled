@@ -206,6 +206,13 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+    // One daemon per state directory, before anything can create the identity
+    // key or register a virtual HID device.  The bus name is not enough:
+    // `--no-ui` and the terminal fallback never claim it.
+    let state_dir = ucabled::identity::state_dir();
+    let _instance = ucabled::instance::acquire(&state_dir)
+        .context("failed to acquire the single-instance lock")?;
+    tracing::debug!(lock = %_instance.path().display(), "acquired the instance lock");
     let (cancel_tx, cancel_rx) = mpsc::channel::<CancelRequest>(CANCEL_QUEUE_SIZE);
     let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>(SELECT_QUEUE_SIZE);
     let rt = tokio::runtime::Runtime::new()?;
@@ -214,6 +221,13 @@ fn main() -> Result<()> {
     } else {
         match ucabled::agent::start(rt.handle(), cancel_tx.clone(), select_tx.clone()) {
             Ok(ui) => Notifier::Agent(ui),
+            // A name conflict means another daemon (with a different state
+            // directory, or a foreign implementation) would compete for the
+            // same HID device: fall back to the terminal would keep both
+            // alive, so refuse to start.
+            Err(e) if e.chain().any(|c| c.is::<ucabled::agent::NameTaken>()) => {
+                return Err(e.context("another process owns org.ucabled"));
+            }
             Err(e) => {
                 tracing::warn!("UI bridge unavailable ({e:#}), falling back to terminal QR");
                 Notifier::Terminal
