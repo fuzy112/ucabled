@@ -108,16 +108,15 @@ pub async fn run_qr_transaction(
 /// offered a PSM and we advertised BLE, otherwise the WebSocket tunnel.
 fn select_channel(advert: &AdvertObservation, offer_ble: bool) -> Channel {
     #[cfg(feature = "l2cap")]
-    if offer_ble {
-        if let Some(psm) = advert.psm {
-            tracing::info!(psm, "phone offered the BLE L2CAP channel");
-            return Channel::L2cap {
-                address: advert.address,
-                address_type: advert.address_type,
-                psm,
-            };
-        }
+    if offer_ble && let Some(psm) = advert.psm {
+        tracing::info!(psm, "phone offered the BLE L2CAP channel");
+        return Channel::L2cap {
+            address: advert.address,
+            address_type: advert.address_type,
+            psm,
+        };
     }
+
     #[cfg(not(feature = "l2cap"))]
     let _ = (advert, offer_ble);
     Channel::Websocket
