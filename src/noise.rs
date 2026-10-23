@@ -35,6 +35,11 @@ pub struct Noise {
     ck: [u8; 32],
     h: [u8; 32],
     key: [u8; 32],
+    /// Whether a `MixKey`/`MixKeyAndHash` has installed `key`.  The key is
+    /// zero until then, and a caller that encrypts before the first mix would
+    /// silently use AES-GCM under `0^32` (the Noise spec's cleartext
+    /// passthrough for an unset key is not implemented, matching Chromium).
+    has_key: bool,
     nonce: u32,
 }
 
@@ -54,6 +59,7 @@ impl Noise {
             ck,
             h: ck,
             key: [0u8; 32],
+            has_key: false,
             nonce: 0,
         }
     }
@@ -67,6 +73,7 @@ impl Noise {
 
     fn initialize_key(&mut self, key: [u8; 32]) {
         self.key = key;
+        self.has_key = true;
         self.nonce = 0;
     }
 
@@ -94,7 +101,20 @@ impl Noise {
         nonce
     }
 
+    /// Encrypt `plaintext` with the current key and mix the ciphertext into
+    /// the handshake hash.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no `mix_key`/`mix_key_and_hash` has run yet: the key would
+    /// still be the all-zero initial value, and encrypting under it would
+    /// silently produce a ciphertext anybody can forge.  Every caBLE pattern
+    /// mixes the PSK before its first message.
     pub fn encrypt_and_hash(&mut self, plaintext: &[u8]) -> Vec<u8> {
+        assert!(
+            self.has_key,
+            "encrypt_and_hash called before the first mix_key"
+        );
         let nonce = self.next_nonce();
         let cipher = Aes256Gcm::new((&self.key).into());
         let ct = cipher
@@ -110,7 +130,18 @@ impl Noise {
         ct
     }
 
+    /// Decrypt `ciphertext` with the current key and mix it into the handshake
+    /// hash on success.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no `mix_key`/`mix_key_and_hash` has run yet; see
+    /// [`Noise::encrypt_and_hash`].
     pub fn decrypt_and_hash(&mut self, ciphertext: &[u8]) -> Option<Vec<u8>> {
+        assert!(
+            self.has_key,
+            "decrypt_and_hash called before the first mix_key"
+        );
         let nonce = self.next_nonce();
         let cipher = Aes256Gcm::new((&self.key).into());
         let pt = cipher
@@ -153,5 +184,19 @@ mod tests {
         assert_eq!(n.next_nonce(), [0u8; 12]);
         assert_eq!(n.next_nonce(), [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(n.next_nonce(), [0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "before the first mix_key")]
+    fn encrypting_before_mixing_a_key_panics() {
+        let mut n = Noise::new(KN_PSK0_PROTOCOL_NAME);
+        let _ = n.encrypt_and_hash(b"");
+    }
+
+    #[test]
+    #[should_panic(expected = "before the first mix_key")]
+    fn decrypting_before_mixing_a_key_panics() {
+        let mut n = Noise::new(KN_PSK0_PROTOCOL_NAME);
+        let _ = n.decrypt_and_hash(&[]);
     }
 }
