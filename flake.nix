@@ -28,10 +28,9 @@
           program = "${pkgs.callPackage ./nix/debian-app.nix { }}/bin/ucabled-deb";
         };
       });
-      overlays.ucabled = final: _prev: {
-        ucabled = final.callPackage ./nix/package.nix { };
-        ucable-gnome-agent = final.callPackage ./nix/gnome-agent.nix { };
-      };
+      # Shared with default.nix so the flake and stable entry points
+      # cannot drift apart.
+      overlays.ucabled = import ./nix/overlay.nix;
       overlays.default = self.overlays.ucabled;
       nixosModules.ucabled = import ./nix/module.nix { inherit self; };
       nixosModules.default = self.nixosModules.ucabled;

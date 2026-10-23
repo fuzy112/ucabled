@@ -102,6 +102,29 @@ The module configures everything:
 Run `nixos-rebuild switch`, then log out and back in (or run
 `systemctl --user start ucable-agent`) so the agent registers.
 
+### Without flakes
+
+The same module works with stable Nix through the repository's
+`default.nix`, which pins nixpkgs to this repository's `flake.lock`:
+
+```nix
+{
+  # fetchTarball caches master for an hour (tarball-ttl), so updates
+  # arrive on their own; pin with a sha256 if you prefer manual bumps.
+  imports = [
+    (import (builtins.fetchTarball
+      "https://github.com/fuzy112/ucabled/archive/refs/heads/master.tar.gz")
+      { }).nixosModule
+  ];
+  services.ucabled.enable = true;
+}
+```
+
+Because it reads the same `flake.lock`, the binary cache below applies
+to it as well.  From a checkout, the packages build with plain
+`nix-build -A ucabled` (or `-A ucable-gnome-agent`), and `nix-shell`
+enters the same development shell as `nix develop`.
+
 ### Binary cache
 
 `master` is published to `ucabled.cachix.org`, so Nix substitutes the package

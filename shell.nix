@@ -1,4 +1,6 @@
-{ pkgs ? import <nixpkgs> { } }:
+# Pinned through flake.lock (see nix/nixpkgs.nix), so plain `nix-shell`
+# gets the same toolchain as `nix develop`.  Override with --arg pkgs.
+{ pkgs ? import (import ./nix/nixpkgs.nix) { } }:
 
 pkgs.mkShell {
   packages = with pkgs; [

@@ -96,6 +96,28 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 执行 `nixos-rebuild switch`，然后注销再登录（或运行
 `systemctl --user start ucable-agent`），让代理完成注册。
 
+### 不使用 flakes
+
+通过仓库的 `default.nix`，stable Nix 也能使用同一个模块；它把
+nixpkgs 锁定到本仓库的 `flake.lock`：
+
+```nix
+{
+  # fetchTarball 会把 master 缓存一小时（tarball-ttl），更新自动到
+  # 来；若想手动控制升级节奏，可加 sha256 固定。
+  imports = [
+    (import (builtins.fetchTarball
+      "https://github.com/fuzy112/ucabled/archive/refs/heads/master.tar.gz")
+      { }).nixosModule
+  ];
+  services.ucabled.enable = true;
+}
+```
+
+它读取与 flake 相同的 `flake.lock`，因此下文的二进制缓存同样适用。
+在源码检出中，用 `nix-build -A ucabled`（或 `-A ucable-gnome-agent`）
+即可构建，`nix-shell` 进入与 `nix develop` 相同的开发环境。
+
 ### 二进制缓存
 
 `master` 发布到 `ucabled.cachix.org`，因此 Nix 会直接替换该包而无需构建。

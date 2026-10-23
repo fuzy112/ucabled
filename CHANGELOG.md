@@ -15,6 +15,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   helper window on GNOME.  Its dialogs are translated into the same
   languages as the GTK helper.
 
+- Stable (non-flake) Nix support: the top-level `default.nix` builds
+  the packages with plain `nix-build -A ucabled` and exposes the NixOS
+  module as `(import ./. { }).nixosModule`, pinning nixpkgs to the same
+  `flake.lock` the flake uses, so the Cachix binary cache applies to
+  both entry points.  `nix-shell` now uses that pin as well instead of
+  the ambient `<nixpkgs>` channel.
+
 ### Changed
 
 - The gettext domain is renamed from `ucable-agent-helper-gtk` to

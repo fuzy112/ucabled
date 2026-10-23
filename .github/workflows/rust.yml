@@ -18,6 +18,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "flake.nix"
+      - "default.nix"
       - "flake.lock"
       - "shell.nix"
       - "nix/**"
@@ -37,6 +38,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "flake.nix"
+      - "default.nix"
       - "flake.lock"
       - "shell.nix"
       - "nix/**"
@@ -143,6 +145,40 @@ jobs:
 
     - name: Build the package
       run: nix build .#ucabled -L
+
+    # The stable (non-flake) entry must keep working.  It pins nixpkgs
+    # through flake.lock, so its derivation must be the very store path
+    # the step above just built — a drift means the pin no longer reads
+    # the lock.  The module shim is smoke-tested with an eval-only NixOS
+    # configuration.
+    - name: Check the stable Nix entry points
+      run: |
+        set -euo pipefail
+        stable=$(nix-build -A ucabled --no-out-link)
+        flake=$(nix build .#ucabled --no-link --print-out-paths)
+        [ "$stable" = "$flake" ] \
+          || { echo "stable entry drifts from flake: $stable != $flake"; exit 1; }
+        nix-instantiate --eval --strict --expr '
+          let
+            stable = import ./default.nix { };
+            nixpkgs = import ./nix/nixpkgs.nix;
+            cfg = (import (nixpkgs + "/nixos/lib/eval-config.nix") {
+              modules = [
+                stable.nixosModule
+                {
+                  nixpkgs.hostPlatform = "x86_64-linux";
+                  services.ucabled.enable = true;
+                  # Only satisfy the bare-config assertions; nothing is built.
+                  fileSystems."/".device = "none";
+                  fileSystems."/".fsType = "tmpfs";
+                  boot.loader.grub.devices = [ "nodev" ];
+                }
+              ];
+            }).config;
+          in
+          assert cfg.services.ucabled.package.pname == "ucabled";
+          cfg.system.build.toplevel.drvPath
+        ' > /dev/null
 
     # Flake checks cover the package build (including its tests), cargo fmt,
     # cargo clippy and cargo doc, matching what a developer can run locally.
