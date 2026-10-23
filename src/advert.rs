@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! CTAP 2.3 hybrid advertisement suffix.
+//! PXP advertisement suffix.
 //!
 //! When the client offers the BLE data channel (QR `Key 6`), the authenticator
 //! may append a CBOR map after the 20-byte encrypted EID in the caBLE service
-//! data. For the BLE channel the map is `{1: <server PSM>}` (CTAP 2.3
-//! §11.5.1.1.2); the PSM tells the client which L2CAP CoC to connect to.
+//! data. For the BLE channel the map is `{1: <server PSM>}` (PXP §5.4.1,
+//! §6.1.2); the PSM tells the client which L2CAP CoC to connect to.
 
 use crate::cbor;
 

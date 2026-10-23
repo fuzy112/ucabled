@@ -284,6 +284,12 @@ impl Transport {
         self.busy
     }
 
+    /// Whether a multi-frame assembly is in progress and therefore needs the
+    /// periodic idle-expiry check.
+    pub fn has_assembly(&self) -> bool {
+        self.assembly.is_some()
+    }
+
     /// Drop a multi-frame assembly whose sender has been silent for at
     /// least [`ASSEMBLY_IDLE_TIMEOUT`], freeing the busy slot.  Returns
     /// whether anything was dropped.  Only unfinished assemblies expire:
@@ -314,15 +320,23 @@ impl Transport {
 ///
 /// # Panics
 ///
-/// Panics when `payload` is longer than `u16::MAX`: the initial report carries
-/// the payload length in a 16-bit field.  Callers stay within [`MAX_PAYLOAD`].
+/// Panics when `payload` is longer than `u16::MAX` (65535): the initial
+/// report carries the payload length in a 16-bit field.  Every caller passes
+/// either a fixed-size payload or a reply bounded by the const assertion
+/// below.
 pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
-    let mut reports = Vec::new();
+    // One INIT report plus as many continuation reports as the payload's
+    // remainder needs.
+    let report_count = 1 + payload
+        .len()
+        .saturating_sub(INIT_DATA_SIZE)
+        .div_ceil(CONT_DATA_SIZE);
+    let mut reports = Vec::with_capacity(report_count);
     let mut first = vec![0u8; REPORT_SIZE];
     first[0..CID_LEN].copy_from_slice(&cid.to_be_bytes());
     first[INIT_CMD_OFFSET] = cmd;
     let len = u16::try_from(payload.len())
-        .expect("CTAPHID response payload exceeds the 16-bit length field");
+        .expect("CTAPHID response payload exceeds the 65535-byte maximum (16-bit length field)");
     first[INIT_LEN_OFFSET..INIT_LEN_OFFSET + 2].copy_from_slice(&len.to_be_bytes());
     let first_take = payload.len().min(INIT_DATA_SIZE);
     first[INIT_DATA_OFFSET..INIT_DATA_OFFSET + first_take].copy_from_slice(&payload[..first_take]);
@@ -343,6 +357,17 @@ pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
     }
     reports
 }
+
+// `build_response` panics above u16::MAX; it stays unreachable only while
+// the frame limits keep a decrypted caBLE reply below that: the frame minus
+// the 16-byte GCM tag, the padding length byte and the message type byte.
+// Both channels share the limit (l2cap::MAX_SDU == tunnel::MAX_FRAME_SIZE),
+// so pin the coupling here — a future limit bump must fail to compile
+// rather than open a remotely triggerable daemon panic.
+const _: () = assert!(
+    crate::tunnel::MAX_FRAME_SIZE - 16 - 2 <= u16::MAX as usize,
+    "frame limits must keep decrypted caBLE replies within u16::MAX"
+);
 
 fn error_response(cid: u32, code: u8) -> Vec<Vec<u8>> {
     build_response(cid, CMD_ERROR, &[code])

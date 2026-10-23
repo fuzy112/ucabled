@@ -125,6 +125,8 @@ if ((UNINSTALL)); then
     for po in "$ROOT"/po/*.po; do
         [[ -e "$po" ]] || continue
         lang="$(basename "$po" .po)"
+        rm -f "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable.mo"
+        # Installed by versions before the domain was renamed to "ucable".
         rm -f "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
     done
     rm -f "$PREFIX/share/man/man1/ucabled.1" \
@@ -136,6 +138,7 @@ if ((UNINSTALL)); then
         "$PREFIX/share/zsh/site-functions/_ucable-agent-helper"
     rm -f "$PREFIX/share/fish/vendor_completions.d/ucabled.fish" \
         "$PREFIX/share/fish/vendor_completions.d/ucable-agent-helper.fish"
+    rm -rf "$PREFIX/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me"
 
     systemctl daemon-reload || true
     systemctl reload dbus 2>/dev/null || true
@@ -179,9 +182,10 @@ getent passwd ucabled >/dev/null ||
     useradd --system --gid ucabled --no-create-home \
         --home-dir /nonexistent --shell "$nologin" ucabled
 
+# -s strips the symbol table; cargo's release profile leaves it in.
 install -d -m 0755 "$BIN_DIR"
 for b in "${BINARIES[@]}"; do
-    install -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
+    install -s -m 0755 -o root -g root "$RELEASE_DIR/$b" "$BIN_DIR/$b"
 done
 
 # Manual pages and shell completions.
@@ -205,18 +209,22 @@ install -m 0644 -o root -g root "$DIST/completions/ucabled.fish" \
 install -m 0644 -o root -g root "$DIST/completions/ucable-agent-helper.fish" \
     "$PREFIX/share/fish/vendor_completions.d/ucable-agent-helper.fish"
 
-# Gettext catalogs for the GTK4 helper, which looks them up relative to its
-# own location (<prefix>/share/locale).
+# Gettext catalogs ("ucable" domain).  The GTK4 helper looks them up
+# relative to its own location (<prefix>/share/locale); the GNOME Shell
+# extension gets its own copy under locale/ in the extension directory,
+# installed further below.
 if command -v msgfmt >/dev/null; then
     for po in "$ROOT"/po/*.po; do
         [[ -e "$po" ]] || continue
         lang="$(basename "$po" .po)"
         install -d -m 0755 "$PREFIX/share/locale/$lang/LC_MESSAGES"
         msgfmt "$po" \
-            -o "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
+            -o "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable.mo"
+        # Left behind by versions before the domain was renamed.
+        rm -f "$PREFIX/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
     done
 else
-    printf 'warning: msgfmt not found; helper translations not installed (install gettext)\n' >&2
+    printf 'warning: msgfmt not found; translations not installed (install gettext)\n' >&2
 fi
 
 # Load the uhid module now and at boot.
@@ -234,6 +242,28 @@ install -m 0644 -o root -g root "$DIST/org.ucabled.conf" "$DBUS_DIR/org.ucabled.
 install -d -m 0755 "$POLKIT_ACTIONS_DIR"
 install -m 0644 -o root -g root "$DIST/org.ucabled.policy" \
     "$POLKIT_ACTIONS_DIR/org.ucabled.policy"
+
+# GNOME Shell agent extension. Present-but-disabled is inert; each user
+# opts in with `gnome-extensions enable ucable-gnome-agent@fuzy.me`.
+GNOME_EXT_SRC="$ROOT/contrib/ucable-gnome-agent"
+if [[ -d "$GNOME_EXT_SRC" ]]; then
+    GNOME_EXT_DIR="$PREFIX/share/gnome-shell/extensions/ucable-gnome-agent@fuzy.me"
+    install -d -m 0755 "$GNOME_EXT_DIR"
+    for f in metadata.json extension.js qrcode.mjs; do
+        install -m 0644 -o root -g root "$GNOME_EXT_SRC/$f" "$GNOME_EXT_DIR/$f"
+    done
+    # The extension binds the shared "ucable" domain to its own locale/
+    # directory (Extension.initTranslations()).
+    if command -v msgfmt >/dev/null; then
+        for po in "$ROOT"/po/*.po; do
+            [[ -e "$po" ]] || continue
+            lang="$(basename "$po" .po)"
+            install -d -m 0755 "$GNOME_EXT_DIR/locale/$lang/LC_MESSAGES"
+            msgfmt "$po" \
+                -o "$GNOME_EXT_DIR/locale/$lang/LC_MESSAGES/ucable.mo"
+        done
+    fi
+fi
 
 # The unit files bake in the default /usr/local/bin; rewrite them for the
 # chosen prefix.

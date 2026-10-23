@@ -69,12 +69,22 @@ in
       description = "The ucabled package to use.";
     };
 
+    gnomeAgent = {
+      enable = lib.mkEnableOption ''
+        the GNOME Shell agent extension, installed system-wide. Each user
+        still has to run `gnome-extensions enable ucable-gnome-agent@fuzy.me`.
+        The extension registers as *the* session agent itself, replacing
+        the ucable-agent user service on the daemon's single agent slot;
+        on GNOME-only machines disable the service (`systemd.user.services.
+        ucable-agent.wantedBy = lib.mkForce [ ];`) so the two do not fight'';
+    };
+
     helper = lib.mkOption {
       type = lib.types.nullOr (
         lib.types.either lib.types.package (lib.types.either lib.types.path lib.types.str)
       );
       default = null;
-      example = "\${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+      example = "/home/user/bin/my-helper";
       description = ''
         UI helper the per-user session agent spawns to show prompts. May be a
         package (its main program is exported), a path, or a bare command name
@@ -127,7 +137,10 @@ in
     };
 
     services.dbus.packages = [ dbusPolicy ];
-    environment.systemPackages = [ polkitAction ];
+    environment.systemPackages =
+      [ polkitAction ]
+      ++ lib.optional cfg.gnomeAgent.enable
+        self.packages.${pkgs.stdenv.hostPlatform.system}.ucable-gnome-agent;
 
     # BlueZ needs no polkit rule: it registers no polkit actions, and the
     # D-Bus policy above already grants the daemon access to org.bluez.

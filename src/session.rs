@@ -3,11 +3,12 @@
 use anyhow::{Context, Result};
 use p256::SecretKey;
 use std::time::Duration;
+use zeroize::Zeroize;
 
 use crate::eid;
 use crate::error::TransactionError;
 use crate::handshake::HandshakeInitiator;
-use crate::kdf::{derive, Purpose};
+use crate::kdf::{Purpose, derive};
 use crate::phone::{CableLink, CableTransport, MSG_CTAP, MSG_SHUTDOWN, MSG_UPDATE};
 use crate::tunnel::{self, decode_tunnel_server_domain};
 
@@ -71,7 +72,7 @@ impl DesktopFlow {
         let mut psk = [0u8; 32];
         derive(&self.qr_secret, &self.plaintext_eid, Purpose::Psk, &mut psk);
         // The QR secret is no longer needed once the tunnel ID and PSK exist.
-        crate::secure_erase(&mut self.qr_secret);
+        self.qr_secret.zeroize();
 
         let mut transport = self
             .connect_transport(&components, &tunnel_id, ctap_command.len())
@@ -79,7 +80,7 @@ impl DesktopFlow {
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
         // The PSK now lives inside the handshake state.
-        crate::secure_erase(&mut psk);
+        psk.zeroize();
         let initial = handshake.build_initial_message();
         transport
             .send(initial)
@@ -131,12 +132,12 @@ impl DesktopFlow {
                 MSG_SHUTDOWN => {
                     return Err(TransactionError::failed(anyhow::anyhow!(
                         "unexpected shutdown from authenticator"
-                    )))
+                    )));
                 }
                 other => {
                     return Err(TransactionError::failed(anyhow::anyhow!(
                         "unexpected message type {other}"
-                    )))
+                    )));
                 }
             }
         };
@@ -171,11 +172,13 @@ impl DesktopFlow {
                 psm,
             } => {
                 tracing::info!(%address, psm, "connecting caBLE L2CAP channel");
-                // Largest message the desktop will send on this channel: the
-                // caBLE type byte plus the CTAP command, padded and tagged by
-                // the crypter.  The handshake messages that go out before the
-                // crypter are smaller for any plausible request.
-                let required = crate::crypter::Crypter::encrypted_size(1 + _ctap_len);
+                // Largest message the desktop will send on this channel:
+                // the 4-byte length prefix (PXP §6.1.2), the caBLE type byte
+                // and the CTAP command, padded and tagged by the crypter.
+                // The handshake messages that go out before the crypter are
+                // smaller for any plausible request.
+                let required = crate::l2cap::LENGTH_PREFIX
+                    + crate::crypter::Crypter::encrypted_size(1 + _ctap_len);
                 // A phone that advertised a PSM but never answers (stale
                 // address, moved out of range) must not hold the transaction
                 // until the host times out.

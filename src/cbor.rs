@@ -179,6 +179,18 @@ impl<'a> Decoder<'a> {
         String::from_utf8(self.take(len)?.to_vec()).ok()
     }
 
+    /// Read a text string as a borrow of the input.  Prefer this over
+    /// [`Decoder::text`] when the value is only compared against known keys
+    /// or slices: it does not allocate.
+    pub fn text_str(&mut self) -> Option<&'a str> {
+        let h = self.byte()?;
+        if h >> 5 != MAJOR_TEXT {
+            return None;
+        }
+        let len = self.argument(h & ARG_MASK)? as usize;
+        std::str::from_utf8(self.take(len)?).ok()
+    }
+
     /// Consume one value of any type.
     pub fn skip_value(&mut self) -> Option<()> {
         self.skip_value_at(0)

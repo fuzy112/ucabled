@@ -2,11 +2,13 @@
 /result
 
 # Debian packaging build artifacts.
+/debian-build/
 /debian/.debhelper/
 /debian/*.debhelper
 /debian/*.debhelper.log
 /debian/debhelper-build-stamp
 /debian/files
 /debian/*.substvars
+/debian/changelog.ucabled-dev
 /debian/ucabled/
 /debian/tmp/

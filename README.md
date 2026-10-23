@@ -13,8 +13,8 @@ passkey always lives on the phone.
 Under the hood it registers a virtual USB HID FIDO2 device with the kernel
 (`/dev/uhid`) and relays WebAuthn registration/sign-in requests from the
 browser to the phone over **caBLE v2** (QR code + BLE proximity proof + WSS
-tunnel, the hybrid transport from CTAP 2.2 §11.5), then sends the phone's
-response back to the browser.
+tunnel, the hybrid transport now specified by the Proximity Exchange
+Protocol), then sends the phone's response back to the browser.
 
 ```
       ┌─────────────┐
@@ -72,8 +72,11 @@ Add this repository to your flake and enable the module:
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
 
-  # optional: use an alternate UI helper
-  services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+  # optional: on GNOME, install the Shell extension that registers as the
+  # session agent itself and draws prompts as shell modal dialogs (then
+  # enable it per user: gnome-extensions enable ucable-gnome-agent@fuzy.me);
+  # see contrib/ucable-gnome-agent/README.md for the trade-offs
+  # services.ucabled.gnomeAgent.enable = true;
 
   # optional: extra helper arguments. The bundled GTK4 helper takes
   # --layer-shell, presenting the prompt as a wlr-layer-shell overlay on
@@ -98,6 +101,29 @@ The module configures everything:
 
 Run `nixos-rebuild switch`, then log out and back in (or run
 `systemctl --user start ucable-agent`) so the agent registers.
+
+### Without flakes
+
+The same module works with stable Nix through the repository's
+`default.nix`, which pins nixpkgs to this repository's `flake.lock`:
+
+```nix
+{
+  # fetchTarball caches master for an hour (tarball-ttl), so updates
+  # arrive on their own; pin with a sha256 if you prefer manual bumps.
+  imports = [
+    (import (builtins.fetchTarball
+      "https://github.com/fuzy112/ucabled/archive/refs/heads/master.tar.gz")
+      { }).nixosModule
+  ];
+  services.ucabled.enable = true;
+}
+```
+
+Because it reads the same `flake.lock`, the binary cache below applies
+to it as well.  From a checkout, the packages build with plain
+`nix-build -A ucabled` (or `-A ucable-gnome-agent`), and `nix-shell`
+enters the same development shell as `nix develop`.
 
 ### Binary cache
 
@@ -129,25 +155,54 @@ tools:
 ```bash
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
-dpkg-buildpackage -b -us -uc        # add -d to skip the build-dependency check
-sudo apt install ../ucabled_*.deb
+# add -d to skip the build-dependency check
+dpkg-buildpackage -b -us -uc \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
+sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
+# On GNOME, the optional Shell extension is a third package:
+sudo apt install ../ucable-gnome-agent_*.deb
 ```
+
+A build from a Git checkout that is not a clean release tag is a development
+build: the hooks append the committer date and short hash of HEAD to the
+version, for example `0.2.0~20261022.gaf437b0`, which sorts above earlier
+development snapshots and below the `0.2.0` release.  A release tarball has no
+`.git`, so its version stays as packaged.  `nix run .#deb` applies the same
+suffix automatically.
 
 The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
 Where the distribution is older (Debian trixie, Ubuntu 24.04), build with a
 rustup toolchain instead:
 
 ```bash
-debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+# -d: the distribution's cargo/rustc are older than the Build-Depends
+dpkg-buildpackage -b -us -uc -d \
+    --rules-file="debian/rules CARGO=$HOME/.cargo/bin/cargo" \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 ```
 
-The package installs the daemon, both helpers, the systemd units, the udev
-rule, the D-Bus and polkit policies, the manual pages, the shell completions
-and the translations.  It creates the `ucabled` service account, starts the
-daemon, and enables the per-user session agent globally; log out and back in
-once so the agent registers.  The caBLE identity key lives in
-`/var/lib/ucabled/identity.key`, which `apt remove` keeps and `apt purge`
-deletes (phones then have to be paired again).
+On NixOS, `nix run .#deb` builds the same three packages in rootless podman
+containers and writes them to `debian-build/<distro>/`, so the host needs
+none of the build dependencies above.  It only needs a working rootless
+podman setup.  Both supported distributions are built by default; pass a
+distribution to build just one (`nix run .#deb -- debian13` or
+`ubuntu26.04`).  Ubuntu 24.04 LTS is not a target: gtk4-layer-shell first
+appeared in Ubuntu 25.04.
+With `sudo nix run .#deb`, podman runs rootful instead, so no subordinate
+UID/GID configuration is needed; the output is chowned back to the caller.
+
+The source package yields three binaries: `ucabled` (the system daemon, its
+systemd unit, the udev rule and the D-Bus/polkit policies), `ucable-agent`
+(the default GTK4 session agent and its helper) and `ucable-gnome-agent`
+(the optional GNOME Shell extension).  `ucabled` recommends `ucable-agent`,
+so `apt install ucabled` gets the default agent as well.  The daemon's
+postinst reloads the D-Bus policy, polkit and the udev rule, then starts the
+daemon on a fresh install or restarts it on upgrade; the agent's postinst
+enables the user unit globally and reloads and restarts it in logged-in
+sessions.  The caBLE identity key lives in `/var/lib/ucabled/identity.key`,
+which `apt remove` keeps and `apt purge` deletes.
 
 ## Install (other distros)
 
@@ -177,7 +232,7 @@ sudo install -Dm755 target/release/ucable-agent-helper /usr/local/bin/ucable-age
 for po in po/*.po; do
   lang=$(basename "$po" .po)
   sudo install -d /usr/local/share/locale/$lang/LC_MESSAGES
-  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo
+  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable.mo
 done
 
 # dedicated service account, kernel module and udev rule
@@ -235,6 +290,11 @@ Any contract-v1 helper can replace it: set `UCABLED_HELPER` (an absolute path
 or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
 flags go in `services.ucabled.helperExtraArgs` (for example
 `[ "--layer-shell" ]`).
+
+On GNOME there is also `contrib/ucable-gnome-agent`, a Shell extension that
+registers as the session agent itself — no helper process — and draws the
+prompts as shell modal dialogs above the desktop.  See its README for the
+trade-offs (no non-GNOME fallback, single agent slot).
 
 ### SSH security keys
 
@@ -344,9 +404,17 @@ nix flake check
 
 Releasing (on `master`, inside the dev shell): `admin/release.sh X.Y.Z` bumps
 the version, stamps the changelog, commits, and creates the signed tag
-`vX.Y.Z`.  Pushing the tag runs `.github/workflows/release.yml`, which checks
-tag/manifest/changelog consistency and the tag signature, then publishes the
-GitHub release with the changelog section as notes.
+`vX.Y.Z`.  It then merges `master` into `next` and opens the next development
+version there (the next minor by default; pass `X.Y.Z-pre` as a second
+argument to choose another).  Push `master`, `next` and `website` first and
+wait for their checks, then push the tag.
+`.github/workflows/release.yml` checks tag/manifest/changelog consistency and
+the tag signature, then publishes the GitHub release with the changelog
+section as notes.  The Debian packages are then built, signed and uploaded
+locally by `admin/release-debs.sh`: it takes the version from the tag on
+HEAD, runs `nix run .#deb -- all`, signs each .deb with a detached
+GPG signature and uploads the assets to the release.  Keeping this step
+local means the signing key never leaves the maintainer's machine.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell
@@ -362,10 +430,11 @@ Helper tools in the repo (not shipped in the package):
 - `src/bin/cable-advert-probe.rs`: show a caBLE QR offering the BLE data
   channel and report whether the phone advertised an L2CAP PSM
 
-Translation catalogs live in `po/`.  After adding or changing a helper
-string, run `admin/update-pot.sh` (from the dev shell) to regenerate
-`po/ucable-agent-helper-gtk.pot` and fold the new msgids into every
-catalog.  The helper is the only translated component.
+Translation catalogs live in `po/`, shared by the GTK helper and the
+GNOME Shell extension under the `ucable` gettext domain.  After adding or
+changing a translatable string in either, run `admin/update-pot.sh` (from
+the dev shell) to regenerate `po/ucable.pot` and fold the new msgids into
+every catalog; `admin/check-po.sh` (CI) keeps them in step.
 
 The optional CTAP 2.3 BLE data channel (L2CAP CoC) is experimental and off by
 default: build with `--features l2cap` and set `UCABLED_BLE_CHANNEL=1`.  iPhones

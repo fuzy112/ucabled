@@ -1,3 +1,3 @@
 Tests: smoke
-Depends: @
+Depends: ucabled, ucable-agent, ucable-gnome-agent
 Restrictions: allow-stderr

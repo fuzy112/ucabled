@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bluer::AdapterEvent;
 use futures::StreamExt;
 use std::time::Duration;
 
-use crate::eid;
 use crate::CABLE_BLE_UUID;
+use crate::eid;
 
 /// Failure while waiting for a caBLE BLE advert.
 #[derive(Debug)]
@@ -47,8 +47,9 @@ impl From<bluer::Error> for BleError {
     }
 }
 
-/// A matching caBLE advertisement: the decrypted EID plus what the CTAP 2.3
-/// BLE data channel needs (the peer address and, if present, the L2CAP PSM).
+/// A matching caBLE advertisement: the decrypted EID plus what the BLE data
+/// channel (CTAP 2.3, PXP §6.1.2) needs (the peer address and, if present,
+/// the L2CAP PSM).
 pub struct AdvertObservation {
     pub plaintext_eid: [u8; eid::EID_PLAINTEXT_SIZE],
     pub address: bluer::Address,
@@ -143,7 +144,8 @@ async fn scan(
             }
             tracing::debug!(%address, len = payload.len(), "saw fff9 service data");
             // Only the first 20 bytes are the encrypted EID; any remainder is
-            // the CTAP 2.3 advertisement suffix (e.g. the L2CAP PSM).
+            // the advertisement suffix (CTAP 2.3, PXP §5.4.1; e.g. the L2CAP
+            // PSM).
             if let Some(plaintext) = eid::decrypt(&payload[..eid::ADVERT_SIZE], eid_key) {
                 let psm = crate::advert::parse_psm(&payload[eid::ADVERT_SIZE..]);
                 let address_type = device

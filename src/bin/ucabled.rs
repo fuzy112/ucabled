@@ -9,12 +9,12 @@ use tokio::task::AbortHandle;
 use ucabled::agent::CancelRequest;
 use ucabled::ctap::{
     CMD_GET_NEXT_ASSERTION, CMD_MAKE_CREDENTIAL, CTAP1_ERR_CHANNEL_BUSY, CTAP1_ERR_TIMEOUT,
-    CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NOT_ALLOWED, CTAP2_ERR_NO_CREDENTIALS,
+    CTAP2_ERR_INVALID_OPTION, CTAP2_ERR_NO_CREDENTIALS, CTAP2_ERR_NOT_ALLOWED,
     CTAP2_ERR_PIN_NOT_SET,
 };
 use ucabled::ctaphid::{CtapAction, Transport};
 use ucabled::qr::RequestType;
-use ucabled::uhid_dev::{UhidDevice, UhidEvent, FIDO_REPORT_DESCRIPTOR};
+use ucabled::uhid_dev::{FIDO_REPORT_DESCRIPTOR, UhidDevice, UhidEvent};
 use ucabled::ui::Notifier;
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(150);
@@ -307,7 +307,9 @@ async fn daemon_loop(
                                 // Report *all* credentials and stash the rest for
                                 // `getNextAssertion`: claiming only the first
                                 // would narrow the real allowList to it.
-                                if ucabled::ctap::is_silent_probe(&payload) {
+                                if let Some((rp, response, rest)) =
+                                    ucabled::ctap::answer_silent_probe(&payload)
+                                {
                                     fake_assertions = None;
                                     // Firefox also sends this probe with the
                                     // legacy U2F AppID as the RP ID to discover
@@ -317,33 +319,18 @@ async fn daemon_loop(
                                     // (which stores passkeys by WebAuthn RP ID)
                                     // finds nothing. Decline so Firefox keeps the
                                     // WebAuthn RP ID.
-                                    let appid_probe = ucabled::ctap::extract_rp_id(&payload)
-                                        .as_deref()
-                                        .is_some_and(ucabled::ctap::is_u2f_appid);
-                                    let response = if appid_probe {
+                                    let response = if ucabled::ctap::is_u2f_appid(&rp) {
                                         tracing::info!("U2F AppID probe (up=false), declining");
                                         vec![CTAP2_ERR_NO_CREDENTIALS]
                                     } else {
-                                        match ucabled::ctap::fake_silent_assertion(&payload) {
-                                            Some((response, rest)) => {
-                                                tracing::info!(
-                                                    credentials = rest.len() + 1,
-                                                    "silent probe (up=false), answering locally"
-                                                );
-                                                if !rest.is_empty() {
-                                                    let rp = ucabled::ctap::extract_rp_id(&payload)
-                                                        .unwrap_or_default();
-                                                    fake_assertions = Some((rp, rest.into()));
-                                                }
-                                                response
-                                            }
-                                            None => {
-                                                tracing::info!(
-                                                    "silent probe (up=false), declining"
-                                                );
-                                                vec![CTAP2_ERR_NO_CREDENTIALS]
-                                            }
+                                        tracing::info!(
+                                            credentials = rest.len() + 1,
+                                            "silent probe (up=false), answering locally"
+                                        );
+                                        if !rest.is_empty() {
+                                            fake_assertions = Some((rp, rest.into()));
                                         }
+                                        response
                                     };
                                     let reports = transport.complete_relay(cid, &response);
                                     write_all(&device, reports, &mut write_failures).await;
@@ -389,13 +376,6 @@ async fn daemon_loop(
                                     continue;
                                 };
                                 let rp = ucabled::ctap::extract_rp_id(&payload);
-                                // Only worth a line when the request does
-                                // carry hints, since we strip them below.
-                                if ucabled::ctap::request_has_transport_hints(&payload) {
-                                    tracing::info!(
-                                        "request carries transport hints, stripping them"
-                                    );
-                                }
                                 tracing::info!(
                                     ?rp,
                                     cmd = %format_args!("{:#04x}", payload.first().copied().unwrap_or(0)),
@@ -413,6 +393,10 @@ async fn daemon_loop(
                                 // Firefox tags USB credentials with a
                                 // transports hint that some phones reject.
                                 let payload = ucabled::ctap::strip_transport_hints(&payload);
+                                // The patchers borrow the original payload
+                                // when nothing changed; the relay task is
+                                // spawned and needs an owned buffer.
+                                let payload = payload.into_owned();
                                 let request_type = if payload.first() == Some(&CMD_MAKE_CREDENTIAL) {
                                     RequestType::MakeCredential
                                 } else {
@@ -506,8 +490,8 @@ async fn daemon_loop(
                 }
             }
             Some((cid, result)) = result_rx.recv() => {
-                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending {
-                    if *pending_cid == cid {
+                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending
+                    && *pending_cid == cid {
                         notifier.hide();
                         let payload = match result {
                             Ok(p) => {
@@ -536,11 +520,10 @@ async fn daemon_loop(
                         write_all(&device, reports, &mut write_failures).await;
                         pending = None;
                     }
-                }
             }
             Some((tid, use_phone)) = select_rx.recv() => {
-                if let Some(Pending::Select { cid, .. }) = &pending {
-                    if *cid as u64 == tid {
+                if let Some(Pending::Select { cid, .. }) = &pending
+                    && *cid as u64 == tid {
                         let cid = *cid;
                         pending = None;
                         // CTAP2_ERR_PIN_NOT_SET: on the blink probe a Pin*
@@ -551,14 +534,16 @@ async fn daemon_loop(
                         write_all(&device, reports, &mut write_failures).await;
                         tracing::info!(use_phone, "device selection answered");
                     }
-                }
             }
             Some(request) = cancel_rx.recv() => {
                 if !cancel_aborts(&request, pending.as_ref()) {
                     tracing::debug!(?request, "ignoring stale cancellation");
                     continue;
                 }
-                match pending.take().unwrap() {
+                let Some(p) = pending.take() else {
+                    continue;
+                };
+                match p {
                     Pending::Relay { cid, abort, .. } => {
                         abort.abort();
                         let reports = transport.cancel_relay(cid);
@@ -576,7 +561,11 @@ async fn daemon_loop(
                     }
                 }
             }
-            _ = keepalive.tick() => {
+            // The keepalive cadence is only needed while a transaction is
+            // pending or an unfinished assembly needs its idle-expiry check;
+            // gating the branch keeps an idle daemon from waking ~7 times a
+            // second for its whole lifetime.
+            _ = keepalive.tick(), if pending.is_some() || transport.has_assembly() => {
                 // A truncated multi-frame request must not wedge the busy
                 // slot forever; hosts send continuation frames back to
                 // back, so idle silence means the sender is gone.

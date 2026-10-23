@@ -10,7 +10,7 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 材料——通行密钥始终只存在于手机上。
 
 底层上，它向内核注册一个虚拟的 USB HID FIDO2 设备（`/dev/uhid`），并通过
-**caBLE v2**（二维码 + BLE 距离证明 + WSS 隧道，即 CTAP 2.2 §11.5 的 hybrid
+**caBLE v2**（二维码 + BLE 距离证明 + WSS 隧道，即 PXP / 原 CTAP hybrid
 传输）把浏览器发来的 WebAuthn 注册/登录请求中继到手机，再把手机的响应送回
 浏览器。
 
@@ -67,8 +67,11 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
 
-  # 可选：使用其他 UI helper
-  services.ucabled.helper = "${pkgs.ucable-agent-helper-gnome}/bin/ucable-agent-helper";
+  # 可选：在 GNOME 上安装 Shell 扩展，它自己注册为会话 agent，
+  # 把提示画成 shell 模态对话框（然后每个用户执行
+  # gnome-extensions enable ucable-gnome-agent@fuzy.me）；
+  # 取舍见 contrib/ucable-gnome-agent/README.md
+  # services.ucabled.gnomeAgent.enable = true;
 
   # 可选：额外的 helper 参数。内置 GTK4 helper 支持
   # --layer-shell，在 Sway、Hyprland 等 wlroots 合成器上
@@ -92,6 +95,28 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
 
 执行 `nixos-rebuild switch`，然后注销再登录（或运行
 `systemctl --user start ucable-agent`），让代理完成注册。
+
+### 不使用 flakes
+
+通过仓库的 `default.nix`，stable Nix 也能使用同一个模块；它把
+nixpkgs 锁定到本仓库的 `flake.lock`：
+
+```nix
+{
+  # fetchTarball 会把 master 缓存一小时（tarball-ttl），更新自动到
+  # 来；若想手动控制升级节奏，可加 sha256 固定。
+  imports = [
+    (import (builtins.fetchTarball
+      "https://github.com/fuzy112/ucabled/archive/refs/heads/master.tar.gz")
+      { }).nixosModule
+  ];
+  services.ucabled.enable = true;
+}
+```
+
+它读取与 flake 相同的 `flake.lock`，因此下文的二进制缓存同样适用。
+在源码检出中，用 `nix-build -A ucabled`（或 `-A ucable-gnome-agent`）
+即可构建，`nix-shell` 进入与 `nix develop` 相同的开发环境。
 
 ### 二进制缓存
 
@@ -121,22 +146,48 @@ nix.settings = {
 ```bash
 sudo apt install debhelper cargo rustc pkgconf libgtk-4-dev \
     libgtk4-layer-shell-dev gettext
-dpkg-buildpackage -b -us -uc        # 加 -d 可跳过构建依赖检查
-sudo apt install ../ucabled_*.deb
+# 加 -d 可跳过构建依赖检查
+dpkg-buildpackage -b -us -uc \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
+sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
+# 在 GNOME 上，可选的 Shell 扩展是第三个包：
+sudo apt install ../ucable-gnome-agent_*.deb
 ```
+
+从 Git 检出构建、但当前提交不是干净的发布标签时，属于开发构建：上面两个
+hook 会把 HEAD 的提交日期和短哈希加到版本号里，例如
+`0.2.0~20261022.gaf437b0`；它排在更早的开发快照之后、`0.2.0` 正式版之前。
+发布 tarball 没有 `.git`，版本号保持打包时的原样。`nix run .#deb` 会自动
+加上同样的后缀。
 
 构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
 工具链更旧（Debian trixie、Ubuntu 24.04），改用 rustup 安装的工具链：
 
 ```bash
-debian/rules binary CARGO=$HOME/.cargo/bin/cargo
+# -d：发行版的 cargo/rustc 低于 Build-Depends 要求
+dpkg-buildpackage -b -us -uc -d \
+    --rules-file="debian/rules CARGO=$HOME/.cargo/bin/cargo" \
+    --hook-preinit=debian/dev-version.sh \
+    --hook-done=debian/dev-version.sh
 ```
 
-该包会安装守护进程、两个 helper、systemd 单元、udev 规则、D-Bus 与 polkit
-策略、手册页、shell 补全和翻译。它会创建 `ucabled` 服务账户、启动守护进程，
-并全局启用每用户会话代理；安装后请重新登录一次，让代理注册。caBLE 身份密钥
-位于 `/var/lib/ucabled/identity.key`：`apt remove` 会保留，`apt purge` 会删除
-（之后手机需要重新配对）。
+在 NixOS 上，`nix run .#deb` 会在 rootless podman 容器里构建同样的三个包，
+产物写到 `debian-build/<发行版>/`，宿主机无需安装上述构建依赖；前提是
+rootless podman 可用。默认构建两个受支持的发行版，也可只构建其一
+（`nix run .#deb -- debian13` 或 `ubuntu26.04`）。Ubuntu 24.04 LTS 不是
+目标：gtk4-layer-shell 从 Ubuntu 25.04 起才进入仓库。
+加 `sudo` 运行则改用 rootful podman，不需要配置 subuid/subgid，
+产物会 chown 回调用者。
+
+源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
+以及 D-Bus/polkit 策略）、`ucable-agent`（默认的 GTK4 会话代理及其 helper）
+和 `ucable-gnome-agent`（可选的 GNOME Shell 扩展）。`ucabled` 推荐
+`ucable-agent`，所以 `apt install ucabled` 会一并装上默认代理。守护进程的
+postinst 会重载 D-Bus 策略、polkit 与 udev 规则，然后在新装时启动、升级时
+重启守护进程；代理的 postinst 会全局启用用户单元，并在已登录会话中重载和
+重启它。caBLE 身份密钥位于 `/var/lib/ucabled/identity.key`：`apt remove`
+会保留，`apt purge` 会删除。
 
 ## 安装（其他发行版）
 
@@ -165,7 +216,7 @@ sudo install -Dm755 target/release/ucable-agent-helper /usr/local/bin/ucable-age
 for po in po/*.po; do
   lang=$(basename "$po" .po)
   sudo install -d /usr/local/share/locale/$lang/LC_MESSAGES
-  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo
+  sudo msgfmt "$po" -o /usr/local/share/locale/$lang/LC_MESSAGES/ucable.mo
 done
 
 # 专用服务账户、内核模块与 udev 规则
@@ -218,6 +269,10 @@ GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加
 任何符合 contract-v1 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
 或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
 参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
+
+在 GNOME 下还有 `contrib/ucable-gnome-agent`：一个 Shell 扩展，它自己注册
+为会话 agent（不再有 helper 进程），把提示画成盖在桌面之上的 shell 模态
+对话框。取舍见它的 README（非 GNOME 会话没有兜底、agent 槽位唯一）。
 
 ### SSH 安全密钥
 
@@ -317,9 +372,15 @@ nix flake check
 ```
 
 发布（在 `master` 上、dev shell 内）：`admin/release.sh X.Y.Z` 会提升版本、
-写入 changelog、提交并创建签名标签 `vX.Y.Z`。推送该标签会触发
-`.github/workflows/release.yml`，它检查标签/manifest/changelog 的一致性以及
+写入 changelog、提交并创建签名标签 `vX.Y.Z`，随后把 `master` 合入 `next`
+并在那里开启下一个开发版本（默认下一个 minor；可用第二个参数 `X.Y.Z-pre`
+指定）。先推送 `master`、`next` 和 `website` 并等待相应检查通过，再推送标签。
+`.github/workflows/release.yml` 会检查标签/manifest/changelog 的一致性以及
 标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
+随后由 `admin/release-debs.sh` 在本地构建、签名并上传 Debian 包：
+版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，为每个
+.deb 生成 GPG 分离签名，并把资产上传到该 release。这一步留在本地执行，
+签名密钥就不会离开维护者的机器。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
 （以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加
@@ -334,9 +395,10 @@ libadwaita，以维持桌面中立。
 - `src/bin/cable-advert-probe.rs`：显示一个提供 BLE 数据通道的 caBLE 二维码，
   并报告手机是否广播了 L2CAP PSM
 
-翻译目录位于 `po/`。新增或修改 helper 字符串后，在 dev shell 里运行
-`admin/update-pot.sh` 重新生成 `po/ucable-agent-helper-gtk.pot`，并把新的
-msgid 合并进每个目录。helper 是唯一被翻译的组件。
+翻译目录位于 `po/`，由 GTK helper 和 GNOME Shell 扩展共享（gettext 域
+`ucable`）。在任一侧新增或修改可翻译字符串后，在 dev shell 里运行
+`admin/update-pot.sh` 重新生成 `po/ucable.pot`，并把新的 msgid 合并进
+每个目录；CI 中的 `admin/check-po.sh` 会校验它们保持同步。
 
 可选的 CTAP 2.3 BLE 数据通道（L2CAP CoC）是实验性的，默认关闭：用
 `--features l2cap` 构建并设置 `UCABLED_BLE_CHANNEL=1`。iPhone 不提供它

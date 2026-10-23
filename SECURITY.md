@@ -7,10 +7,9 @@ and relays WebAuthn ceremonies to a phone over an end-to-end-encrypted caBLE
 v2 channel. Issues worth reporting include, but are not limited to:
 
 - a non-active or remote session being able to trigger or observe a prompt;
-- the QR transaction secret leaking into logs, command lines, or the D-Bus
-  broadcast channel;
-- the virtual HID device being usable by processes other than the `ucabled`
-  service account;
+- the QR transaction secret leaking into logs, command lines, or D-Bus
+  messages (the secret travels to `ucable-agent` in the unicast `Prompt`
+  call);
 - weaknesses in the Noise handshake, EID handling, or tunnel validation.
 
 ## Reporting a Vulnerability
@@ -36,6 +35,7 @@ gpg --import security-reporting.asc
 gpg --fingerprint 77FFE384A0873BDCF62CB18B52C4E5578A8B46D1
 ```
 
-You should receive an acknowledgement within a few days. Fixes are developed
-and released on `master`; only the latest state of the default branch is
-supported — there are no maintained release branches.
+You should receive an acknowledgement within a few days. Development happens
+on `next`; fixes are merged into `master` and released from there. Only the
+latest state of `master`, the default branch, is supported — there are no
+maintained release branches.

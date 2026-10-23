@@ -1,7 +1,7 @@
 # Phone Passkey Bridge — 需求与实现计划（修订版）
 
-> 在 Linux 桌面（Firefox，零改动、零扩展）上复刻 caBLE v2（CTAP 2.2 §11.5
-> hybrid）跨设备 passkey 流程：
+> 在 Linux 桌面（Firefox，零改动、零扩展）上复刻 caBLE v2（原 CTAP hybrid
+> transport，现由 PXP 描述）跨设备 passkey 流程：
 > 通过 QR 码把手机（iCloud Keychain / Google Password Manager）变为 passkey 的
 > 唯一存储位置，笔记本仅承担 QR 展示与通信中继。
 >
@@ -30,7 +30,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | FR-5 | getInfo 能力协商：`versions: ["FIDO_2_0"]`，`options: {rk, up, uv}`，`clientPin: false`，`maxMsgSize: 7609`，`transports: ["hybrid"]`，不广告 U2F_V2 | P0 |
 | FR-6 | 支持 iPhone（iCloud Keychain）与 Android（Google Password Manager）扫码；手机端零安装 | P0 |
 | FR-7 | state-assisted linking（"记住这台手机"）：存储 contact ID，后续操作免扫码 | P2 |
-| FR-8a | **BLE advert 接收**：扫描手机广播的 EID（UUID 0000fff9 的 20 字节 service data），trial-decrypt 得到 routing ID 与连接 nonce。**协议必需**（CTAP 2.2 §11.5.1：PSK 由 QR secret + 解密后的 BLE advert 派生，作为 proximity proof；无 BLE 则无握手） | P0 |
+| FR-8a | **BLE advert 接收**：扫描手机广播的 EID（UUID 0000fff9 的 20 字节 service data），trial-decrypt 得到 routing ID 与连接 nonce。**协议必需**（PXP §6.2：PSK 由 QR secret + 解密后的 BLE advert 派生，作为 proximity proof；无 BLE 则无握手） | P0 |
 | FR-8b | **BLE 数据通道**：§11.4 的 FIDO GATT（`0xFFFD`）手机不提供；CTAP 2.3 的 hybrid BLE 通道（L2CAP CoC）已实现为实验特性（Cargo feature `l2cap`，运行时 `UCABLED_BLE_CHANNEL=1`）；iPhone 实测不支持，待 Android 验证。见 docs/gatt-data-channel.md、docs/l2cap-channel.md | P2 |
 | FR-9 | per-RP / 全局策略配置（何时走手机流程） | P2 |
 
@@ -58,7 +58,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 
 ## 3. 术语
 
-- **caBLE v2 (Cloud Assisted BLE)**：FIDO CTAP 2.2 §11.5 定义的跨设备传输；桌面端
+- **caBLE v2 (Cloud Assisted BLE)**：FIDO PXP（原 CTAP hybrid transport）定义的跨设备传输；桌面端
 显示 QR（内含 ephemeral 公钥、QR secret、隧道服务器域名），手机扫码后经
 隧道服务器 WSS 与桌面端交换 CTAP2。CTAP 2.3 起数据通道除 WSS 外还可选 BLE
 （L2CAP CoC），两者均已实现（L2CAP 在 `l2cap` feature 下）。
@@ -131,7 +131,7 @@ UI 提示（独立会话进程，详见 docs/system-service.md）：
 ### 5.2 caBLE v2 initiator 流程
 
 **以实现为准的参考源是 Chromium `device/fido/cable`**（`qr_generator.cc`、
-`tunnel_server_client`、v2 handshake 相关文件），CTAP 2.2 §11.5 作为交叉校验；
+`tunnel_server_client`、v2 handshake 相关文件），PXP 作为交叉校验；
 这一层是项目最脆的部分，不凭 spec 摘要臆写。要点：
 
 1. 生成随机 **P-256** identity 密钥对与 16 字节 QR secret（spec 允许随机；
@@ -204,7 +204,7 @@ transport 的 UI 判断，以及后续 getAssertion 可能带回的 `["usb"]` hi
   凭证，真实请求就只剩第一个；当 RP（如 Codeberg/Forgejo 2FA）注册了多个密钥、
   而手机持有的是后面的那个时，手机报「找不到通行密钥」。修法：`getInfo` 广告键
   7/8（`maxCredentialCountInList=64`、`maxCredentialIdLength=1024`）避免分块，
-  `fake_silent_assertion` 回带 `numberOfCredentials` 与全部凭证，并对随后的
+  `answer_silent_probe` 回带 `numberOfCredentials` 与全部凭证，并对随后的
   `authenticatorGetNextAssertion`（0x08）逐个补齐，从而让真实请求保留完整
    `allowList`。伪造响应只在本地、只回显浏览器自己给的公开凭证 id，不含任何密钥
   材料；真实断言仍由手机签名。
@@ -308,7 +308,8 @@ QR 流程的协议必需项（PSK 绑定解密后的 advert，proximity proof）
    触摸选择，故用"Use phone"窗口选中虚拟设备（见 §5.3）；无需 daemon 开关。
 3. getInfo extensions 静态广告与真机能力偏差——表现为个别 RP 报
 INVALID_OPTION，可接受、可迭代。
-4. 隧道服务器可用性/合规——缓释：协议允许 QR 内换自建域名。
+4. 隧道服务器可用性/合规——二维码无法指定自建域名（域名由手机经 EID 选择），
+   无"QR 内换域名"的余地；缓释只能靠多通道（BLE 直连）。见 docs/tunnel-server.md。
 
 ## 8. NixOS 配置
 
@@ -344,8 +345,10 @@ INVALID_OPTION，可接受、可迭代。
 
 ## 9. 参考
 
-- FIDO CTAP 2.3 spec §11.4（BLE GATT 传输）与 §11.5（Hybrid transports /
-caBLE v2，含 §11.5.1.1.2 BLE L2CAP 数据通道）；CTAP 2.2 §11.5 作交叉校验
+- FIDO PXP（Proximity Exchange Protocol）v1.0 WD：hybrid transport / caBLE v2
+  的现行权威（§5.3.1 QR 发起、§5.3.2 linking、§6.1 数据通道、§6.1.2 BLE）；
+  CTAP 2.3（2026-02-26 PS）是最后含完整 hybrid 章的正式版。§11.4 的 BLE
+  GATT 传输仍见 CTAP
 - Chromium `device/fido/cable`（实现对齐的第一参考源：`qr_generator.cc`、
 `tunnel_server_client`、v2 handshake）
 - 虚拟设备先例：token2-fido-bridge、tpm-fido、virtual-fido、soft-fido2(passless)

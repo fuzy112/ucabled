@@ -3,15 +3,15 @@
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderMap, Response, Uri};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::{
-    connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream,
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
 };
 
 use crate::WS_SUBPROTOCOL;
@@ -30,7 +30,7 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub const ASSIGNED_TUNNEL_DOMAINS: [&str; 2] = ["cable.ua5v.com", "cable.auth.com"];
 
-/// Assigned-domain IDs (CTAP 2.2 §11.5.1): indexes into
+/// Assigned-domain IDs (PXP §6.1.1): indexes into
 /// [`ASSIGNED_TUNNEL_DOMAINS`].
 pub const ASSIGNED_DOMAIN_GOOGLE: u16 = 0;
 pub const ASSIGNED_DOMAIN_APPLE: u16 = 1;
@@ -40,7 +40,7 @@ const ASSIGNED_DOMAIN_LIMIT: u16 = 256;
 const HASHED_DOMAIN_PREFIX: &str = "cable.";
 const BASE32_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
 const HASHED_TLDS: [&str; 4] = ["com", "org", "net", "info"];
-/// The hashed domain input is NUL-terminated (CTAP 2.2 §11.5.1).
+/// The hashed domain input is NUL-terminated (PXP §6.1.1).
 const HASHED_DOMAIN_TERMINATOR: u8 = 0;
 
 /// Maximum number of HTTP redirect hops when dialling the tunnel.
@@ -283,14 +283,14 @@ pub async fn write_binary(ws: &mut Ws, data: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-pub async fn read_binary(ws: &mut Ws) -> Result<Vec<u8>> {
+pub async fn read_binary(ws: &mut Ws) -> Result<Bytes> {
     loop {
         match ws.next().await {
             Some(Ok(Message::Binary(data))) => {
                 if data.len() > MAX_FRAME_SIZE {
                     bail!("tunnel frame too large: {} bytes", data.len());
                 }
-                return Ok(data.to_vec());
+                return Ok(data);
             }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => bail!("tunnel websocket closed"),
@@ -323,9 +323,11 @@ mod tests {
         let a = decode_tunnel_server_domain(256).unwrap();
         assert_eq!(a, decode_tunnel_server_domain(256).unwrap());
         assert!(a.starts_with("cable."));
-        assert!([".com", ".org", ".net", ".info"]
-            .iter()
-            .any(|tld| a.ends_with(tld)));
+        assert!(
+            [".com", ".org", ".net", ".info"]
+                .iter()
+                .any(|tld| a.ends_with(tld))
+        );
         assert_ne!(a, decode_tunnel_server_domain(257).unwrap());
     }
 

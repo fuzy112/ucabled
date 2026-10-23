@@ -1,3 +1,6 @@
 # Source files scanned for translatable strings by admin/update-pot.sh.
 # One path per line, relative to the repository root; '#' starts a comment.
+# *.rs files are extracted with the Rust tr/n_ keywords, *.js files (GJS)
+# with the gettext _ keyword; both feed the shared "ucable" domain.
 src/bin/ucable-agent-helper.rs
+contrib/ucable-gnome-agent/extension.js

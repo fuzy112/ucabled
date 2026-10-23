@@ -3,6 +3,12 @@
 > 状态：结论已定，**不作为目标**。前提是 stock iOS / Android 客户端；
 > 若将来使用可控客户端（可编译的 Chromium、自研 authenticator 等），可
 > 以重新评估，见文末。
+>
+> 规范现状（2026-10）：从 CTAP 2.3.1 WD 起，hybrid 章已从 CTAP 拆出，改由
+> 独立的 Proximity Exchange Protocol（PXP v1.0 WD，2026-07-17，
+> <https://fidoalliance.org/specs/hybrid/proximity-exchange-protocol-v1.0-wd-20260717.html>）
+> 描述；CTAP 2.3（2026-02-26 PS）是最后含完整该章的正式版——本文结论不变。
+> 下文引用的 Chromium 源码位置（`device/fido/cable/`、`v2_constants.h`）仍有效。
 
 ## 1. 结论
 

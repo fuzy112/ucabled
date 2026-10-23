@@ -1,7 +1,7 @@
 [package]
 name = "ucabled"
-version = "0.1.6"
-edition = "2021"
+version = "0.2.0-pre"
+edition = "2024"
 # Lowest toolchain the locked dependencies build with (gtk4 0.11 needs 1.92).
 rust-version = "1.92"
 license = "GPL-3.0-or-later"
@@ -43,8 +43,9 @@ p256 = { version = "0.13", features = ["ecdh"] }
 hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"
-aes = "0.8"
-aes-gcm = "0.10"
+aes = { version = "0.8", features = ["zeroize"] }
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+zeroize = "1"
 
 tokio = { version = "1", features = [
   "macros",
@@ -91,3 +92,10 @@ gettext-rs = { version = "0.8", features = ["gettext-system"] }
 
 [dev-dependencies]
 proptest = "1"
+
+# Thin LTO for release builds: inlines the pure-Rust crypto and CBOR code
+# across crate boundaries for a modest runtime win, while keeping release
+# build times and backtrace usefulness reasonable (unlike fat LTO or
+# codegen-units = 1).  Dev builds are unaffected.
+[profile.release]
+lto = "thin"

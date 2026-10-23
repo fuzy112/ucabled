@@ -18,13 +18,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use dbus::Path;
 use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::message::{MatchRule, Message};
 use dbus::nonblock::{MsgMatch, Proxy, SyncConnection};
-use dbus::Path;
 use dbus_crossroads::{Crossroads, MethodErr};
-use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
 use futures::StreamExt;
+use futures::channel::mpsc::UnboundedReceiver as MessageReceiver;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -73,20 +73,21 @@ impl RegisterLimiter {
     /// Whether `sender` may attempt a registration at `now`; an allowed
     /// attempt is recorded.
     fn check(&mut self, sender: &str, now: Instant) -> bool {
-        if let Some(last) = self.last.get(sender) {
+        if let Some(last) = self.last.get_mut(sender) {
             if now.duration_since(*last) < REGISTER_MIN_INTERVAL {
                 return false;
             }
+            *last = now;
+            return true;
         }
-        if !self.last.contains_key(sender) && self.last.len() >= REGISTER_LIMITER_MAX {
-            if let Some(oldest) = self
+        if self.last.len() >= REGISTER_LIMITER_MAX
+            && let Some(oldest) = self
                 .last
                 .iter()
                 .min_by_key(|(_, at)| *at)
                 .map(|(name, _)| name.clone())
-            {
-                self.last.remove(&oldest);
-            }
+        {
+            self.last.remove(&oldest);
         }
         self.last.insert(sender.to_string(), now);
         true
@@ -516,9 +517,9 @@ async fn route_messages(
             }
             sig = signals.next() => {
                 let Some(sig) = sig else { break };
-                if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>() {
-                    if new_owner.is_empty() {
-                        if let Some(generation) = clear_if_matches(&slot, Some(&name)) {
+                if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>()
+                    && new_owner.is_empty()
+                        && let Some(generation) = clear_if_matches(&slot, Some(&name)) {
                             // Awaited delivery: this is the backstop that
                             // frees the shared HID channel and must not be
                             // lost to a momentarily full queue.
@@ -526,8 +527,6 @@ async fn route_messages(
                                 .send(CancelRequest::AgentGone(generation))
                                 .await;
                         }
-                    }
-                }
             }
         }
     }

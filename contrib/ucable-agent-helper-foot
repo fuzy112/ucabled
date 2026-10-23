@@ -40,6 +40,9 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$mode" = select ]; then
+    # The single quotes are intentional: $1 is the inner bash's positional
+    # parameter, not this script's.
+    # shellcheck disable=SC2016
     exec foot --app-id ucabled --title "Passkey" --window-size-chars 60x10 \
         bash -c '
             printf "Another authenticator (a security key) was detected.\n\nUse the phone instead? [y/N] "
@@ -60,6 +63,8 @@ mkfifo -m 600 "$fifo"
 # once the in-terminal reader goes away.
 cat <&0 >"$fifo" &
 
+# Positional parameters are the inner bash's, hence the single quotes.
+# shellcheck disable=SC2016
 exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
     bash -c '
         set -u

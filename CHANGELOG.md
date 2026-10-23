@@ -4,7 +4,56 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0-pre]
+
+### Added
+
+- New optional GNOME Shell extension `contrib/ucable-gnome-agent`
+  (NixOS: `services.ucabled.gnomeAgent.enable`): the extension registers
+  as the session UI agent itself and shows the passkey QR prompt and the
+  device-selection question as shell modal dialogs, replacing the GTK
+  helper window on GNOME.  Its dialogs are translated into the same
+  languages as the GTK helper.
+
+- GitHub releases now carry the Debian/Ubuntu packages: the three `.deb`
+  packages built for Debian 13 and Ubuntu 26.04 are attached to each
+  release, each with a detached GPG signature.
+
+- Stable (non-flake) Nix support: the top-level `default.nix` builds
+  the packages with plain `nix-build -A ucabled` and exposes the NixOS
+  module as `(import ./. { }).nixosModule`, pinning nixpkgs to the same
+  `flake.lock` the flake uses, so the Cachix binary cache applies to
+  both entry points.  `nix-shell` now uses that pin as well instead of
+  the ambient `<nixpkgs>` channel.
+
+### Changed
+
+- The gettext domain is renamed from `ucable-agent-helper-gtk` to
+  `ucable`, and the GTK helper and the GNOME Shell extension now share
+  the same catalogs in `po/`.
+
+- Optimize performance.
+- Debian/Ubuntu packaging: split the monolithic `ucabled` package into
+  `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
+  `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
+  default agent in through a recommendation; the maintainer scripts
+  reload the bus, polkit and udev policy and restart the daemon and the
+  logged-in session agents.
+
+### Fixed
+
+- Experimental BLE data channel (`l2cap` feature): frame each caBLE
+  message with the 4-byte big-endian length prefix the hybrid
+  specification requires, instead of relying on L2CAP message
+  boundaries.
+
+### Security
+
+- Wipe transaction secrets more thoroughly: the AES ciphers now erase
+  their expanded round keys on drop (the `aes` crate's `zeroize`
+  feature), the HKDF intermediate buffers in the Noise handshake are
+  erased after use, and all hand-written erase calls moved to the
+  `zeroize` crate (already in the dependency tree through p256).
 
 ## [0.1.6] - 2026-10-21
 
@@ -104,7 +153,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
-[Unreleased]: https://github.com/fuzy112/ucabled/compare/v0.1.6...HEAD
+[0.2.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.1.6...HEAD
 [0.1.6]: https://github.com/fuzy112/ucabled/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/fuzy112/ucabled/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/fuzy112/ucabled/compare/v0.1.3...v0.1.4

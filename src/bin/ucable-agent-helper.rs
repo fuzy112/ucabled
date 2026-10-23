@@ -52,7 +52,7 @@ const QR_MIN_VERSION: i16 = 5;
 const PASSKEY_ICON: &[u8; 100 * 100] = include_bytes!("resources/passkey.gray");
 
 /// gettext domain for this helper's catalogs.
-const GETTEXT_DOMAIN: &str = "ucable-agent-helper-gtk";
+const GETTEXT_DOMAIN: &str = "ucable";
 
 /// Where gettext catalogs are installed.  `UCABLED_LOCALEDIR` wins when set
 /// at build time; otherwise the directory is derived from the executable's
@@ -89,7 +89,7 @@ enum RequestKind {
 
 impl RequestKind {
     /// The contract spells the values `mc` / `ga`, mirroring the request type
-    /// inside the caBLE URL (CTAP 2.2 §11.5.1, key 5).
+    /// inside the caBLE URL (PXP §5.3.1, key 5).
     fn from_wire(value: &str) -> Option<Self> {
         match value {
             "mc" => Some(RequestKind::MakeCredential),
@@ -187,7 +187,7 @@ fn env_truthy(name: &str) -> bool {
 // --------------------------------------------------------------------------
 
 fn init_i18n() {
-    use gettextrs::{bindtextdomain, setlocale, textdomain, LocaleCategory};
+    use gettextrs::{LocaleCategory, bindtextdomain, setlocale, textdomain};
 
     // GTK4 dropped the setlocale() that GTK3 did at init, so without this the
     // process stays in the "C" locale and gettext never loads a catalog.
@@ -209,19 +209,24 @@ fn tr(msgid: &str) -> String {
 // QR rendering
 // --------------------------------------------------------------------------
 
-/// Build the QR code with error-correction level M and at least version 5.
+/// Build the QR code with error-correction level M and at least version
+/// [`QR_MIN_VERSION`] (so the centre icon cannot eat enough of the
+/// error-correction budget to break decoding).
 fn make_qr_code(url: &str) -> qrcode::QrCode {
-    for v in QR_MIN_VERSION..=40 {
-        if let Ok(code) = qrcode::QrCode::with_version(
+    // Let the encoder pick the natural version first; bumping a tiny payload
+    // up to the minimum is one re-encode, versus trying every version from
+    // the minimum up to the one that fits.
+    let code = qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::M)
+        .expect("QR contents too long");
+    match code.version() {
+        qrcode::Version::Normal(v) if v < QR_MIN_VERSION => qrcode::QrCode::with_version(
             url.as_bytes(),
-            qrcode::Version::Normal(v),
+            qrcode::Version::Normal(QR_MIN_VERSION),
             qrcode::EcLevel::M,
-        ) {
-            return code;
-        }
+        )
+        .expect("a payload that fit a smaller version fits QR_MIN_VERSION"),
+        _ => code,
     }
-    qrcode::QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::M)
-        .expect("QR contents too long")
 }
 
 /// Rounded-rectangle path (four corner arcs).
@@ -325,6 +330,10 @@ fn qr_texture(url: &str) -> Option<gdk::Texture> {
         cr.paint().ok()?;
 
         let module = QR_MODULE_PX as f64;
+        // One path for every data module: an arc per dark module (each its
+        // own subpath, or cairo would connect them with line segments) and a
+        // single fill, instead of a set_source/fill per module.
+        cr.set_source_rgb(0.0, 0.0, 0.0);
         for y in 0..n {
             for x in 0..n {
                 if is_locator(x, y, n) {
@@ -336,11 +345,11 @@ fn qr_texture(url: &str) -> Option<gdk::Texture> {
                 let cx = (x as f64 + QR_QUIET as f64 + 0.5) * module;
                 let cy = (y as f64 + QR_QUIET as f64 + 0.5) * module;
                 let r = module / 2.0 - 1.0;
-                cr.set_source_rgb(0.0, 0.0, 0.0);
+                cr.new_sub_path();
                 cr.arc(cx, cy, r, 0.0, 2.0 * PI);
-                cr.fill().ok()?;
             }
         }
+        cr.fill().ok()?;
 
         let q = QR_QUIET as f64 * module;
         let far = (QR_QUIET + n - 7) as f64 * module;

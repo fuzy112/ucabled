@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use aes::Aes256;
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 

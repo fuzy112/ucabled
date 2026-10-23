@@ -60,10 +60,10 @@ fn interval_from(usec: Option<&str>) -> Option<Duration> {
 pub fn watchdog_interval() -> Option<Duration> {
     // systemd sets WATCHDOG_PID for the process it is watching; ignore a
     // stale value that was inherited by a child.
-    if let Ok(pid) = std::env::var("WATCHDOG_PID") {
-        if pid.parse::<u32>().ok() != Some(std::process::id()) {
-            return None;
-        }
+    if let Ok(pid) = std::env::var("WATCHDOG_PID")
+        && pid.parse::<u32>().ok() != Some(std::process::id())
+    {
+        return None;
     }
     interval_from(std::env::var("WATCHDOG_USEC").ok().as_deref())
 }

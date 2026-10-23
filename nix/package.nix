@@ -7,13 +7,31 @@
   gtk4,
   gtk4-layer-shell,
   gettext,
+  # Set to false to keep the symbol table (e.g. for profiling builds).
+  stripBinaries ? true,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "ucabled";
   version = (lib.importTOML ../Cargo.toml).package.version;
 
-  src = lib.cleanSource ./..;
+  # Only the files the build consumes: the crate, the gettext catalogs
+  # compiled in postInstall and the manual pages/completions installed from
+  # dist.  A change anywhere else in the repo (tests, docs, site, CI,
+  # scripts) leaves this source and thus the output path unchanged, so the
+  # Cachix entry an earlier push published stays valid.  The workflow's
+  # path filter in .github/workflows/rust.yml is deliberately wider: it
+  # also triggers on what the non-package checks consume.
+  src = lib.fileset.toSource {
+    root = ./..;
+    fileset = lib.fileset.unions [
+      ../src
+      ../Cargo.toml
+      ../Cargo.lock
+      ../po
+      ../dist
+    ];
+  };
   cargoLock.lockFile = ../Cargo.lock;
 
   # libadwaita is deliberately left out here to keep the helper
@@ -33,6 +51,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
     gtk4-layer-shell
   ];
 
+  # Rust release builds carry no DWARF debug info, so stdenv's default
+  # `strip -S` removes nothing and the symbol table ships in the output.
+  # Strip all symbols from the installed binaries instead.
+  stripAllList = lib.optionals stripBinaries [ "bin" ];
+
   postInstall = ''
     # Only ship the daemon and its QR helpers; spike/mock/probe are dev tools.
     rm -f $out/bin/ucabled-spike $out/bin/mock-phone $out/bin/hidraw-probe $out/bin/cable-advert-probe
@@ -44,7 +67,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     for po in po/*.po; do
       lang=$(basename "$po" .po)
       mkdir -p "$out/share/locale/$lang/LC_MESSAGES"
-      msgfmt "$po" -o "$out/share/locale/$lang/LC_MESSAGES/ucable-agent-helper-gtk.mo"
+      msgfmt "$po" -o "$out/share/locale/$lang/LC_MESSAGES/ucable.mo"
     done
 
     # Manual pages and shell completions.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit};
+use zeroize::Zeroize;
 
 const PADDING_GRANULARITY: usize = 32;
 /// AES-GCM authentication tag appended to every ciphertext.
@@ -14,18 +15,28 @@ fn padded_size(message_len: usize) -> usize {
     (message_len + 1 + PADDING_GRANULARITY - 1) & !(PADDING_GRANULARITY - 1)
 }
 
+/// The ciphers wipe their expanded AES round keys on drop (the `zeroize`
+/// feature of the `aes` crate), so the raw keys must not be stored: they
+/// are wiped right after the ciphers are built.  The GHASH `H` element
+/// inside `Aes256Gcm` is not wipeable (polyval has no zeroize support),
+/// which is acceptable: recovering the AES key from H = E_K(0) is a
+/// known-plaintext attack on AES itself.
 pub struct Crypter {
-    read_key: [u8; 32],
-    write_key: [u8; 32],
+    read_cipher: Aes256Gcm,
+    write_cipher: Aes256Gcm,
     read_seq: u32,
     write_seq: u32,
 }
 
 impl Crypter {
-    pub fn new(read_key: [u8; 32], write_key: [u8; 32]) -> Self {
+    pub fn new(mut read_key: [u8; 32], mut write_key: [u8; 32]) -> Self {
+        let read_cipher = Aes256Gcm::new((&read_key).into());
+        let write_cipher = Aes256Gcm::new((&write_key).into());
+        read_key.zeroize();
+        write_key.zeroize();
         Self {
-            read_key,
-            write_key,
+            read_cipher,
+            write_cipher,
             read_seq: 0,
             write_seq: 0,
         }
@@ -60,14 +71,14 @@ impl Crypter {
 
         let nonce = Self::nonce(self.write_seq)?;
         self.write_seq += 1;
-        let cipher = Aes256Gcm::new((&self.write_key).into());
-        cipher.encrypt((&nonce).into(), padded.as_ref()).ok()
+        self.write_cipher
+            .encrypt((&nonce).into(), padded.as_ref())
+            .ok()
     }
 
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Option<Vec<u8>> {
         let nonce = Self::nonce(self.read_seq)?;
-        let cipher = Aes256Gcm::new((&self.read_key).into());
-        let plaintext = cipher.decrypt((&nonce).into(), ciphertext).ok()?;
+        let mut plaintext = self.read_cipher.decrypt((&nonce).into(), ciphertext).ok()?;
         self.read_seq += 1;
 
         if plaintext.is_empty() {
@@ -77,14 +88,9 @@ impl Crypter {
         if padding_len + 1 > plaintext.len() {
             return None;
         }
-        Some(plaintext[..plaintext.len() - padding_len - 1].to_vec())
-    }
-}
-
-impl Drop for Crypter {
-    fn drop(&mut self) {
-        crate::secure_erase(&mut self.read_key);
-        crate::secure_erase(&mut self.write_key);
+        // Strip the padding in place instead of copying the message out.
+        plaintext.truncate(plaintext.len() - padding_len - 1);
+        Some(plaintext)
     }
 }
 

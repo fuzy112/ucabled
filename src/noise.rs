@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 pub const KN_PSK0_PROTOCOL_NAME: &[u8] = b"Noise_KNpsk0_P256_AESGCM_SHA256";
 pub const NK_PSK0_PROTOCOL_NAME: &[u8] = b"Noise_NKpsk0_P256_AESGCM_SHA256";
@@ -12,17 +13,22 @@ fn hkdf2(ck: &[u8; 32], ikm: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut out = [0u8; 64];
     hk.expand(&[], &mut out).expect("HKDF expand failed");
     let (a, b) = out.split_at(32);
-    (a.try_into().unwrap(), b.try_into().unwrap())
+    let pair = (a.try_into().unwrap(), b.try_into().unwrap());
+    out.zeroize();
+    pair
 }
 
 fn hkdf3(ck: &[u8; 32], ikm: &[u8]) -> ([u8; 32], [u8; 32], [u8; 32]) {
     let hk = hkdf::Hkdf::<Sha256>::new(Some(ck), ikm);
     let mut out = [0u8; 96];
     hk.expand(&[], &mut out).expect("HKDF expand failed");
-    let a = out[0..32].try_into().unwrap();
-    let b = out[32..64].try_into().unwrap();
-    let c = out[64..96].try_into().unwrap();
-    (a, b, c)
+    let triple = (
+        out[0..32].try_into().unwrap(),
+        out[32..64].try_into().unwrap(),
+        out[64..96].try_into().unwrap(),
+    );
+    out.zeroize();
+    triple
 }
 
 pub struct Noise {
@@ -131,9 +137,9 @@ impl Noise {
 
 impl Drop for Noise {
     fn drop(&mut self) {
-        crate::secure_erase(&mut self.ck);
-        crate::secure_erase(&mut self.h);
-        crate::secure_erase(&mut self.key);
+        self.ck.zeroize();
+        self.h.zeroize();
+        self.key.zeroize();
     }
 }
 

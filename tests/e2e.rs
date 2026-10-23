@@ -2,10 +2,10 @@
 
 mod common;
 
-use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 

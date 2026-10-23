@@ -5,8 +5,7 @@ set -e
 if [ "$1" = "purge" ]; then
 	# The persistent caBLE identity key lives in /var/lib/ucabled, which
 	# systemd's StateDirectory= creates at runtime and which is therefore
-	# not part of the package's file list.  Purging drops it: phones will
-	# have to be paired again after a reinstall.
+	# not part of the package's file list.  Purging drops it.
 	rm -rf /var/lib/ucabled
 
 	# The service account comes from

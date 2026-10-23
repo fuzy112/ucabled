@@ -60,7 +60,7 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
 - `--request-type <mc|ga>`：本次转发的 CTAP 命令，`mc` 对应
   `authenticatorMakeCredential`（在手机上保存通行密钥），`ga` 对应
   `authenticatorGetAssertion`（用通行密钥认证）。取值与 QR 内容里的
-  request type（CTAP 2.2 §11.5.1 key 5）一致，agent 总是传入其中之一。
+  request type（PXP §5.3.1 key 5）一致，agent 总是传入其中之一。
   helper 可据此说明扫码之后会发生什么；不认识这个参数（或只实现早期契约）
   的 helper 忽略即可，此时文案应退化为不涉及操作类型的说法。该值不是秘密，
   可以显示。
