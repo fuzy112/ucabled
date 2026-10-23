@@ -36,6 +36,24 @@ const MAX_UHID_READ_FAILURES: u32 = 10;
 /// declining. The helper has its own, slightly shorter, timeout.
 const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
 
+/// How long a multi-credential session waits for the host's next
+/// `authenticatorGetNextAssertion` before the phone's assertion state is
+/// dropped.  One CTAP reply budget: the browser's account picker may stay
+/// open as long as a normal ceremony needs for confirmation.
+const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Absolute lifetime of a multi-credential session, counted from the first
+/// reply.  The idle timeout restarts on every follow-up, so without an
+/// absolute bound a cooperative host and phone could keep the tunnel (and the
+/// phone's assertion state) alive for as long as they keep asking.
+const SESSION_MAX_LIFETIME: Duration = Duration::from_secs(600);
+
+/// Upper bound on follow-up `getNextAssertion` calls accepted from one
+/// `numberOfCredentials` value.  The count is phone-controlled CBOR; a real
+/// account picker is far below this, and the bound keeps the loop counter and
+/// the number of relayed replies finite.
+const MAX_NEXT_ASSERTIONS: usize = 64;
+
 /// User-facing notice when a tunnel redirect is refused.  Static text only:
 /// nothing the tunnel server sent may cross into the user's session, where
 /// the notification service may render markup.
@@ -58,9 +76,23 @@ enum Pending {
     /// A caBLE transaction is running for `cid`; `abort` cancels it.
     /// `agent` is the registration generation of the agent the QR window
     /// was requested from, used to recognise stale agent-gone signals.
+    /// `next` drives the session task once it becomes a multi-credential
+    /// session.
     Relay {
         cid: u32,
+        generation: u64,
         abort: AbortHandle,
+        next: mpsc::UnboundedSender<SessionCmd>,
+        agent: Option<u64>,
+    },
+    /// The first reply reported more than one credential, so the caBLE
+    /// session stays open and `getNextAssertion` follow-ups are forwarded
+    /// through `next` instead of starting a new transaction.
+    Session {
+        cid: u32,
+        generation: u64,
+        abort: AbortHandle,
+        next: mpsc::UnboundedSender<SessionCmd>,
         agent: Option<u64>,
     },
     /// The user is being asked to choose the phone over another
@@ -74,16 +106,44 @@ enum Pending {
     },
 }
 
+/// A command from the daemon to a live multi-credential caBLE session.
+enum SessionCmd {
+    /// Relay one `authenticatorGetNextAssertion`.
+    Next,
+}
+
+/// One reply from a relay task: the first reply, or a follow-up.
+struct RelayReply {
+    cid: u32,
+    /// Per-transaction token, so a reply that was already queued when the
+    /// host cancelled cannot complete the next transaction on this channel.
+    generation: u64,
+    payload: Result<Vec<u8>, ucabled::error::TransactionError>,
+    /// Credentials still reachable via getNextAssertion (0 = none left).
+    remaining: usize,
+}
+
 impl Pending {
     fn cid(&self) -> u32 {
         match self {
-            Pending::Relay { cid, .. } | Pending::Select { cid, .. } => *cid,
+            Pending::Relay { cid, .. }
+            | Pending::Session { cid, .. }
+            | Pending::Select { cid, .. } => *cid,
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        match self {
+            Pending::Relay { generation, .. } | Pending::Session { generation, .. } => *generation,
+            Pending::Select { .. } => 0,
         }
     }
 
     fn agent(&self) -> Option<u64> {
         match self {
-            Pending::Relay { agent, .. } | Pending::Select { agent, .. } => *agent,
+            Pending::Relay { agent, .. }
+            | Pending::Session { agent, .. }
+            | Pending::Select { agent, .. } => *agent,
         }
     }
 }
@@ -100,6 +160,13 @@ fn cancel_aborts(request: &CancelRequest, pending: Option<&Pending>) -> bool {
         (CancelRequest::AgentGone(generation), Some(p)) => p.agent() == Some(*generation),
         _ => false,
     }
+}
+
+/// Whether a relay reply belongs to the pending transaction.  The channel id
+/// alone is not enough: after a cancellation the host can reuse it for a new
+/// transaction, and a reply already queued by the old one must not answer it.
+fn reply_matches(pending: Option<&Pending>, reply: &RelayReply) -> bool {
+    pending.is_some_and(|p| p.cid() == reply.cid && p.generation() == reply.generation)
 }
 
 fn main() -> Result<()> {
@@ -209,9 +276,9 @@ async fn daemon_loop(
             }
         });
     }
-    let (result_tx, mut result_rx) =
-        mpsc::unbounded_channel::<(u32, Result<Vec<u8>, ucabled::error::TransactionError>)>();
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<RelayReply>();
     let mut pending: Option<Pending> = None;
+    let mut next_generation: u64 = 1;
     // Credentials still to serve via `authenticatorGetNextAssertion` after a
     // faked preflight response that reported more than one credential. Kept as
     // (rpId, remaining credential ids).
@@ -259,6 +326,39 @@ async fn daemon_loop(
                         match action {
                             Some(CtapAction::Relay(payload)) => {
                                 let Some(cid) = transport.busy_channel() else { continue };
+                                // A getNextAssertion addressed to the live
+                                // multi-credential session on this channel
+                                // continues that session instead of opening
+                                // a new qr transaction.
+                                if payload == [CMD_GET_NEXT_ASSERTION]
+                                    && let Some(Pending::Session { cid: session_cid, next, .. }) = &pending
+                                    && *session_cid == cid
+                                {
+                                    if next.send(SessionCmd::Next).is_err() {
+                                        tracing::warn!(
+                                            "multi-credential session is gone; answering the follow-up"
+                                        );
+                                        let reports = transport.cancel_relay(cid);
+                                        write_all(&device, reports, &mut write_failures).await;
+                                        pending = None;
+                                    }
+                                    continue;
+                                }
+                                // An idle multi-credential session does not
+                                // own the CTAPHID channel: the host has moved
+                                // on, so abandon it and serve the new command
+                                // instead of refusing a whole ceremony for
+                                // state nobody will ask for again.
+                                if matches!(pending, Some(Pending::Session { .. }))
+                                    && let Some(Pending::Session { abort, .. }) = pending.take()
+                                {
+                                    abort.abort();
+                                    notifier.hide();
+                                    tracing::info!(
+                                        "abandoned an idle multi-credential session \
+                                         for a new request"
+                                    );
+                                }
                                 if pending.is_some() {
                                     // A second single-frame CBOR command is
                                     // already rejected by the CTAPHID layer,
@@ -403,12 +503,15 @@ async fn daemon_loop(
                                 } else {
                                     RequestType::GetAssertion
                                 };
+                                let generation = next_generation;
+                                next_generation += 1;
+                                let (next_tx, mut next_rx) = mpsc::unbounded_channel::<SessionCmd>();
                                 let tx = result_tx.clone();
                                 let notifier2 = notifier.clone();
                                 let notifier3 = notifier.clone();
                                 let task = tokio::spawn(async move {
-                                    let r = ucabled::relay::run_qr_transaction(
-                                        &payload,
+                                    let opened = ucabled::relay::open_qr_session(
+                                        payload.len(),
                                         request_type,
                                         move |url| {
                                             notifier2.show(
@@ -422,18 +525,110 @@ async fn daemon_loop(
                                         move || notifier3.phone_found(),
                                     )
                                     .await;
-                                    let _ = tx.send((cid, r));
+                                    let mut session = match opened {
+                                        Ok(session) => session,
+                                        Err(e) => {
+                                            let _ = tx.send(RelayReply {
+                                                cid,
+                                                generation,
+                                                payload: Err(e),
+                                                remaining: 0,
+                                            });
+                                            return;
+                                        }
+                                    };
+                                    let first = session.ctap(&payload).await;
+                                    // A getAssertion reply that reports more
+                                    // than one credential leaves the rest
+                                    // reachable only through
+                                    // getNextAssertion on this same session.
+                                    // Only a getAssertion can start one: key 5
+                                    // means something else in other replies.
+                                    let mut remaining = match (&first, request_type) {
+                                        (Ok(reply), RequestType::GetAssertion) => {
+                                            ucabled::ctap::number_of_credentials(reply)
+                                                .unwrap_or(1)
+                                                .saturating_sub(1)
+                                                .min(MAX_NEXT_ASSERTIONS)
+                                        }
+                                        _ => 0,
+                                    };
+                                    let sent = tx.send(RelayReply {
+                                        cid,
+                                        generation,
+                                        payload: first,
+                                        remaining,
+                                    });
+                                    if sent.is_err() {
+                                        session.shutdown().await;
+                                        return;
+                                    }
+                                    // Wait for the host to pick another
+                                    // account.  The account picker may stay
+                                    // open for a while, so use the same
+                                    // budget as one CTAP reply; after that the
+                                    // phone's assertion state is dropped.  The
+                                    // absolute deadline keeps the idle window
+                                    // from being extended indefinitely.
+                                    let session_deadline =
+                                        tokio::time::Instant::now() + SESSION_MAX_LIFETIME;
+                                    while remaining > 0 {
+                                        let idle_deadline =
+                                            tokio::time::Instant::now() + SESSION_IDLE_TIMEOUT;
+                                        let cmd = tokio::time::timeout_at(
+                                            idle_deadline.min(session_deadline),
+                                            next_rx.recv(),
+                                        )
+                                        .await;
+                                        match cmd {
+                                            Ok(Some(SessionCmd::Next)) => {}
+                                            _ => break,
+                                        }
+                                        let reply =
+                                            session.ctap(&[CMD_GET_NEXT_ASSERTION]).await;
+                                        // Only a successful assertion leaves
+                                        // another credential reachable; a
+                                        // CTAP error status (e.g. 0x2e) means
+                                        // the phone's assertion state is gone,
+                                        // so close the session instead of
+                                        // forwarding further follow-ups.
+                                        remaining = match &reply {
+                                            Ok(p) if p.first() == Some(&ucabled::ctap::CTAP2_OK) => {
+                                                remaining.saturating_sub(1)
+                                            }
+                                            _ => 0,
+                                        };
+                                        if tx
+                                            .send(RelayReply {
+                                                cid,
+                                                generation,
+                                                payload: reply,
+                                                remaining,
+                                            })
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    session.shutdown().await;
+                                    if remaining > 0 {
+                                        tracing::info!(
+                                            "multi-credential session closed with \
+                                             credentials left"
+                                        );
+                                    }
                                 });
                                 pending = Some(Pending::Relay {
                                     cid,
+                                    generation,
                                     abort: task.abort_handle(),
+                                    next: next_tx,
                                     agent: ui.generation(),
                                 });
                             }
                             Some(CtapAction::CancelRelay { cid: cancel_cid }) => {
                                 // Only the channel the cancel arrived on may
-                                // lose its transaction: INIT resynchronizes
-                                // one channel and must not disturb another.
+                                // lose its transaction.
                                 if pending.as_ref().is_none_or(|p| p.cid() != cancel_cid) {
                                     continue;
                                 }
@@ -442,6 +637,11 @@ async fn daemon_loop(
                                         abort.abort();
                                         notifier.hide();
                                         tracing::info!("cancelled caBLE transaction");
+                                    }
+                                    Some(Pending::Session { abort, .. }) => {
+                                        abort.abort();
+                                        notifier.hide();
+                                        tracing::info!("cancelled multi-credential session");
                                     }
                                     Some(Pending::Select { .. }) => {
                                         // The host cancelled because another
@@ -482,8 +682,10 @@ async fn daemon_loop(
                             transport.reset();
                             fake_assertions = None;
                             if let Some(p) = pending.take() {
-                                if let Pending::Relay { abort, .. } = p {
-                                    abort.abort();
+                                match p {
+                                    Pending::Relay { abort, .. }
+                                    | Pending::Session { abort, .. } => abort.abort(),
+                                    Pending::Select { .. } => {}
                                 }
                                 notifier.hide();
                                 tracing::info!(
@@ -496,37 +698,69 @@ async fn daemon_loop(
                     UhidEvent::Other(t) => tracing::debug!(t, "unhandled uhid event"),
                 }
             }
-            Some((cid, result)) = result_rx.recv() => {
-                if let Some(Pending::Relay { cid: pending_cid, .. }) = &pending
-                    && *pending_cid == cid {
-                        notifier.hide();
-                        let payload = match result {
-                            Ok(p) => {
-                                tracing::info!(
-                                    status = %format_args!("{:#04x}", p.first().copied().unwrap_or(0)),
-                                    len = p.len(),
-                                    "caBLE transaction completed"
-                                );
-                                p
-                            }
-                            Err(e) => {
-                                tracing::warn!("caBLE transaction failed: {e}");
-                                // A refused redirect means the tunnel server
-                                // misbehaved — not a routine failure — so
-                                // surface it to the user.
-                                if e.is_redirect_refused() {
-                                    notifier.notify(
-                                        REDIRECT_REFUSED_SUMMARY,
-                                        REDIRECT_REFUSED_BODY,
-                                    );
-                                }
-                                vec![e.ctap_status()]
-                            }
-                        };
-                        let reports = transport.complete_relay(cid, &payload);
-                        write_all(&device, reports, &mut write_failures).await;
-                        pending = None;
+            Some(reply) = result_rx.recv() => {
+                // A reply is only an answer to the transaction it was
+                // started for: after a host cancel, the freed channel can
+                // already carry a newer command with the same cid.
+                if !reply_matches(pending.as_ref(), &reply) {
+                    tracing::debug!(
+                        cid = reply.cid,
+                        generation = reply.generation,
+                        "dropping a stale caBLE reply"
+                    );
+                    continue;
+                }
+                let cid = reply.cid;
+                notifier.hide();
+                let payload = match reply.payload {
+                    Ok(p) => {
+                        tracing::info!(
+                            status = %format_args!("{:#04x}", p.first().copied().unwrap_or(0)),
+                            len = p.len(),
+                            "caBLE transaction completed"
+                        );
+                        p
                     }
+                    Err(e) => {
+                        tracing::warn!("caBLE transaction failed: {e}");
+                        // A refused redirect means the tunnel server
+                        // misbehaved — not a routine failure — so
+                        // surface it to the user.
+                        if e.is_redirect_refused() {
+                            notifier.notify(
+                                REDIRECT_REFUSED_SUMMARY,
+                                REDIRECT_REFUSED_BODY,
+                            );
+                        }
+                        vec![e.ctap_status()]
+                    }
+                };
+                let reports = transport.complete_relay(cid, &payload);
+                write_all(&device, reports, &mut write_failures).await;
+                // The phone still holds assertion state when more
+                // credentials remain: keep the session open for
+                // getNextAssertion follow-ups.  A first reply turns the
+                // Relay into a Session; later replies keep it as it is.
+                pending = match pending.take() {
+                    Some(Pending::Relay {
+                        cid,
+                        generation,
+                        abort,
+                        next,
+                        agent,
+                    }) if reply.remaining > 0 => Some(Pending::Session {
+                        cid,
+                        generation,
+                        abort,
+                        next,
+                        agent,
+                    }),
+                    Some(session @ Pending::Session { .. }) if reply.remaining > 0 => Some(session),
+                    _ => None,
+                };
+                if reply.remaining > 0 {
+                    tracing::info!(remaining = reply.remaining, "multi-credential session open");
+                }
             }
             Some((tid, use_phone)) = select_rx.recv() => {
                 if let Some(Pending::Select { cid, .. }) = &pending
@@ -557,6 +791,21 @@ async fn daemon_loop(
                         write_all(&device, reports, &mut write_failures).await;
                         tracing::info!(?request, "pending transaction cancelled");
                     }
+                    // A multi-credential session is usually idle between
+                    // getNextAssertion calls, so only answer the host when a
+                    // command is actually outstanding on the channel; either
+                    // way the task is aborted and the phone learns when the
+                    // tunnel drops.
+                    Pending::Session { cid, abort, .. } => {
+                        abort.abort();
+                        let reports = if transport.busy_channel() == Some(cid) {
+                            transport.cancel_relay(cid)
+                        } else {
+                            vec![]
+                        };
+                        write_all(&device, reports, &mut write_failures).await;
+                        tracing::info!(?request, "pending multi-credential session cancelled");
+                    }
                     // The selection window answers through SelectionResult,
                     // so a TransactionCancelled for its tid should never
                     // arrive; decline defensively if one does.
@@ -579,6 +828,15 @@ async fn daemon_loop(
                 if transport.expire_assembly(std::time::Instant::now()) {
                     tracing::warn!("dropped an unfinished multi-frame request (idle timeout)");
                 }
+                // A multi-credential session whose task has exited (idle
+                // timeout, tunnel failure) owns nothing any more; drop the
+                // stale slot instead of letting it refuse the next command.
+                if let Some(Pending::Session { next, .. }) = pending.as_ref()
+                    && next.is_closed()
+                {
+                    tracing::info!("multi-credential session task is gone; dropping its slot");
+                    pending = None;
+                }
                 let Some(p) = pending.as_ref() else { continue };
                 let cid = p.cid();
                 let timed_out = matches!(
@@ -591,7 +849,11 @@ async fn daemon_loop(
                     let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
                     write_all(&device, reports, &mut write_failures).await;
                     tracing::warn!("device selection timed out, declining");
-                } else {
+                } else if transport.busy_channel() == Some(cid) {
+                    // Keepalives tell the host its command is still being
+                    // worked on.  An open multi-credential session between
+                    // getNextAssertion calls has no command outstanding, so
+                    // it must stay silent.
                     let reports = transport.keepalive(cid);
                     write_all(&device, reports, &mut write_failures).await;
                 }
@@ -667,5 +929,31 @@ mod tests {
             keepalive_interval().missed_tick_behavior(),
             tokio::time::MissedTickBehavior::Delay
         );
+    }
+
+    #[tokio::test]
+    async fn a_stale_reply_does_not_match_the_current_transaction() {
+        let (next, _rx) = mpsc::unbounded_channel();
+        let abort = tokio::spawn(async {}).abort_handle();
+        let pending = Pending::Relay {
+            cid: 7,
+            generation: 2,
+            abort,
+            next,
+            agent: None,
+        };
+        let reply = |cid, generation| RelayReply {
+            cid,
+            generation,
+            payload: Ok(Vec::new()),
+            remaining: 0,
+        };
+
+        assert!(reply_matches(Some(&pending), &reply(7, 2)));
+        // The host cancelled and a new transaction reused channel 7: the
+        // queued reply from generation 1 must not answer generation 2.
+        assert!(!reply_matches(Some(&pending), &reply(7, 1)));
+        assert!(!reply_matches(Some(&pending), &reply(8, 2)));
+        assert!(!reply_matches(None, &reply(7, 2)));
     }
 }

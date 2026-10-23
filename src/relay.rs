@@ -47,6 +47,28 @@ pub async fn run_qr_transaction(
     on_qr: impl FnOnce(&str),
     on_advert: impl FnOnce(),
 ) -> Result<Vec<u8>, TransactionError> {
+    let mut session = open_qr_session(ctap_command.len(), request_type, on_qr, on_advert).await?;
+    let reply = session.ctap(ctap_command).await?;
+    session.shutdown().await;
+    Ok(reply)
+}
+
+/// Everything up to (and including) the handshake: show the QR code, wait
+/// for the phone's advert, and open the caBLE session, without sending a
+/// CTAP command yet.
+///
+/// `command_len` is the size of the first CTAP command the caller will send;
+/// follow-up commands are smaller, so this is the largest message the
+/// session may have to carry and what the L2CAP MTU check uses.
+///
+/// The caller sends commands through [`crate::session::DesktopSession`] and
+/// keeps the session open when the phone reports more than one credential.
+pub async fn open_qr_session(
+    command_len: usize,
+    request_type: RequestType,
+    on_qr: impl FnOnce(&str),
+    on_advert: impl FnOnce(),
+) -> Result<crate::session::DesktopSession, TransactionError> {
     // Fresh identity per transaction, like Chromium (a fresh random QR key
     // per WebAuthn ceremony, `crypto::RandBytes` in ConfigureDiscoveries):
     // a persistent identity would make every QR code from this desktop
@@ -101,8 +123,7 @@ pub async fn run_qr_transaction(
         handshake_timeout: crate::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: crate::tunnel::DIAL_TIMEOUT,
     };
-    let result = flow.run(ctap_command).await?;
-    Ok(result.ctap_reply)
+    flow.open(command_len).await
 }
 
 /// Pick the data transfer channel from the advert: the L2CAP CoC if the phone

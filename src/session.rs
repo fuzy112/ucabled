@@ -64,10 +64,110 @@ pub struct DesktopResult {
     pub handshake_hash: [u8; 32],
 }
 
+/// An open caBLE session: the tunnel and Noise handshake are done, and CTAP
+/// commands can be exchanged one at a time.
+///
+/// The phone keeps per-assertion state (credential list, remaining
+/// credentials) on its side, so a `getAssertion` reply that reports several
+/// credentials can only be followed up with `getNextAssertion` while this
+/// session stays open.  Closing it (or `send_shutdown`) discards that state.
+pub struct DesktopSession {
+    link: CableLink,
+    post_handshake: Vec<u8>,
+    handshake_hash: [u8; 32],
+}
+
+impl DesktopSession {
+    /// The post-handshake message the phone sent right after the handshake
+    /// (padded CBOR; see Chromium's `DecodePaddedCBORMap`).
+    pub fn post_handshake(&self) -> &[u8] {
+        &self.post_handshake
+    }
+
+    pub fn handshake_hash(&self) -> &[u8; 32] {
+        &self.handshake_hash
+    }
+
+    /// Send one CTAP command and wait for its reply payload (status byte +
+    /// CBOR).
+    pub async fn ctap(&mut self, command: &[u8]) -> Result<Vec<u8>, TransactionError> {
+        self.link
+            .send_ctap(command)
+            .await
+            .map_err(TransactionError::transport)?;
+
+        // A single deadline for the whole reply wait: the tunnel server is not
+        // trusted and must not be able to keep the transaction alive forever
+        // by trickling update messages.
+        let reply_deadline = tokio::time::Instant::now() + CTAP_REPLY_TIMEOUT;
+        loop {
+            let (ty, payload) = tokio::time::timeout_at(reply_deadline, self.link.recv_message())
+                .await
+                .map_err(|_| TransactionError::Timeout)?
+                .map_err(TransactionError::transport)?;
+            match ty {
+                MSG_CTAP => {
+                    // The phone (or whoever holds the QR/PSK) controls this
+                    // length.  A reply above the advertised maxMsgSize cannot
+                    // be framed as CTAPHID: the continuation sequence number
+                    // is a 7-bit field, so the host would misparse the 129th
+                    // frame as an INIT packet.
+                    if payload.len() as u64 > crate::ctap::MAX_MSG_SIZE {
+                        return Err(TransactionError::failed(anyhow::anyhow!(
+                            "authenticator reply is {} bytes, above maxMsgSize {}",
+                            payload.len(),
+                            crate::ctap::MAX_MSG_SIZE
+                        )));
+                    }
+                    return Ok(payload);
+                }
+                MSG_UPDATE => {
+                    tracing::info!(len = payload.len(), "received update message");
+                }
+                MSG_SHUTDOWN => {
+                    return Err(TransactionError::failed(anyhow::anyhow!(
+                        "unexpected shutdown from authenticator"
+                    )));
+                }
+                other => {
+                    return Err(TransactionError::failed(anyhow::anyhow!(
+                        "unexpected message type {other}"
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Tell the phone the transaction is over.  Best effort: the phone drops
+    /// its state when the tunnel closes in any case.
+    pub async fn shutdown(mut self) {
+        self.link.send_shutdown().await.ok();
+    }
+}
+
 impl DesktopFlow {
-    /// Run the desktop side: connect tunnel, perform Noise handshake, read the
-    /// post-handshake message, send one CTAP command, return its reply.
-    pub async fn run(mut self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
+    /// Run the desktop side to completion for one command: open the session,
+    /// exchange the command, close the session.
+    pub async fn run(self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
+        let mut session = self.open(ctap_command.len()).await?;
+        let ctap_reply = session.ctap(ctap_command).await?;
+        let post_handshake = session.post_handshake().to_vec();
+        let handshake_hash = *session.handshake_hash();
+        session.shutdown().await;
+        Ok(DesktopResult {
+            post_handshake,
+            ctap_reply,
+            handshake_hash,
+        })
+    }
+
+    /// Connect the tunnel, perform the Noise handshake and read the
+    /// post-handshake message, leaving the session open for CTAP commands.
+    ///
+    /// `command_len` is the size of the largest command the caller may send;
+    /// the L2CAP arm uses it to decide whether the negotiated MTU can carry
+    /// it before committing to the BLE channel.
+    pub async fn open(mut self, command_len: usize) -> Result<DesktopSession, TransactionError> {
         let components = eid::to_components(&self.plaintext_eid);
 
         let mut tunnel_id = [0u8; 16];
@@ -78,7 +178,7 @@ impl DesktopFlow {
         self.qr_secret.zeroize();
 
         let mut transport = self
-            .connect_transport(&components, &tunnel_id, ctap_command.len())
+            .connect_transport(&components, &tunnel_id, command_len)
             .await?;
 
         let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
@@ -114,56 +214,9 @@ impl DesktopFlow {
             "received post-handshake message"
         );
 
-        link.send_ctap(ctap_command)
-            .await
-            .map_err(TransactionError::transport)?;
-
-        // A single deadline for the whole reply wait: the tunnel server is not
-        // trusted and must not be able to keep the transaction alive forever
-        // by trickling update messages.
-        let reply_deadline = tokio::time::Instant::now() + CTAP_REPLY_TIMEOUT;
-        let ctap_reply = loop {
-            let (ty, payload) = tokio::time::timeout_at(reply_deadline, link.recv_message())
-                .await
-                .map_err(|_| TransactionError::Timeout)?
-                .map_err(TransactionError::transport)?;
-            match ty {
-                MSG_CTAP => {
-                    // The phone (or whoever holds the QR/PSK) controls this
-                    // length.  A reply above the advertised maxMsgSize cannot
-                    // be framed as CTAPHID: the continuation sequence number
-                    // is a 7-bit field, so the host would misparse the 129th
-                    // frame as an INIT packet.
-                    if payload.len() as u64 > crate::ctap::MAX_MSG_SIZE {
-                        return Err(TransactionError::failed(anyhow::anyhow!(
-                            "authenticator reply is {} bytes, above maxMsgSize {}",
-                            payload.len(),
-                            crate::ctap::MAX_MSG_SIZE
-                        )));
-                    }
-                    break payload;
-                }
-                MSG_UPDATE => {
-                    tracing::info!(len = payload.len(), "received update message");
-                }
-                MSG_SHUTDOWN => {
-                    return Err(TransactionError::failed(anyhow::anyhow!(
-                        "unexpected shutdown from authenticator"
-                    )));
-                }
-                other => {
-                    return Err(TransactionError::failed(anyhow::anyhow!(
-                        "unexpected message type {other}"
-                    )));
-                }
-            }
-        };
-
-        link.send_shutdown().await.ok();
-
-        Ok(DesktopResult {
+        Ok(DesktopSession {
+            link,
             post_handshake,
-            ctap_reply,
             handshake_hash,
         })
     }

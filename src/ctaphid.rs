@@ -219,11 +219,17 @@ impl Transport {
                 // INIT on an allocated channel is a resynchronization: per
                 // U2FHID §4.4.1 (and Chromium) it aborts whatever is in
                 // progress on that channel, so a wedged or cancelled
-                // operation must not survive it.
+                // operation must not survive it.  Report the cancel even
+                // when no command is in flight: the daemon may hold an idle
+                // multi-credential session on this channel, which would
+                // otherwise keep the phone and its tunnel alive until the
+                // session idle timeout.
                 let mut action = None;
-                if cid != BROADCAST_CID && self.busy == Some(cid) {
-                    self.busy = None;
-                    self.assembly = None;
+                if cid != BROADCAST_CID {
+                    if self.busy == Some(cid) {
+                        self.busy = None;
+                        self.assembly = None;
+                    }
                     action = Some(CtapAction::CancelRelay { cid });
                 }
                 let new_cid = if cid == BROADCAST_CID {
@@ -606,6 +612,16 @@ mod tests {
         assert_eq!(resp[0][4], CMD_INIT);
         assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
         assert_eq!(t.busy_channel(), None);
+    }
+
+    #[test]
+    fn init_cancels_an_idle_multicredential_session() {
+        let mut t = Transport::new([0u8; 16]);
+        // Nothing is in flight, but the daemon may still hold an idle
+        // multi-credential session on this channel; the resync must close it.
+        let (resp, action) = t.handle_report(&init_frame(1, CMD_INIT, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(resp[0][4], CMD_INIT);
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
     }
 
     #[test]
