@@ -15,6 +15,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   helper window on GNOME.  Its dialogs are translated into the same
   languages as the GTK helper.
 
+- GitHub releases now carry the Debian/Ubuntu packages: the three `.deb`
+  packages built for Debian 13 and Ubuntu 26.04 are attached to each
+  release, each with a detached GPG signature.
+
 - Stable (non-flake) Nix support: the top-level `default.nix` builds
   the packages with plain `nix-build -A ucabled` and exposes the NixOS
   module as `(import ./. { }).nixosModule`, pinning nixpkgs to the same
