@@ -52,4 +52,6 @@ for po in po/*.po; do
     msgmerge --update --backup=none --quiet "$po" "$pot"
 done
 
-echo "updated $pot and $(ls po/*.po | wc -l) catalogs"
+shopt -s nullglob
+catalogs=(po/*.po)
+echo "updated $pot and ${#catalogs[@]} catalogs"

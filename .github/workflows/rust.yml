@@ -168,6 +168,15 @@ jobs:
     - name: Check the translation catalogs
       run: nix develop --command admin/check-po.sh
 
+    # Every shell entry point: maintainer tools, the generic installer, the
+    # Debian maintainer scripts and the contrib terminal helper.
+    - name: Lint the shell scripts
+      run: |
+        nix develop --command shellcheck \
+          admin/*.sh \
+          debian/dev-version.sh debian/*.postinst debian/*.postrm debian/*.prerm \
+          install.sh contrib/ucable-agent-helper-foot
+
     # Publish only once every check above has passed, so a broken revision is
     # never cached.  Only a push to master or next publishes; a pull request
     # must never be able to sign and serve its own artifact to everyone else.

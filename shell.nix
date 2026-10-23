@@ -11,6 +11,8 @@ pkgs.mkShell {
     cargo-audit
     # License, source and ban policy for the same lockfile (CI runs `cargo deny`).
     cargo-deny
+    # CI lints every shell entry point with it (admin, install.sh, debian).
+    shellcheck
     gcc
     pkg-config
     dbus
