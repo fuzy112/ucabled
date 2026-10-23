@@ -125,7 +125,21 @@ impl DesktopFlow {
                 .map_err(|_| TransactionError::Timeout)?
                 .map_err(TransactionError::transport)?;
             match ty {
-                MSG_CTAP => break payload,
+                MSG_CTAP => {
+                    // The phone (or whoever holds the QR/PSK) controls this
+                    // length.  A reply above the advertised maxMsgSize cannot
+                    // be framed as CTAPHID: the continuation sequence number
+                    // is a 7-bit field, so the host would misparse the 129th
+                    // frame as an INIT packet.
+                    if payload.len() as u64 > crate::ctap::MAX_MSG_SIZE {
+                        return Err(TransactionError::failed(anyhow::anyhow!(
+                            "authenticator reply is {} bytes, above maxMsgSize {}",
+                            payload.len(),
+                            crate::ctap::MAX_MSG_SIZE
+                        )));
+                    }
+                    break payload;
+                }
                 MSG_UPDATE => {
                     tracing::info!(len = payload.len(), "received update message");
                 }

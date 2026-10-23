@@ -342,6 +342,14 @@ pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
     first[INIT_DATA_OFFSET..INIT_DATA_OFFSET + first_take].copy_from_slice(&payload[..first_take]);
     reports.push(first);
 
+    // Byte 4 of a continuation report is the sequence number, and hosts treat
+    // bit 7 of that byte as the INIT marker: only 128 continuation frames
+    // (MAX_PAYLOAD) are representable.  `DesktopSession::ctap` rejects larger
+    // phone replies, so this is a local invariant.
+    debug_assert!(
+        payload.len() <= MAX_PAYLOAD,
+        "CTAPHID response needs more than 128 continuation frames"
+    );
     let mut offset = first_take;
     let mut seq = 0u8;
     while offset < payload.len() {
@@ -359,14 +367,21 @@ pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
 }
 
 // `build_response` panics above u16::MAX; it stays unreachable only while
-// the frame limits keep a decrypted caBLE reply below that: the frame minus
-// the 16-byte GCM tag, the padding length byte and the message type byte.
-// Both channels share the limit (l2cap::MAX_SDU == tunnel::MAX_FRAME_SIZE),
-// so pin the coupling here — a future limit bump must fail to compile
-// rather than open a remotely triggerable daemon panic.
+// each channel's frame limit keeps a decrypted caBLE reply below that: the
+// frame minus the 16-byte GCM tag, the padding length byte and the message
+// type byte.  The channels have different ceilings (l2cap::MAX_SDU is 5
+// bytes below tunnel::MAX_FRAME_SIZE), so pin each coupling here — a future
+// limit bump must fail to compile rather than open a remotely triggerable
+// daemon panic.  The 128-frame (7-bit sequence) limit is both asserted above
+// and enforced at the session boundary with `ctap::MAX_MSG_SIZE`.
 const _: () = assert!(
     crate::tunnel::MAX_FRAME_SIZE - 16 - 2 <= u16::MAX as usize,
-    "frame limits must keep decrypted caBLE replies within u16::MAX"
+    "the tunnel frame limit must keep decrypted caBLE replies within u16::MAX"
+);
+#[cfg(feature = "l2cap")]
+const _: () = assert!(
+    crate::l2cap::MAX_SDU - 16 - 2 <= u16::MAX as usize,
+    "the L2CAP SDU limit must keep decrypted caBLE replies within u16::MAX"
 );
 
 fn error_response(cid: u32, code: u8) -> Vec<Vec<u8>> {

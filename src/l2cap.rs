@@ -14,8 +14,12 @@ use anyhow::{Context, Result, ensure};
 use bluer::l2cap::{Security, SecurityLevel, SeqPacket, SocketAddr};
 use bluer::{Address, AddressType};
 
-/// Upper bound for a single caBLE message; matches the WebSocket frame limit.
-const MAX_SDU: usize = crate::tunnel::MAX_FRAME_SIZE;
+/// Upper bound for a single caBLE message on this channel.  The receive
+/// MTU can be negotiated at most to `u16::MAX` (the protocol ceiling) and
+/// every SDU carries the 4-byte length prefix, so a whole caBLE message
+/// can be at most 65531 bytes here — slightly less than the tunnel
+/// channel's [`crate::tunnel::MAX_FRAME_SIZE`].
+pub const MAX_SDU: usize = u16::MAX as usize - LENGTH_PREFIX;
 
 /// Length in bytes of the big-endian length prefix framing every caBLE
 /// message (PXP §6.1.2).
