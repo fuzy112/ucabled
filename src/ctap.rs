@@ -3,8 +3,6 @@
 use std::borrow::Cow;
 
 use crate::cbor;
-use rand::RngCore;
-use rand::rngs::OsRng;
 
 /// Stable AAGUID reported by getInfo. A fixed value keeps the authenticator
 /// identity consistent across daemon restarts; the real attestation AAGUID
@@ -515,7 +513,7 @@ pub fn dissociate_ssh_user(command: &[u8]) -> Cow<'_, [u8]> {
         }
 
         let mut handle = [0u8; 32];
-        OsRng.fill_bytes(&mut handle);
+        rand::fill(&mut handle);
         let label = format!("ssh:{}", hex::encode(&handle[..4]));
 
         let mut out = vec![CMD_MAKE_CREDENTIAL];

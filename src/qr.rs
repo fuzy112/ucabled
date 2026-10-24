@@ -238,9 +238,9 @@ mod tests {
 
     #[test]
     fn parse_ignores_transport_channels() {
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
-        let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
-        let compressed = key.public_key().to_encoded_point(true);
+        use p256::elliptic_curve::{Generate, sec1::ToSec1Point};
+        let key = p256::SecretKey::generate();
+        let compressed = key.public_key().to_sec1_point(true);
         let public_key: [u8; COMPRESSED_PUBLIC_KEY_SIZE] =
             compressed.as_bytes().try_into().unwrap();
         let secret = [0x22u8; QR_SECRET_SIZE];

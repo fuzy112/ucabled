@@ -29,9 +29,8 @@ use anyhow::Result;
 use bluer::l2cap::{SeqPacket, SeqPacketListener, SocketAddr};
 use bluer::{Address, AddressType};
 use p256::SecretKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use rand::RngCore;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::Generate;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
@@ -53,7 +52,7 @@ fn desktop_identity() -> SecretKey {
 fn desktop_identity_x962_uncompressed() -> Vec<u8> {
     desktop_identity()
         .public_key()
-        .to_encoded_point(false)
+        .to_sec1_point(false)
         .as_bytes()
         .to_vec()
 }
@@ -111,11 +110,11 @@ async fn l2cap_connect_failure_falls_back_to_websocket() -> Result<()> {
     let base = format!("ws://{addr}");
     tokio::spawn(run_relay(listener));
 
-    let identity = SecretKey::random(&mut OsRng);
-    let compressed = identity.public_key().to_encoded_point(true);
+    let identity = SecretKey::generate();
+    let compressed = identity.public_key().to_sec1_point(true);
     let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
     let mut qr_secret = [0u8; 16];
-    OsRng.fill_bytes(&mut qr_secret);
+    rand::fill(&mut qr_secret);
 
     let qr_url = qr::encode_qr_url(
         compressed,
@@ -127,7 +126,7 @@ async fn l2cap_connect_failure_falls_back_to_websocket() -> Result<()> {
     );
     let parsed = qr::parse_qr_url(&qr_url).unwrap();
     let peer_public = p256::PublicKey::from_sec1_bytes(&parsed.compressed_public_key).unwrap();
-    let peer_identity = peer_public.to_encoded_point(false).as_bytes().to_vec();
+    let peer_identity = peer_public.to_sec1_point(false).as_bytes().to_vec();
 
     let (eid_tx, eid_rx) = oneshot::channel::<[u8; 16]>();
     let phone_base = base.clone();

@@ -55,6 +55,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The P-256 handshake now uses `p256` 0.14, which moves the elliptic-curve
+  arithmetic to `crypto-bigint` 0.7.6 and removes timing variability in
+  operations intended to be constant-time (RUSTSEC-2026-0387).  The UHID
+  device also moves to `AsyncFd::register` with `tokio` 1.54.1, so the
+  descriptor stays owned for the whole registration (RUSTSEC-2026-0386).
+
 - Each passkey QR code now carries a fresh, per-transaction identity key
   instead of the installation's persistent one, matching Chromium.  QR
   codes shown by one installation can no longer be recognised as coming

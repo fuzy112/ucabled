@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use p256::PublicKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 
 use ucabled::phone;
 use ucabled::qr;
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
     let parsed = qr::parse_qr_url(&args.qr_url).context("failed to parse QR URL")?;
     let peer_public = PublicKey::from_sec1_bytes(&parsed.compressed_public_key)
         .context("bad public key in QR")?;
-    let peer_identity = peer_public.to_encoded_point(false).as_bytes().to_vec();
+    let peer_identity = peer_public.to_sec1_point(false).as_bytes().to_vec();
 
     let (outcome, ws, psk) = phone::phone_setup(&args.tunnel_base, &parsed.secret, None).await?;
 

@@ -75,7 +75,10 @@ impl UhidDevice {
             .custom_flags(libc::O_NONBLOCK)
             .open("/dev/uhid")?;
         let dev = Self {
-            fd: AsyncFd::new(file)?,
+            // SAFETY: `file` owns the /dev/uhid descriptor for the whole
+            // lifetime of the `AsyncFd`; it is never closed or replaced while
+            // registered, since `UhidDevice` keeps it private.
+            fd: unsafe { AsyncFd::register(file)? },
         };
         dev.write_create(name, report_descriptor)?;
         Ok(dev)
