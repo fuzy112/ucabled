@@ -33,13 +33,13 @@ required-features = ["ble"]
 anyhow = "1"
 futures = "0.3"
 hex = "0.4"
-# Pinned to 0.8: p256 0.13 is built on rand_core 0.6, and SecretKey::random
-# takes a rand_core 0.6 RNG, so a rand 0.9+ upgrade would not interoperate.
-rand = "0.8"
+# p256 0.14 is built on rand_core 0.10, so the RNG-facing code tracks the
+# rand 0.10 API (`Rng` instead of `RngCore`, no `OsRng` unit struct).
+rand = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-p256 = { version = "0.13", features = ["ecdh"] }
+p256 = { version = "0.14", features = ["ecdh"] }
 hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"

@@ -2,9 +2,8 @@
 
 use anyhow::{Context, Result};
 use p256::SecretKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use rand::RngCore;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::Generate;
+use p256::elliptic_curve::sec1::ToSec1Point;
 
 use ucabled::ctap::CMD_GET_INFO;
 use ucabled::kdf::{Purpose, derive};
@@ -49,13 +48,13 @@ async fn main() -> Result<()> {
 
     let args = parse_args()?;
 
-    let identity = SecretKey::random(&mut OsRng);
-    let compressed = identity.public_key().to_encoded_point(true);
+    let identity = SecretKey::generate();
+    let compressed = identity.public_key().to_sec1_point(true);
     let compressed: &[u8; qr::COMPRESSED_PUBLIC_KEY_SIZE] =
         compressed.as_bytes().try_into().unwrap();
 
     let mut qr_secret = [0u8; qr::QR_SECRET_SIZE];
-    OsRng.fill_bytes(&mut qr_secret);
+    rand::fill(&mut qr_secret);
 
     let request_type = if args.make_credential {
         RequestType::MakeCredential

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{Context, Result, bail};
-use rand::RngCore;
-use rand::rngs::OsRng;
 use tokio_tungstenite::tungstenite::Bytes;
 
 use crate::cbor;
@@ -117,7 +115,7 @@ pub async fn phone_setup(
     };
 
     let mut nonce = [0u8; eid::NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce);
+    rand::fill(&mut nonce);
     let components = eid::EidComponents {
         nonce,
         routing_id,

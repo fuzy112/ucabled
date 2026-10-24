@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use p256::ecdh::diffie_hellman;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::Generate;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
-use rand::rngs::OsRng;
 use zeroize::Zeroize;
 
 use crate::crypter::Crypter;
@@ -13,7 +13,7 @@ pub const P256_X962_LENGTH: usize = 65;
 pub const RESPONSE_SIZE: usize = P256_X962_LENGTH + 16;
 
 fn uncompressed_point(key: &PublicKey) -> Vec<u8> {
-    key.to_encoded_point(false).as_bytes().to_vec()
+    key.to_sec1_point(false).as_bytes().to_vec()
 }
 
 fn parse_point(bytes: &[u8]) -> Option<PublicKey> {
@@ -44,7 +44,7 @@ impl HandshakeInitiator {
         noise.mix_hash(&uncompressed_point(&identity.public_key()));
         noise.mix_key_and_hash(psk);
 
-        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral = SecretKey::generate();
         let ephemeral_public = uncompressed_point(&ephemeral.public_key());
         noise.mix_hash(&ephemeral_public);
         noise.mix_key(&ephemeral_public);
@@ -70,7 +70,7 @@ impl HandshakeInitiator {
         noise.mix_hash(peer_identity_x962);
         noise.mix_key_and_hash(psk);
 
-        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral = SecretKey::generate();
         let ephemeral_public = uncompressed_point(&ephemeral.public_key());
         noise.mix_hash(&ephemeral_public);
         noise.mix_key(&ephemeral_public);
@@ -190,7 +190,7 @@ fn respond_inner(
     noise.mix_hash(peer_point_bytes);
     noise.mix_key(peer_point_bytes);
 
-    let ephemeral = SecretKey::random(&mut OsRng);
+    let ephemeral = SecretKey::generate();
     parse_point(peer_point_bytes)?;
 
     if let Some(id) = &identity {
@@ -237,7 +237,7 @@ mod tests {
     const PSK: [u8; 32] = [7u8; 32];
 
     fn identity() -> (SecretKey, Vec<u8>) {
-        let secret = SecretKey::random(&mut OsRng);
+        let secret = SecretKey::generate();
         let public = uncompressed_point(&secret.public_key());
         (secret, public)
     }
@@ -430,7 +430,7 @@ mod tests {
         noise.mix_hash(&[1]);
         noise.mix_hash(&desktop_public);
         noise.mix_key_and_hash(&PSK);
-        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral = SecretKey::generate();
         let ephemeral_public = uncompressed_point(&ephemeral.public_key());
         noise.mix_hash(&ephemeral_public);
         noise.mix_key(&ephemeral_public);
@@ -457,7 +457,7 @@ mod tests {
         noise.mix_hash(peer_point_bytes);
         noise.mix_key(peer_point_bytes);
         assert_eq!(noise.decrypt_and_hash(ciphertext).unwrap(), b"");
-        let ephemeral = SecretKey::random(&mut OsRng);
+        let ephemeral = SecretKey::generate();
         let ephemeral_public = uncompressed_point(&ephemeral.public_key());
         noise.mix_hash(&ephemeral_public);
         noise.mix_key(&ephemeral_public);

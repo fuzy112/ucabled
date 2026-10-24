@@ -4,6 +4,16 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1]
+
+### Security
+
+- The P-256 handshake now uses `p256` 0.14, which moves the elliptic-curve
+  arithmetic to `crypto-bigint` 0.7.6 and removes timing variability in
+  operations intended to be constant-time (RUSTSEC-2026-0387).  The UHID
+  device also moves to `AsyncFd::register` with `tokio` 1.54.1, so the
+  descriptor stays owned for the whole registration (RUSTSEC-2026-0386).
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

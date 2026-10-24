@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use p256::SecretKey;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::Generate;
 use zeroize::Zeroize;
 
 pub const IDENTITY_FILE_NAME: &str = "identity.key";
@@ -51,7 +51,7 @@ pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
             key
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let key = SecretKey::random(&mut OsRng);
+            let key = SecretKey::generate();
             fs::create_dir_all(dir)
                 .with_context(|| format!("creating state directory {}", dir.display()))?;
             let mut bytes = key.to_bytes();
@@ -104,6 +104,11 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Err(last.unwrap_or_else(|| io::Error::other("no temporary name")))
 }
 
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(path, bytes)
+}
+
 /// A pre-existing key file with group/other bits set was not created by us
 /// (e.g. restored from a backup) and may be readable by other users. Warn
 /// instead of silently rewriting permissions we did not set — the same
@@ -129,11 +134,6 @@ fn warn_if_group_or_world_readable(path: &Path) {
 
 #[cfg(not(unix))]
 fn warn_if_group_or_world_readable(_path: &Path) {}
-
-#[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    fs::write(path, bytes)
-}
 
 #[cfg(test)]
 mod tests {

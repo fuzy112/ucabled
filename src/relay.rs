@@ -2,9 +2,7 @@
 
 use anyhow::Result;
 use p256::SecretKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use rand::RngCore;
-use rand::rngs::OsRng;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use std::time::Duration;
 use zeroize::Zeroize;
 
@@ -51,11 +49,11 @@ pub async fn run_qr_transaction(
     on_qr: impl FnOnce(&str),
     on_advert: impl FnOnce(),
 ) -> Result<Vec<u8>, TransactionError> {
-    let compressed = identity.public_key().to_encoded_point(true);
+    let compressed = identity.public_key().to_sec1_point(true);
     let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
 
     let mut qr_secret = [0u8; 16];
-    OsRng.fill_bytes(&mut qr_secret);
+    rand::fill(&mut qr_secret);
 
     // Linking is shelved (iOS does not implement it, see docs/linking.md), so
     // do not advertise it.
