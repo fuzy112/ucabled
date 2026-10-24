@@ -55,12 +55,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-- The P-256 handshake now uses `p256` 0.14, which moves the elliptic-curve
-  arithmetic to `crypto-bigint` 0.7.6 and removes timing variability in
-  operations intended to be constant-time (RUSTSEC-2026-0387).  The UHID
-  device also moves to `AsyncFd::register` with `tokio` 1.54.1, so the
-  descriptor stays owned for the whole registration (RUSTSEC-2026-0386).
-
 - Each passkey QR code now carries a fresh, per-transaction identity key
   instead of the installation's persistent one, matching Chromium.  QR
   codes shown by one installation can no longer be recognised as coming
@@ -102,6 +96,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Agent registration attempts are limited per user instead of per D-Bus
   connection, so extra connections can no longer multiply the polkit
   authorization work they cause.
+
+## [0.2.1] - 2026-10-24
+
+### Security
+
+- The P-256 handshake now uses `p256` 0.14, which moves the elliptic-curve
+  arithmetic to `crypto-bigint` 0.7.6 and removes timing variability in
+  operations intended to be constant-time (RUSTSEC-2026-0387).  The UHID
+  device also moves to `AsyncFd::register` with `tokio` 1.54.1, so the
+  descriptor stays owned for the whole registration (RUSTSEC-2026-0386).
 
 ## [0.2.0] - 2026-10-23
 
@@ -253,7 +257,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
-[0.3.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.2.0...HEAD
+[0.3.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/fuzy112/ucabled/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fuzy112/ucabled/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/fuzy112/ucabled/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/fuzy112/ucabled/compare/v0.1.4...v0.1.5
