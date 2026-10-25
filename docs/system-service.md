@@ -73,10 +73,11 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 - user unit，对所有用户启用；谁真正能弹窗完全由 polkit 决定，不按用户配置。
 - 连接到 **system bus**，导出一个对象实现 `org.ucabled.Agent1`，调用
   `org.ucabled.Manager1.RegisterAgent(path)` 注册自己。
-- 收到 `Prompt(tid, url, rp, timeout, request_type)` 时，按既有窗口逻辑 spawn
-  `ucable-agent-helper`，把 URL 写进它的 stdin，并把请求类型转成 helper 的
-  `--request-type` 参数（见 `docs/helper-contract.md` §3）；把 helper 的
-  退出转成 `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
+- 收到 `Prompt(tid, url, rp, timeout, request_type, also_key)` 时，按既有窗口
+  逻辑 spawn `ucable-agent-helper`，把 URL 写进它的 stdin，并把请求类型转成
+  helper 的 `--request-type` 参数、`also_key` 转成 `--also-key`（见
+  `docs/helper-contract.md` §3）；把 helper 的退出转成
+  `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
 - 收到 `Notify(summary, body)` 时经会话总线 `org.freedesktop.Notifications`
   弹桌面通知（仅静态文案，如隧道重定向被拒）。
 - 无图形会话（无 `WAYLAND_DISPLAY`/`DISPLAY`）时**不注册**。
@@ -102,8 +103,9 @@ select one."，**只能靠触摸实体密钥来选择**——它会把每个设�
 `CTAPHID_CANCEL`（见 authenticator-rs `transport/mod.rs::block_and_blink`
 与 `transport/device_selector.rs`）。虚拟设备没有可触摸的按键，因此：
 
-- 守护进程收到 blink 探测时**立刻**打开 caBLE 会话并显示 QR 窗口，但**先
-  不回答探测**。QR 内容只依赖请求类型与命令长度，不需要真实请求已经到达。
+- 守护进程收到 blink 探测时**立刻**打开 caBLE 会话并显示 QR 窗口（并提示也可以
+  直接触摸那把实体密钥），但**先不回答探测**。QR 内容只依赖请求类型与命令长度，
+  不需要真实请求已经到达。
 - 用户扫码 → 手机 BLE advert → 握手完成、隧道就绪 → 这时才回 `0x35`
   （CTAP2_ERR_PIN_NOT_SET，被判定为选中），Firefox 随即发真正的请求，
   守护进程把它送进已经建立的会话。
@@ -133,7 +135,7 @@ agent 实现（对象路径由 `RegisterAgent` 传入）：
 
 ```
 interface org.ucabled.Agent1
-  Prompt(t tid, s url, s rp, t timeout_secs, s request_type)
+  Prompt(t tid, s url, s rp, t timeout_secs, s request_type, b also_key)
   Found(t tid)
   Close(t tid)
   Notify(s summary, s body)        # 桌面通知（仅守护进程静态文案）

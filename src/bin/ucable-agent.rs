@@ -199,16 +199,17 @@ fn build_crossroads(
             let prompt_window = qr_window.clone();
             builder.method(
                 "Prompt",
-                ("tid", "url", "rp", "timeout", "request_type"),
+                ("tid", "url", "rp", "timeout", "request_type", "also_key"),
                 (),
                 move |ctx,
                       _: &mut (),
-                      (tid, url, rp, timeout, request_type): (
+                      (tid, url, rp, timeout, request_type, also_key): (
                     u64,
                     String,
                     String,
                     u64,
                     String,
+                    bool,
                 )| {
                     if !from_daemon(ctx, &prompt_owner) {
                         return Ok(());
@@ -222,6 +223,7 @@ fn build_crossroads(
                         rp,
                         timeout,
                         &request_type,
+                        also_key,
                     );
                     Ok(())
                 },
@@ -507,6 +509,7 @@ fn open_window(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_window(
     state: &WindowSlot,
     cancel_tx: &UnboundedSender<u64>,
@@ -515,6 +518,7 @@ fn show_window(
     rp: Option<String>,
     timeout_secs: u64,
     request_type: &str,
+    also_key: bool,
 ) {
     let Some(helper) = helper_path() else {
         tracing::warn!("ucable-agent-helper not found next to the agent; cannot show the QR code");
@@ -535,6 +539,10 @@ fn show_window(
         // Says which command is being relayed so the helper can phrase the QR
         // page; a helper that does not know the flag shows a plain caption.
         command.arg("--request-type").arg(request_type);
+    }
+    if also_key {
+        // Another authenticator is present: say that touching it works too.
+        command.arg("--also-key");
     }
     // The URL carries the transaction secret, so it goes over the pipe.
     let cancel_tx = cancel_tx.clone();

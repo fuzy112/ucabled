@@ -2,6 +2,7 @@
 # fish completion for ucable-agent-helper
 complete -c ucable-agent-helper -l rp -r -d 'Requesting party ID'
 complete -c ucable-agent-helper -l layer-shell -d 'Wayland layer-shell surface'
+complete -c ucable-agent-helper -l also-key -d 'Note that touching another security key works'
 complete -c ucable-agent-helper -l timeout -r -d 'Close after SECS seconds'
 complete -c ucable-agent-helper -l request-type -r -a 'mc ga' -d 'Request type'
 complete -c ucable-agent-helper -s h -l help -d 'Print help'

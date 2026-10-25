@@ -197,6 +197,9 @@ pub enum AgentCommand {
         /// so it may cross to the agent and on to the helper, which phrases
         /// the QR page with it.
         request_type: RequestType,
+        /// Another authenticator is present, so touching it also answers this
+        /// prompt.  Not secret either.
+        also_key: bool,
     },
     /// The phone's BLE advert was seen; the user now confirms on it.
     Found {
@@ -243,6 +246,7 @@ impl AgentClient {
         rp: Option<String>,
         timeout_secs: u64,
         request_type: RequestType,
+        also_key: bool,
     ) {
         self.active_tid.store(tid, Ordering::SeqCst);
         let _ = self.tx.send(AgentCommand::Prompt {
@@ -251,6 +255,7 @@ impl AgentClient {
             rp,
             timeout_secs,
             request_type,
+            also_key,
         });
     }
 
@@ -662,6 +667,7 @@ async fn dispatch_commands(
                 rp,
                 timeout_secs,
                 request_type,
+                also_key,
             } => {
                 proxy
                     .method_call(
@@ -673,6 +679,7 @@ async fn dispatch_commands(
                             rp.unwrap_or_default(),
                             timeout_secs,
                             request_type.as_str(),
+                            also_key,
                         ),
                     )
                     .await

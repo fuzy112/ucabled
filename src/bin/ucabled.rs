@@ -572,6 +572,7 @@ async fn daemon_loop(
                                         RequestType::MakeCredential,
                                         None,
                                         BLINK_TIMEOUT.as_secs(),
+                                        true,
                                     );
                                     pending = Some(Pending {
                                         transaction: Transaction {
@@ -629,6 +630,7 @@ async fn daemon_loop(
                                     request_type,
                                     rp,
                                     ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
+                                    false,
                                 );
                                 if next.send(SessionCmd::Command(payload)).is_err() {
                                     tracing::warn!("caBLE session task is gone; refusing the request");
@@ -958,7 +960,8 @@ fn prepare_command(payload: Vec<u8>) -> Vec<u8> {
 /// reports on `ready_tx` and relays the commands that arrive on the returned
 /// channel.  Replies go back through `result_tx`.  The session is opened ahead
 /// of the first command so that a blink probe can be answered only once the
-/// phone is really there (see [`Phase::Blink`]).
+/// phone is really there (see [`Phase::Blink`]).  `also_key` tells the window
+/// that touching another authenticator is still an answer (blink phase only).
 #[allow(clippy::too_many_arguments)]
 fn spawn_session(
     notifier: &Notifier,
@@ -970,6 +973,7 @@ fn spawn_session(
     request_type: RequestType,
     rp: Option<String>,
     timeout_secs: u64,
+    also_key: bool,
 ) -> (AbortHandle, mpsc::UnboundedSender<SessionCmd>) {
     let (next_tx, mut next_rx) = mpsc::unbounded_channel::<SessionCmd>();
     let tx = result_tx.clone();
@@ -980,7 +984,7 @@ fn spawn_session(
         let opened = ucabled::relay::open_qr_session(
             command_len,
             request_type,
-            move |url| notifier2.show(cid as u64, url, rp, timeout_secs, request_type),
+            move |url| notifier2.show(cid as u64, url, rp, timeout_secs, request_type, also_key),
             move || notifier3.phone_found(),
         )
         .await;

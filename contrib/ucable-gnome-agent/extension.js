@@ -93,6 +93,7 @@ const AGENT_XML = `
       <arg type="s" direction="in" name="rp"/>
       <arg type="t" direction="in" name="timeout_secs"/>
       <arg type="s" direction="in" name="request_type"/>
+      <arg type="b" direction="in" name="also_key"/>
     </method>
     <method name="Found">
       <arg type="t" direction="in" name="tid"/>
@@ -192,7 +193,7 @@ function qrSvgBytes(url) {
 /// contract, where a SIGKILLed helper reports nothing).
 const QrDialog = GObject.registerClass(
 class QrDialog extends ModalDialog.ModalDialog {
-    _init({url, rp, requestType, onUserClose}) {
+    _init({url, rp, requestType, alsoKey, onUserClose}) {
         super._init({styleClass: 'prompt-dialog', destroyOnClose: true});
         this._onUserClose = onUserClose;
         this._closedByDaemon = false;
@@ -222,6 +223,19 @@ class QrDialog extends ModalDialog.ModalDialog {
         });
         layout.add_child(this._caption);
 
+        // Another authenticator is present: touching it picks that one
+        // instead.  Hidden once the phone is detected, when the host has
+        // committed to this device.
+        this._hint = null;
+        if (alsoKey) {
+            this._hint = new St.Label({
+                text: _('Or touch your security key instead'),
+                style_class: 'prompt-dialog-description',
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            layout.add_child(this._hint);
+        }
+
         this.contentLayout.add_child(layout);
 
         this.setButtons([{
@@ -245,6 +259,8 @@ class QrDialog extends ModalDialog.ModalDialog {
             this._qrIcon.opacity = 110;
         this._caption.text =
             _('Phone detected.\nConfirm the sign-in on your phone.');
+        if (this._hint)
+            this._hint.hide();
     }
 
     /// Like the reference helper, an expired code is announced but the
@@ -277,8 +293,8 @@ export default class UcabledAgentExtension extends Extension {
         // A plain facade object, so wrapJSObject does not have to walk the
         // extension class prototype.
         this._agentFacade = {
-            Prompt: (tid, url, rp, timeoutSecs, requestType) =>
-                this._prompt(tid, url, rp, timeoutSecs, requestType),
+            Prompt: (tid, url, rp, timeoutSecs, requestType, alsoKey) =>
+                this._prompt(tid, url, rp, timeoutSecs, requestType, alsoKey),
             Found: tid => this._found(tid),
             Close: tid => this._close(tid),
             Notify: (summary, body) => Main.notify(summary, body),
@@ -444,7 +460,7 @@ export default class UcabledAgentExtension extends Extension {
         }
     }
 
-    _prompt(tid, url, rp, timeoutSecs, requestType) {
+    _prompt(tid, url, rp, timeoutSecs, requestType, alsoKey) {
         this._closeAll();
 
         let dialog;
@@ -453,6 +469,7 @@ export default class UcabledAgentExtension extends Extension {
                 url,
                 rp,
                 requestType,
+                alsoKey,
                 onUserClose: () => this._cancelTransaction(tid),
             });
         } catch (e) {

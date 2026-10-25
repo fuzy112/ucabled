@@ -119,6 +119,9 @@ struct Options {
     rp: Option<String>,
     layer_shell: bool,
     request_type: Option<RequestKind>,
+    /// Another authenticator is present; say that touching it also answers
+    /// the prompt.  Only true while the host is still choosing.
+    also_key: bool,
 }
 
 /// Outcome of parsing argv: run the UI, or answer the standard informational
@@ -138,6 +141,7 @@ where
         rp: None,
         layer_shell: env_truthy("UCABLED_HELPER_LAYER_SHELL"),
         request_type: None,
+        also_key: false,
     };
 
     let mut args = args.into_iter();
@@ -150,6 +154,7 @@ where
             "-h" | "--help" => return ParsedArgs::Help,
             "-V" | "--version" => return ParsedArgs::Version,
             "--layer-shell" => opts.layer_shell = true,
+            "--also-key" => opts.also_key = true,
             "--timeout" => {
                 if let Some(secs) = args.next().and_then(|v| v.parse::<u64>().ok()) {
                     opts.timeout = Duration::from_secs(secs);
@@ -552,6 +557,17 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     caption.set_wrap(true);
     caption.set_justify(gtk::Justification::Center);
     qr_page.append(&caption);
+    // Another authenticator is present, so touching it picks that one
+    // instead.  Hidden once the phone is detected: from then on the host has
+    // committed to this device.
+    let hint = opts.also_key.then(|| {
+        let hint = gtk::Label::new(Some(&tr("Or touch your security key instead")));
+        hint.add_css_class("dim-label");
+        hint.set_wrap(true);
+        hint.set_justify(gtk::Justification::Center);
+        qr_page.append(&hint);
+        hint
+    });
     stack.add_named(&qr_page, Some("qr"));
 
     stack.add_named(
@@ -566,7 +582,7 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     content.append(&stack);
     set_window_content(window, &content, layer_shell);
 
-    watch_stdin(picture, caption, stack.clone());
+    watch_stdin(picture, caption, hint, stack.clone());
 
     if !opts.timeout.is_zero() {
         let stack = stack.clone();
@@ -588,7 +604,12 @@ fn found_caption() -> String {
 
 /// Fill the QR once the URL arrives on stdin, and blur the code when the
 /// daemon reports `found`.
-fn watch_stdin(picture: gtk::Picture, caption: gtk::Label, stack: gtk::Stack) {
+fn watch_stdin(
+    picture: gtk::Picture,
+    caption: gtk::Label,
+    hint: Option<gtk::Label>,
+    stack: gtk::Stack,
+) {
     let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     {
@@ -621,6 +642,11 @@ fn watch_stdin(picture: gtk::Picture, caption: gtk::Label, stack: gtk::Stack) {
             } else if line == "found" {
                 picture.add_css_class(FOUND_CSS_CLASS);
                 caption.set_label(&found_caption());
+                // The host has committed to this device: touching another
+                // authenticator no longer picks it.
+                if let Some(hint) = &hint {
+                    hint.set_visible(false);
+                }
             }
         }
         glib::ControlFlow::Continue
@@ -667,7 +693,7 @@ fn print_help() {
     println!(
         "ucable-agent-helper {} — QR window for ucable-agent\n\
          \n\
-         Usage: ucable-agent-helper [--rp RP] [--layer-shell]\n\
+         Usage: ucable-agent-helper [--rp RP] [--layer-shell] [--also-key]\n\
          \x20                            [--timeout SECS] [--request-type mc|ga]\n\
          \n\
          The caBLE URL is read from the first stdin line (never\n\
@@ -679,6 +705,7 @@ fn print_help() {
          \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
          \n\
          Options:\n\
+         \x20 --also-key     note that touching another security key works\n\
          \x20 -h, --help     print this help\n\
          \x20 -V, --version  print the version",
         env!("CARGO_PKG_VERSION")
@@ -760,7 +787,14 @@ mod tests {
     #[test]
     fn flag_shaped_rp_values_are_data_not_options() {
         let layer_shell_default = env_truthy("UCABLED_HELPER_LAYER_SHELL");
-        for rp in ["--help", "-h", "--version", "-V", "--layer-shell"] {
+        for rp in [
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+            "--layer-shell",
+            "--also-key",
+        ] {
             // Both spellings must consume the next token as the RP value.
             for args in [
                 vec!["--rp".to_string(), rp.to_string()],
@@ -770,6 +804,7 @@ mod tests {
                     ParsedArgs::Run(opts) => {
                         assert_eq!(opts.rp.as_deref(), Some(rp), "RP {rp} was not kept");
                         assert_eq!(opts.layer_shell, layer_shell_default);
+                        assert!(!opts.also_key, "RP {rp} flipped --also-key");
                     }
                     _ => panic!("RP {rp} was parsed as an informational option"),
                 }
@@ -799,11 +834,13 @@ mod tests {
             "--rp".to_string(),
             "example.com".to_string(),
             "--layer-shell".to_string(),
+            "--also-key".to_string(),
             "--timeout=7".to_string(),
         ]) {
             ParsedArgs::Run(opts) => {
                 assert_eq!(opts.rp.as_deref(), Some("example.com"));
                 assert!(opts.layer_shell);
+                assert!(opts.also_key);
                 assert_eq!(opts.timeout, Duration::from_secs(7));
             }
             _ => panic!("expected run options"),

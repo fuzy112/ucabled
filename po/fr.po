@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: ucable 0.2.0-pre\n"
 "Report-Msgid-Bugs-To: i@fuzy.me\n"
-"POT-Creation-Date: 2026-10-25 14:29+0800\n"
+"POT-Creation-Date: 2026-10-25 14:57+0800\n"
 "PO-Revision-Date: 2026-10-03 00:00+0800\n"
 "Last-Translator: \n"
 "Language-Team: French\n"
@@ -14,7 +14,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
 #: src/bin/ucable-agent-helper.rs:108
-#: contrib/ucable-gnome-agent/extension.js:116
+#: contrib/ucable-gnome-agent/extension.js:117
 msgid ""
 "Scan with your phone\n"
 "to store a passkey"
@@ -23,7 +23,7 @@ msgstr ""
 "pour enregistrer une clé d'accès"
 
 #: src/bin/ucable-agent-helper.rs:110
-#: contrib/ucable-gnome-agent/extension.js:118
+#: contrib/ucable-gnome-agent/extension.js:119
 msgid ""
 "Scan with your phone\n"
 "to authenticate with passkeys"
@@ -32,35 +32,40 @@ msgstr ""
 "pour vous authentifier avec des clés d'accès"
 
 #: src/bin/ucable-agent-helper.rs:112
-#: contrib/ucable-gnome-agent/extension.js:120
+#: contrib/ucable-gnome-agent/extension.js:121
 msgid "Scan with your phone"
 msgstr "Scannez avec votre téléphone"
 
-#: src/bin/ucable-agent-helper.rs:526 src/bin/ucable-agent-helper.rs:651
+#: src/bin/ucable-agent-helper.rs:531 src/bin/ucable-agent-helper.rs:677
 msgid "Passkey request"
 msgstr "Demande de clé d'accès"
 
-#: src/bin/ucable-agent-helper.rs:559
+#: src/bin/ucable-agent-helper.rs:564
+#: contrib/ucable-gnome-agent/extension.js:232
+msgid "Or touch your security key instead"
+msgstr "Ou touchez votre clé de sécurité"
+
+#: src/bin/ucable-agent-helper.rs:575
 msgid "Code expired"
 msgstr "Code expiré"
 
-#: src/bin/ucable-agent-helper.rs:560
+#: src/bin/ucable-agent-helper.rs:576
 msgid "Close this window and start again."
 msgstr "Fermez cette fenêtre et recommencez."
 
-#: src/bin/ucable-agent-helper.rs:584
+#: src/bin/ucable-agent-helper.rs:600
 msgid "Phone detected"
 msgstr "Téléphone détecté"
 
-#: src/bin/ucable-agent-helper.rs:585
+#: src/bin/ucable-agent-helper.rs:601
 msgid "Confirm the sign-in on your phone"
 msgstr "Confirmez la connexion sur votre téléphone"
 
-#: contrib/ucable-gnome-agent/extension.js:228
+#: contrib/ucable-gnome-agent/extension.js:242
 msgid "Cancel"
 msgstr "Annuler"
 
-#: contrib/ucable-gnome-agent/extension.js:247
+#: contrib/ucable-gnome-agent/extension.js:261
 msgid ""
 "Phone detected.\n"
 "Confirm the sign-in on your phone."
@@ -68,7 +73,7 @@ msgstr ""
 "Téléphone détecté.\n"
 "Confirmez la connexion sur votre téléphone."
 
-#: contrib/ucable-gnome-agent/extension.js:256
+#: contrib/ucable-gnome-agent/extension.js:272
 msgid ""
 "Code expired.\n"
 "Close this dialog and start again."

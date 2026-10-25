@@ -50,6 +50,8 @@ impl Notifier {
         }
     }
 
+    /// Show the QR code.  `also_key` says another authenticator is present, so
+    /// touching it is still an answer to this prompt.
     pub fn show(
         &self,
         tid: u64,
@@ -57,10 +59,13 @@ impl Notifier {
         rp: Option<String>,
         timeout_secs: u64,
         request_type: RequestType,
+        also_key: bool,
     ) {
         match self {
-            Notifier::Terminal => print_qr_terminal(url),
-            Notifier::Agent(client) => client.prompt(tid, url, rp, timeout_secs, request_type),
+            Notifier::Terminal => print_qr_terminal(url, also_key),
+            Notifier::Agent(client) => {
+                client.prompt(tid, url, rp, timeout_secs, request_type, also_key)
+            }
         }
     }
 
@@ -113,12 +118,15 @@ fn print_notice(summary: &str, body: &str) {
     }
 }
 
-fn print_qr_terminal(url: &str) {
+fn print_qr_terminal(url: &str, also_key: bool) {
     use std::io::IsTerminal;
-    let body = format!(
+    let mut body = format!(
         "\n=== Scan with your phone (passkey) ===\n{}\n=======================================\n",
         qr_unicode(url)
     );
+    if also_key {
+        body.push_str("=== or touch the connected security key instead ===\n");
+    }
     // Under a systemd service stdout is the journal, where the QR code (and
     // the secret it encodes) must not persist. Show it on the controlling
     // terminal when there is one and drop it silently otherwise.

@@ -6,6 +6,7 @@ ucable\-agent\-helper \- QR code window for ucabled
 .B ucable\-agent\-helper
 .RB [ \-\-rp " RP" ]
 .RB [ \-\-layer\-shell ]
+.RB [ \-\-also\-key ]
 .RB [ \-\-timeout " SECS" ]
 .RB [ \-\-request\-type " mc|ga" ]
 .SH DESCRIPTION
@@ -33,6 +34,10 @@ above the QR code.  Display-only.
 .TP
 .B \-\-layer\-shell
 Draw as a Wayland layer\-shell surface instead of a window.
+.TP
+.B \-\-also\-key
+Another authenticator is connected: note in the window that touching it
+also answers the prompt.  The note disappears once the phone is detected.
 .TP
 .BI \-\-timeout " SECS"
 Close the window after

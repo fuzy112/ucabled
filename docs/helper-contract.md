@@ -47,7 +47,7 @@ NixOS 模块暴露 `services.ucabled.helper`，其值会作为 `UCABLED_HELPER` 
 ## 3. argv
 
 ```
-<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>]
+<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>] [--also-key]
 ```
 
 - `--rp <RP>`：可选的**带值选项**，依赖方（relying party）域名字符串，
@@ -65,6 +65,10 @@ NixOS 模块暴露 `services.ucabled.helper`，其值会作为 `UCABLED_HELPER` 
   可以显示。
   在 Firefox 的 blink 选择阶段守护进程只能按探测本身填 `mc`，因此真实的
   getAssertion 也可能以 `mc` 到达；文案不应把 `mc` 当成承诺。
+- `--also-key`：无值选项，表示**还接着另一个认证器**（物理安全密钥）。此时
+  helper 应提示"直接触摸那把密钥也可以"；该提示在手机被发现（stdin 的
+  `found`）之后必须撤掉，因为那时浏览器已经锁定本设备，触摸不再生效。
+  不认识这个参数的 helper 忽略即可，只是少一句提示。
 
 > **argv 整体仅用于显示。** argv 上的所有内容都是非秘密的展示数据
 > （RP、超时、请求类型），任何本地用户都能通过 `/proc/<pid>/cmdline`
@@ -139,8 +143,9 @@ UI 交互结束，agent 上报 `TransactionCancelled(tid)`，守护进程据此�
 
 ## 10. 实现一个新 helper 的清单
 
-1. 接受 `<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>]`；
-   argv 仅用于显示，忽略一切不认识的参数（包括任何 `FIDO:/…`）。
+1. 接受 `<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>]
+   [--also-key]`；argv 仅用于显示，忽略一切不认识的参数（包括任何
+   `FIDO:/…`）。
 2. 从 stdin 第一行读 URL；**不要**把 URL 写进 argv、日志、临时
    文件或任何持久位置，也不要接受 argv 上的 URL。
 3. 继续消费 stdin 后续行，识别 `found` 并给出"检测到手机"的反馈。

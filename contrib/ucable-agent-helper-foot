@@ -29,11 +29,13 @@ set -eu
 rp=""
 rtype=""
 timeout_s=300
+also_key=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --timeout) timeout_s=$2; shift ;;
         --request-type) rtype=$2; shift ;;
+        --also-key) also_key=1 ;;
         --rp) rp=$2; shift ;;
         --rp=*) rp=${1#--rp=} ;;
         # argv is display-only; anything unknown (in particular a FIDO:/
@@ -80,6 +82,8 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
             mc) printf "  to store a passkey\n" ;;
             ga) printf "  to authenticate with passkeys\n" ;;
         esac
+        [ "$also_key" = 1 ] &&
+            printf "\n  (or touch the connected security key instead)\n"
         printf "\n  Press any key to cancel.\n"
         (
             while IFS= read -r line <&3; do
@@ -91,4 +95,4 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
         read -rsn1 -t "$timeout_s" || :
         kill "$watcher" 2>/dev/null || :
         exit 1
-    ' _ "$fifo" "$rp" "$timeout_s" "$rtype"
+    ' _ "$fifo" "$rp" "$timeout_s" "$rtype" "$also_key"
