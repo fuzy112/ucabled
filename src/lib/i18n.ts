@@ -131,10 +131,6 @@ export const en: Dict = {
         caption: "ble advert received → “phone detected”",
         sub: "the code blurs out once the phone's proximity advert arrives",
       },
-      {
-        caption: "select mode — a security key is also connected",
-        sub: "firefox can only pick an authenticator by touch, so ucabled asks itself",
-      },
     ],
   },
   pipe: {
@@ -215,7 +211,7 @@ export const en: Dict = {
       "only the active local session gets the QR window; a pure tty or ssh prompt is out of scope.",
       "firefox always reports transports: [\"usb\"] to rps — a hardcode in firefox's linux ctap backend. cosmetic only; the daemon strips the advisory hint before relaying so phones still match hybrid credentials.",
       "no local pin/uv and no attestation trust decisions — the phone does all of that.",
-      "with another authenticator plugged in, firefox can only pick a key by touch; ucabled shows its own \"use phone\" prompt instead. run with --no-ui and it stands down.",
+      "with another authenticator plugged in, firefox picks by touch; ucabled shows the qr code at the same moment and marks itself selected only once the phone has connected, so scanning and touching both work. run with --no-ui and ucabled stands down.",
     ],
   },
   marquee: {
@@ -311,10 +307,6 @@ export const zh: Dict = {
         caption: "收到 BLE 广播 → “检测到手机”",
         sub: "手机的距离广播到达后二维码会模糊",
       },
-      {
-        caption: "选择模式 — 同时接入了安全密钥",
-        sub: "Firefox 只能通过触碰来选定认证器，所以 ucabled 自己询问",
-      },
     ],
   },
   pipe: {
@@ -395,7 +387,7 @@ export const zh: Dict = {
       "只有活动的本地会话能拿到二维码窗口；纯 tty 或 ssh 提示不在范围内。",
       "firefox 对 rp 永远上报 transports: [\"usb\"]——firefox linux ctap 后端的硬编码。仅是外观问题；守护进程中继前会剥掉这个建议性提示，因此手机仍能匹配 hybrid 凭证。",
       "没有本地 pin/uv，也不做证明信任决策——全由手机完成。",
-      "插着其他认证器时，firefox 只能通过触碰选密钥；ucabled 改为显示自己的“使用手机”提示。加 --no-ui 则自动退让。",
+      "插着其他认证器时，firefox 靠触碰选定；ucabled 会同时显示二维码，并在手机连上后才把自己标为选中，因此扫码和触摸都可用。加 --no-ui 则自动退让。",
     ],
   },
   marquee: {

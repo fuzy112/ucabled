@@ -4,12 +4,10 @@ import Rich from "../components/Rich";
 import { useCopy } from "../lib/i18n";
 import imgQr from "../assets/helper-qr.png";
 import imgFound from "../assets/helper-phone-detected.png";
-import imgSelect from "../assets/helper-select.png";
 
 const SHOTS = [
   { src: imgQr, fig: "fig. 1", w: 394, h: 574 },
   { src: imgFound, fig: "fig. 2", w: 394, h: 574 },
-  { src: imgSelect, fig: "fig. 3", w: 414, h: 274 },
 ];
 
 export default function Shots() {
@@ -21,7 +19,7 @@ export default function Shots() {
           <Rich text={c.shots.intro} />
         </p>
       </Reveal>
-      <div className="grid gap-6 md:grid-cols-3 items-start">
+      <div className="grid gap-6 md:grid-cols-2 items-start">
         {SHOTS.map((s, i) => (
           <Reveal key={s.fig} delay={i * 90}>
             <figure className="notch p-4">
