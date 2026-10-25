@@ -23,8 +23,8 @@ let
       toString cfg.helper;
 
   # The agent passes arguments of its own (the relying party, --timeout and
-  # --select), so extra helper arguments need a launcher in front of it. The
-  # agent's arguments come last and win where the two overlap.
+  # --request-type), so extra helper arguments need a launcher in front of it.
+  # The agent's arguments come last and win where the two overlap.
   helperLauncher = pkgs.writeShellScript "ucable-agent-helper-launcher" ''
     exec ${helperExe} ${lib.escapeShellArgs cfg.helperExtraArgs} "$@"
   '';
@@ -101,7 +101,7 @@ in
       description = ''
         Extra arguments to start the UI helper with. They are helper-specific:
         the agent adds its own arguments on top (the relying party,
-        `--timeout`, `--select`), which win where the two overlap.
+        `--timeout`, `--request-type`), which win where the two overlap.
 
         Use this for flags the agent does not know about — for example
         `--layer-shell`, which makes the GTK4 helper a wlr-layer-shell overlay

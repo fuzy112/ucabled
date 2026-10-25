@@ -64,23 +64,6 @@ impl Notifier {
         }
     }
 
-    /// Ask the user to pick the phone when another authenticator (e.g. a
-    /// physical security key) is also present. Returns the agent's
-    /// registration generation (to tag the pending selection) when the
-    /// prompt was shown, `None` when no agent is available and the caller
-    /// should decline instead of waiting for an answer.  The generation is
-    /// read atomically with the availability check.
-    pub fn select(&self, tid: u64) -> Option<u64> {
-        match self {
-            Notifier::Terminal => None,
-            Notifier::Agent(client) => {
-                let generation = client.generation()?;
-                client.select(tid);
-                Some(generation)
-            }
-        }
-    }
-
     /// The phone has been seen over BLE; the user now confirms on it.
     pub fn phone_found(&self) {
         match self {

@@ -1,11 +1,10 @@
 .\" SPDX-License-Identifier: GPL-3.0-or-later
 .TH UCABLE-AGENT-HELPER 1 "2026-10-13" "ucabled" "User Commands"
 .SH NAME
-ucable\-agent\-helper \- QR code and device\-selection window for ucabled
+ucable\-agent\-helper \- QR code window for ucabled
 .SH SYNOPSIS
 .B ucable\-agent\-helper
 .RB [ \-\-rp " RP" ]
-.RB [ \-\-select ]
 .RB [ \-\-layer\-shell ]
 .RB [ \-\-timeout " SECS" ]
 .RB [ \-\-request\-type " mc|ga" ]
@@ -17,12 +16,10 @@ It is not usually run by hand; any UI can replace it as long as it follows
 the contract in
 .IR docs/helper-contract.md .
 .PP
-In QR mode it reads the caBLE URL from the first line of standard input and
-renders it as a QR code; a later
+It reads the caBLE URL from the first line of standard input and renders it
+as a QR code; a later
 .B found
 line blurs the code and asks the user to confirm on the phone.
-In select mode it asks whether to use the phone instead of another connected
-security key.
 .PP
 The URL is a per-transaction secret, so it only ever travels over standard
 input.  Everything on the command line is display-only and world-readable
@@ -33,10 +30,6 @@ via /proc; unknown arguments, including any FIDO:/ URL, are ignored.
 Show the relying party
 .I RP
 above the QR code.  Display-only.
-.TP
-.B \-\-select
-Show the device\-selection window instead of the QR window.
-Exit status 0 means "use the phone"; non\-zero means "decline".
 .TP
 .B \-\-layer\-shell
 Draw as a Wayland layer\-shell surface instead of a window.
@@ -64,8 +57,8 @@ Print the version and exit.
 Truthy to imply
 .BR \-\-layer\-shell .
 .SH EXIT STATUS
-0 on success, or "use the phone" in select mode; non\-zero on cancel, close,
-timeout or signal.
+0 on success; non\-zero on cancel, close, timeout or signal.  The daemon
+treats any exit as "the user gave up on the phone".
 .SH SEE ALSO
 .BR ucabled (1),
 .BR ucable\-agent (1)

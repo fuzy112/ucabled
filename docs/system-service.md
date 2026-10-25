@@ -75,10 +75,8 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
   `org.ucabled.Manager1.RegisterAgent(path)` 注册自己。
 - 收到 `Prompt(tid, url, rp, timeout, request_type)` 时，按既有窗口逻辑 spawn
   `ucable-agent-helper`，把 URL 写进它的 stdin，并把请求类型转成 helper 的
-  `--request-type` 参数（见 `docs/helper-contract.md` §3.1）；把 helper 的
+  `--request-type` 参数（见 `docs/helper-contract.md` §3）；把 helper 的
   退出转成 `TransactionCancelled(tid)`；收到 `Found`/`Close` 时更新/关闭窗口。
-- 收到 `Select(tid)` 时 spawn `ucable-agent-helper --select`，按退出码
-  （0=用手机，其余=放弃）回 `SelectionResult(tid, use_phone)`。
 - 收到 `Notify(summary, body)` 时经会话总线 `org.freedesktop.Notifications`
   弹桌面通知（仅静态文案，如隧道重定向被拒）。
 - 无图形会话（无 `WAYLAND_DISPLAY`/`DISPLAY`）时**不注册**。
@@ -92,27 +90,33 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 
 ### 3.3 QR helper `ucable-agent-helper`
 
-- 默认：从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。
-- `--select`：设备选择窗口（"Use phone" / "Cancel"），不读 stdin；退出码
-  0 表示用户选择用手机，其余（取消/关闭/超时）表示放弃。
+- 从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。
+- 关窗 / Esc / 超时都以非 0 退出，agent 上报 `TransactionCancelled(tid)`。
 
 ## 3.4 多设备选择（与实体密钥共存）
 
 Firefox 检测到多个认证器时只显示一句"Multiple devices found. Please
 select one."，**只能靠触摸实体密钥来选择**——它会把每个设备的
 `getInfo` 探测（FIDO2.0 用 dummy `makeCredential`，`rp.id=make.me.blink`）
-发给设备，只有回复 `Pin*` 状态的设备才算被选中（见 authenticator-rs
-`transport/mod.rs::block_and_blink`）。虚拟设备没有可触摸的按键，因此：
+发给设备，只有回复 `Pin*` 状态的设备才算被选中，其余设备立刻收到
+`CTAPHID_CANCEL`（见 authenticator-rs `transport/mod.rs::block_and_blink`
+与 `transport/device_selector.rs`）。虚拟设备没有可触摸的按键，因此：
 
-- 守护进程收到 blink 探测时，不再直接回 `0x2C`（会被判为未选中），而是
-  让 agent 弹出"Use phone"窗口。
-- 用户点"Use phone"→ 回 `0x35`（CTAP2_ERR_PIN_NOT_SET，被判定为选中），
-  Firefox 随即发真正的请求，进入常规 QR 流程。
-- 用户点"Cancel"/关窗/超时 → 回 `0x2C`（未选中），实体密钥仍可被选中。
-- 用户触摸实体密钥 → Firefox 取消我们的 blink（`CTAPHID_CANCEL`），守护
-  进程收到 `CancelRelay` 时关掉选择窗口，不给任何回复。
+- 守护进程收到 blink 探测时**立刻**打开 caBLE 会话并显示 QR 窗口，但**先
+  不回答探测**。QR 内容只依赖请求类型与命令长度，不需要真实请求已经到达。
+- 用户扫码 → 手机 BLE advert → 握手完成、隧道就绪 → 这时才回 `0x35`
+  （CTAP2_ERR_PIN_NOT_SET，被判定为选中），Firefox 随即发真正的请求，
+  守护进程把它送进已经建立的会话。
+- 用户改去触摸实体密钥 → Firefox 取消我们的 blink（`CTAPHID_CANCEL`），
+  守护进程收到 `CancelRelay` 时中止会话、关掉窗口，不给任何回复。
+- 用户关窗 / 超时 → 回 `0x2C`（未选中），实体密钥仍可被选中。
 - `--no-ui` 或无 agent 时无法弹窗，保持旧行为（直接回 `0x2C`，即不参与
   选择）。
+
+> 为什么不能"收到探测就回 `0x35` 再显示 QR"：blink 是抢答，先回 `Pin*` 的
+> 设备会被选中、其余立刻被取消，实体密钥就再也没机会了。QR 里的 request
+> type 也只能按探测本身（一个 dummy `makeCredential`）填 `mc`；真实请求是
+> getAssertion 时，手机侧可能先显示"保存"的措辞。
 
 ## 4. D-Bus 接口
 
@@ -123,7 +127,6 @@ interface org.ucabled.Manager1
   RegisterAgent(o path)            # agent 注册其唯一 bus name 上的对象路径
   UnregisterAgent()
   TransactionCancelled(t tid)         # 用户关闭 QR 窗口
-  SelectionResult(t tid, b use_phone) # 用户对设备选择窗口的回答
 ```
 
 agent 实现（对象路径由 `RegisterAgent` 传入）：
@@ -131,7 +134,6 @@ agent 实现（对象路径由 `RegisterAgent` 传入）：
 ```
 interface org.ucabled.Agent1
   Prompt(t tid, s url, s rp, t timeout_secs, s request_type)
-  Select(t tid)                    # 弹设备选择窗口
   Found(t tid)
   Close(t tid)
   Notify(s summary, s body)        # 桌面通知（仅守护进程静态文案）
@@ -289,7 +291,7 @@ NixOS module（`nix/module.nix`）：
 仍待处理：
 
 - 活动会话用户启停 system unit：仍未开放，当前用 `systemctl start/stop
-  ucabled`（需提权）。NFR-3 已由 agent 的"Use phone"选择窗口解决（见 §3.4），
+  ucabled`（需提权）。NFR-3 已由 blink 阶段的 QR 窗口解决（见 §3.4），
   不再需要该开关。
 
 ## 12. 实现与提交计划

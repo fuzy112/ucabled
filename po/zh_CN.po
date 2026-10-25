@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: ucable 0.2.0-pre\n"
 "Report-Msgid-Bugs-To: i@fuzy.me\n"
-"POT-Creation-Date: 2026-10-23 09:51+0800\n"
+"POT-Creation-Date: 2026-10-25 14:29+0800\n"
 "PO-Revision-Date: 2026-10-03 00:00+0800\n"
 "Last-Translator: \n"
 "Language-Team: Chinese (Simplified)\n"
@@ -13,8 +13,8 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: src/bin/ucable-agent-helper.rs:114
-#: contrib/ucable-gnome-agent/extension.js:122
+#: src/bin/ucable-agent-helper.rs:108
+#: contrib/ucable-gnome-agent/extension.js:116
 msgid ""
 "Scan with your phone\n"
 "to store a passkey"
@@ -22,8 +22,8 @@ msgstr ""
 "用手机扫描\n"
 "保存通行密钥"
 
-#: src/bin/ucable-agent-helper.rs:116
-#: contrib/ucable-gnome-agent/extension.js:124
+#: src/bin/ucable-agent-helper.rs:110
+#: contrib/ucable-gnome-agent/extension.js:118
 msgid ""
 "Scan with your phone\n"
 "to authenticate with passkeys"
@@ -31,51 +31,36 @@ msgstr ""
 "用手机扫描\n"
 "使用通行密钥认证"
 
-#: src/bin/ucable-agent-helper.rs:118
-#: contrib/ucable-gnome-agent/extension.js:126
+#: src/bin/ucable-agent-helper.rs:112
+#: contrib/ucable-gnome-agent/extension.js:120
 msgid "Scan with your phone"
 msgstr "用手机扫描"
 
-#: src/bin/ucable-agent-helper.rs:514 src/bin/ucable-agent-helper.rs:644
-#: src/bin/ucable-agent-helper.rs:703
-#: contrib/ucable-gnome-agent/extension.js:284
+#: src/bin/ucable-agent-helper.rs:526 src/bin/ucable-agent-helper.rs:651
 msgid "Passkey request"
 msgstr "通行密钥请求"
 
-#: src/bin/ucable-agent-helper.rs:547
+#: src/bin/ucable-agent-helper.rs:559
 msgid "Code expired"
 msgstr "二维码已过期"
 
-#: src/bin/ucable-agent-helper.rs:548
+#: src/bin/ucable-agent-helper.rs:560
 msgid "Close this window and start again."
 msgstr "请关闭此窗口后重新开始。"
 
-#: src/bin/ucable-agent-helper.rs:572
+#: src/bin/ucable-agent-helper.rs:584
 msgid "Phone detected"
 msgstr "已检测到手机"
 
-#: src/bin/ucable-agent-helper.rs:573
+#: src/bin/ucable-agent-helper.rs:585
 msgid "Confirm the sign-in on your phone"
 msgstr "请在手机上确认登录"
 
-#: src/bin/ucable-agent-helper.rs:649
-msgid "A security key is also connected. Use your phone's passkey instead?"
-msgstr "安全密钥也已连接。要改用手机上的通行密钥吗？"
-
-#: src/bin/ucable-agent-helper.rs:659
-msgid "Keep using the security key"
-msgstr "继续使用安全密钥"
-
-#: src/bin/ucable-agent-helper.rs:663
-#: contrib/ucable-gnome-agent/extension.js:304
-msgid "Use phone"
-msgstr "使用手机"
-
-#: contrib/ucable-gnome-agent/extension.js:234
+#: contrib/ucable-gnome-agent/extension.js:228
 msgid "Cancel"
 msgstr "取消"
 
-#: contrib/ucable-gnome-agent/extension.js:253
+#: contrib/ucable-gnome-agent/extension.js:247
 msgid ""
 "Phone detected.\n"
 "Confirm the sign-in on your phone."
@@ -83,22 +68,10 @@ msgstr ""
 "已检测到手机。\n"
 "请在手机上确认登录。"
 
-#: contrib/ucable-gnome-agent/extension.js:262
+#: contrib/ucable-gnome-agent/extension.js:256
 msgid ""
 "Code expired.\n"
 "Close this dialog and start again."
 msgstr ""
 "二维码已过期。\n"
 "请关闭此对话框后重新开始。"
-
-#: contrib/ucable-gnome-agent/extension.js:289
-msgid ""
-"A security key is also connected.\n"
-"Use your phone’s passkey instead?"
-msgstr ""
-"安全密钥也已连接。\n"
-"要改用手机上的通行密钥吗？"
-
-#: contrib/ucable-gnome-agent/extension.js:298
-msgid "Use security key"
-msgstr "使用安全密钥"

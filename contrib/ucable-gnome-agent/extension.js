@@ -43,10 +43,6 @@ const ERR_NOT_AUTHORIZED = 'org.ucabled.NotAuthorized';
 /// daemon rate-limits one attempt per second per sender, so 2s stays clear.
 const REGISTER_RETRY_MS = 2000;
 
-/// The daemon waits 70s for a SelectionResult; answer "declined" after 60s,
-/// mirroring the reference GTK helper.
-const SELECT_TIMEOUT_SECS = 60;
-
 /// QR quiet zone in modules, matching the GTK helper.
 const QR_QUIET = 4;
 
@@ -97,9 +93,6 @@ const AGENT_XML = `
       <arg type="s" direction="in" name="rp"/>
       <arg type="t" direction="in" name="timeout_secs"/>
       <arg type="s" direction="in" name="request_type"/>
-    </method>
-    <method name="Select">
-      <arg type="t" direction="in" name="tid"/>
     </method>
     <method name="Found">
       <arg type="t" direction="in" name="tid"/>
@@ -269,64 +262,6 @@ class QrDialog extends ModalDialog.ModalDialog {
     }
 });
 
-/// Device-selection dialog: answer flows back through SelectionResult.
-/// Closing without a button (Escape maps to the decline button, so this is
-/// only a fallback) counts as "declined".
-const SelectDialog = GObject.registerClass(
-class SelectDialog extends ModalDialog.ModalDialog {
-    _init({onAnswer}) {
-        super._init({styleClass: 'prompt-dialog', destroyOnClose: true});
-        this._answered = false;
-        this._onAnswer = onAnswer;
-
-        const layout = new St.BoxLayout({vertical: true});
-        layout.set_style('spacing: 12px;');
-        layout.add_child(new St.Label({
-            text: _('Passkey request'),
-            style_class: 'prompt-dialog-headline',
-            x_align: Clutter.ActorAlign.CENTER,
-        }));
-        layout.add_child(new St.Label({
-            text: _('A security key is also connected.\n' +
-                'Use your phone’s passkey instead?'),
-            style_class: 'prompt-dialog-description',
-            x_align: Clutter.ActorAlign.CENTER,
-        }));
-        this.contentLayout.add_child(layout);
-
-        this.setButtons([
-            {
-                label: _('Use security key'),
-                action: () => this.answer(false),
-                key: Clutter.KEY_Escape,
-                default: true,
-            },
-            {
-                label: _('Use phone'),
-                action: () => this.answer(true),
-            },
-        ]);
-
-        this.connect('closed', () => {
-            if (!this._answered)
-                this.answer(false);
-        });
-    }
-
-    answer(usePhone) {
-        if (this._answered)
-            return;
-        this._answered = true;
-        this._onAnswer?.(usePhone);
-        this.close(global.get_current_time());
-    }
-
-    closeFromDaemon() {
-        this._answered = true;
-        this.close(global.get_current_time());
-    }
-});
-
 export default class UcabledAgentExtension extends Extension {
     enable() {
         // Bind the "ucable" domain (shared with the GTK helper) to this
@@ -334,7 +269,7 @@ export default class UcabledAgentExtension extends Extension {
         // runtime, after this point.
         this.initTranslations();
 
-        this._dialogs = new Map(); // tid -> QrDialog | SelectDialog
+        this._dialogs = new Map(); // tid -> QrDialog
         this._timers = new Set(); // GLib source ids
         this._registerTimer = null;
         this._registered = false;
@@ -344,7 +279,6 @@ export default class UcabledAgentExtension extends Extension {
         this._agentFacade = {
             Prompt: (tid, url, rp, timeoutSecs, requestType) =>
                 this._prompt(tid, url, rp, timeoutSecs, requestType),
-            Select: tid => this._select(tid),
             Found: tid => this._found(tid),
             Close: tid => this._close(tid),
             Notify: (summary, body) => Main.notify(summary, body),
@@ -470,7 +404,7 @@ export default class UcabledAgentExtension extends Extension {
     }
 
     /// Fire-and-forget call on the daemon's Manager1 (TransactionCancelled,
-    /// SelectionResult, UnregisterAgent); failures are only logged.
+    /// UnregisterAgent); failures are only logged.
     _callManager(method, params) {
         Gio.DBus.system.call(
             BUS_NAME, MANAGER_PATH, MANAGER_IFACE, method, params,
@@ -541,35 +475,6 @@ export default class UcabledAgentExtension extends Extension {
                 });
             this._timers.add(id);
         }
-    }
-
-    _select(tid) {
-        this._closeAll();
-
-        const dialog = new SelectDialog({
-            onAnswer: usePhone => {
-                this._dialogs.delete(tid);
-                this._callManager('SelectionResult',
-                    new GLib.Variant('(tb)', [tid, usePhone]));
-            },
-        });
-
-        // If the dialog cannot open at all, decline immediately rather than
-        // let the daemon wait out its 70s selection deadline.
-        this._open(tid, dialog, () =>
-            this._callManager('SelectionResult',
-                new GLib.Variant('(tb)', [tid, false])));
-        if (!this._dialogs.has(tid))
-            return;
-
-        const id = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT, SELECT_TIMEOUT_SECS, () => {
-                this._timers.delete(id);
-                if (this._dialogs.get(tid) === dialog)
-                    dialog.answer(false);
-                return GLib.SOURCE_REMOVE;
-            });
-        this._timers.add(id);
     }
 
     _found(tid) {

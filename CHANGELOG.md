@@ -13,6 +13,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the Debian/Ubuntu packages.  GitHub's automatic "Source code" archives
   are regenerated on demand and stay unsigned.
 
+### Changed
+
+- When Firefox asks which of several authenticators to use ("Multiple
+  devices found"), the QR code now appears right away instead of a
+  "use the phone instead?" question first: scan the code to pick the
+  phone, or touch the other security key to pick that one.  The phone
+  is only marked as selected once it has connected, so touching the key
+  before that still wins.  The UI helper contract is now v3 and has no
+  `--select` mode (see `docs/helper-contract.md`).
+
 ### Fixed
 
 - Every matching passkey now reaches the browser's account picker.  When

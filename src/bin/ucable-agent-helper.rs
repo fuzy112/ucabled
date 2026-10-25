@@ -2,8 +2,7 @@
 //!
 //! The session agent spawns this program once per prompt (see
 //! `docs/helper-contract.md`). It renders the caBLE QR code in the passkey
-//! style, or asks whether to use the phone instead of an already-connected
-//! security key.
+//! style.
 //!
 //! Build with `--features adwaita` for GNOME-native window chrome.
 
@@ -17,11 +16,6 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, glib};
-
-/// Exit status meaning "use the phone" in select mode.
-const EXIT_USE_PHONE: i32 = 0;
-/// Exit status meaning "decline" / "keep the security key".
-const EXIT_DECLINE: i32 = 1;
 
 /// Corner radius of the card. GTK's own client-side decorations use a radius of
 /// the same order, so both window kinds end up looking alike.
@@ -121,7 +115,6 @@ fn scan_caption(request_type: Option<RequestKind>) -> &'static str {
 
 #[derive(Clone)]
 struct Options {
-    select: bool,
     timeout: Duration,
     rp: Option<String>,
     layer_shell: bool,
@@ -141,7 +134,6 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut opts = Options {
-        select: false,
         timeout: Duration::from_secs(300),
         rp: None,
         layer_shell: env_truthy("UCABLED_HELPER_LAYER_SHELL"),
@@ -157,7 +149,6 @@ where
             // is data, never an option.
             "-h" | "--help" => return ParsedArgs::Help,
             "-V" | "--version" => return ParsedArgs::Version,
-            "--select" => opts.select = true,
             "--layer-shell" => opts.layer_shell = true,
             "--timeout" => {
                 if let Some(secs) = args.next().and_then(|v| v.parse::<u64>().ok()) {
@@ -636,58 +627,9 @@ fn watch_stdin(picture: gtk::Picture, caption: gtk::Label, stack: gtk::Stack) {
     });
 }
 
-fn build_select_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell: bool) {
-    window.set_default_size(400, 260);
-    // Closing the window (Esc / the header-bar button) means "declined".
-    window.connect_close_request(|_| {
-        exit(EXIT_DECLINE);
-    });
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    content.set_halign(gtk::Align::Center);
-    content.set_valign(gtk::Align::Center);
-    content.set_margin_top(24);
-    content.set_margin_bottom(24);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
-
-    let title = gtk::Label::new(Some(&tr("Passkey request")));
-    title.add_css_class("title-2");
-    content.append(&title);
-
-    let desc = gtk::Label::new(Some(&tr(
-        "A security key is also connected. Use your phone's passkey instead?",
-    )));
-    desc.add_css_class("dim-label");
-    desc.set_wrap(true);
-    desc.set_justify(gtk::Justification::Center);
-    content.append(&desc);
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    buttons.set_halign(gtk::Align::Center);
-
-    let keep = gtk::Button::with_label(&tr("Keep using the security key"));
-    keep.connect_clicked(|_| exit(EXIT_DECLINE));
-    buttons.append(&keep);
-
-    let use_phone = gtk::Button::with_label(&tr("Use phone"));
-    use_phone.add_css_class("suggested-action");
-    use_phone.connect_clicked(|_| exit(EXIT_USE_PHONE));
-    buttons.append(&use_phone);
-
-    content.append(&buttons);
-    set_window_content(window, &content, layer_shell);
-
-    if !opts.timeout.is_zero() {
-        glib::timeout_add_seconds_local_once(opts.timeout.as_secs() as u32, || {
-            exit(EXIT_DECLINE);
-        });
-    }
-}
-
 /// Esc dismisses the window. It goes through the same path as the header-bar
-/// close button, so the exit code is decided in one place: QR mode ends
-/// normally (0), select mode reports "declined" (1).
+/// close button, so the exit code is decided in one place: the daemon treats
+/// any exit as "the user gave up on the phone".
 fn bind_escape(window: &gtk::ApplicationWindow) {
     let keys = gtk::EventControllerKey::new();
     let win = window.clone();
@@ -704,15 +646,9 @@ fn bind_escape(window: &gtk::ApplicationWindow) {
 
 fn activate(app: &gtk::Application, opts: Options) {
     let window = new_app_window(app);
-    // The title is what the compositor and taskbar show. In QR mode it should
-    // say what the window is asking for; a layer surface draws no title bar,
-    // which is why the card carries its own headline there.
-    let title = if opts.select {
-        "ucabled".to_string()
-    } else {
-        tr("Passkey request")
-    };
-    window.set_title(Some(title.as_str()));
+    // The title is what the compositor and taskbar show.  A layer surface
+    // draws no title bar, which is why the card carries its own headline there.
+    window.set_title(Some(&tr("Passkey request")));
     window.set_resizable(false);
 
     bind_escape(&window);
@@ -722,27 +658,22 @@ fn activate(app: &gtk::Application, opts: Options) {
     // also decides whether the window carries a header bar.
     let layer_shell = maybe_layer_shell(&window, opts.layer_shell);
 
-    if opts.select {
-        build_select_window(&window, &opts, layer_shell);
-    } else {
-        build_qr_window(&window, &opts, layer_shell);
-    }
+    build_qr_window(&window, &opts, layer_shell);
 
     window.present();
 }
 
 fn print_help() {
     println!(
-        "ucable-agent-helper {} — QR/selection window for ucable-agent\n\
+        "ucable-agent-helper {} — QR window for ucable-agent\n\
          \n\
-         Usage: ucable-agent-helper [--rp RP] [--select] [--layer-shell]\n\
+         Usage: ucable-agent-helper [--rp RP] [--layer-shell]\n\
          \x20                            [--timeout SECS] [--request-type mc|ga]\n\
          \n\
          The caBLE URL is read from the first stdin line (never\n\
          argv: the URL is a secret and argv is world-readable);\n\
          a later \"found\" line blurs the code and asks to confirm\n\
-         on the phone. In --select mode the exit status answers:\n\
-         \x20 0 = use the phone, 1 = decline.\n\
+         on the phone.\n\
          \n\
          Environment:\n\
          \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
@@ -829,14 +760,7 @@ mod tests {
     #[test]
     fn flag_shaped_rp_values_are_data_not_options() {
         let layer_shell_default = env_truthy("UCABLED_HELPER_LAYER_SHELL");
-        for rp in [
-            "--help",
-            "-h",
-            "--version",
-            "-V",
-            "--select",
-            "--layer-shell",
-        ] {
+        for rp in ["--help", "-h", "--version", "-V", "--layer-shell"] {
             // Both spellings must consume the next token as the RP value.
             for args in [
                 vec!["--rp".to_string(), rp.to_string()],
@@ -845,7 +769,6 @@ mod tests {
                 match parse_args(args) {
                     ParsedArgs::Run(opts) => {
                         assert_eq!(opts.rp.as_deref(), Some(rp), "RP {rp} was not kept");
-                        assert!(!opts.select, "RP {rp} flipped --select");
                         assert_eq!(opts.layer_shell, layer_shell_default);
                     }
                     _ => panic!("RP {rp} was parsed as an informational option"),
@@ -865,7 +788,7 @@ mod tests {
             ParsedArgs::Version
         ));
         assert!(matches!(
-            parse_args(["--select".to_string(), "-h".to_string()]),
+            parse_args(["--layer-shell".to_string(), "-h".to_string()]),
             ParsedArgs::Help
         ));
     }
@@ -875,12 +798,12 @@ mod tests {
         match parse_args([
             "--rp".to_string(),
             "example.com".to_string(),
-            "--select".to_string(),
+            "--layer-shell".to_string(),
             "--timeout=7".to_string(),
         ]) {
             ParsedArgs::Run(opts) => {
                 assert_eq!(opts.rp.as_deref(), Some("example.com"));
-                assert!(opts.select);
+                assert!(opts.layer_shell);
                 assert_eq!(opts.timeout, Duration::from_secs(7));
             }
             _ => panic!("expected run options"),

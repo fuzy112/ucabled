@@ -198,10 +198,7 @@ pub enum AgentCommand {
         /// the QR page with it.
         request_type: RequestType,
     },
-    /// Ask the user to pick the phone when another authenticator is present.
-    Select {
-        tid: u64,
-    },
+    /// The phone's BLE advert was seen; the user now confirms on it.
     Found {
         tid: u64,
     },
@@ -257,17 +254,6 @@ impl AgentClient {
         });
     }
 
-    /// Ask the agent to show the "use the phone instead?" prompt. The answer
-    /// comes back through the `select` channel passed to [`start`].
-    pub fn select(&self, tid: u64) {
-        // Remember the transaction like `prompt` does: `close` tears the
-        // window down by tid, and the selection window is a window too.  A
-        // host cancellation (the user touched another key) closes it through
-        // this path before the helper's own timeout.
-        self.active_tid.store(tid, Ordering::SeqCst);
-        let _ = self.tx.send(AgentCommand::Select { tid });
-    }
-
     /// The phone's BLE advert was seen; the user now confirms on it.
     pub fn found(&self) {
         let tid = self.active_tid.load(Ordering::SeqCst);
@@ -293,18 +279,12 @@ impl AgentClient {
 
 /// Start the D-Bus service and dispatch tasks on `handle`. `cancel_tx`
 /// receives a [`CancelRequest`] when the agent reports that the user
-/// cancelled the dialog or when the agent itself goes away; `select_tx`
-/// receives the user's answer (`true` = use the phone) to a
-/// [`AgentClient::select`] request.
+/// cancelled the dialog or when the agent itself goes away.
 ///
 /// The setup (connect, request the bus name, install matches) runs inline so
 /// a failure still falls back at startup; message routing and outbound calls
 /// then live in spawned tasks on a single async connection.
-pub fn start(
-    handle: &Handle,
-    cancel_tx: mpsc::Sender<CancelRequest>,
-    select_tx: mpsc::Sender<(u64, bool)>,
-) -> Result<AgentClient> {
+pub fn start(handle: &Handle, cancel_tx: mpsc::Sender<CancelRequest>) -> Result<AgentClient> {
     let slot = Arc::new(Mutex::new(AgentSlot::default()));
     let sender_uids = Arc::new(Mutex::new(SenderUids::default()));
     let (tx, rx) = mpsc::unbounded_channel();
@@ -316,13 +296,7 @@ pub fn start(
         tracing::error!("system bus connection lost: {err}");
     });
 
-    let crossroads = build_crossroads(
-        &slot,
-        cancel_tx.clone(),
-        select_tx,
-        conn.clone(),
-        &sender_uids,
-    );
+    let crossroads = build_crossroads(&slot, cancel_tx.clone(), conn.clone(), &sender_uids);
     let streams = handle.block_on(register_on_bus(&conn))?;
 
     handle.spawn(route_messages(
@@ -434,7 +408,6 @@ async fn register_on_bus(conn: &Arc<SyncConnection>) -> Result<MatchStreams> {
 fn build_crossroads(
     slot: &Arc<Mutex<AgentSlot>>,
     cancel_tx: mpsc::Sender<CancelRequest>,
-    select_tx: mpsc::Sender<(u64, bool)>,
     conn: Arc<SyncConnection>,
     sender_uids: &Arc<Mutex<SenderUids>>,
 ) -> Crossroads {
@@ -585,29 +558,6 @@ fn build_crossroads(
                     Ok(())
                 },
             );
-
-            let select_slot = slot.clone();
-            builder.method(
-                "SelectionResult",
-                ("tid", "use_phone"),
-                (),
-                move |ctx, _: &mut (), (tid, use_phone): (u64, bool)| {
-                    let sender = ctx.message().sender().map(|s| s.to_string());
-                    let is_current = {
-                        let guard = select_slot.lock().unwrap();
-                        guard
-                            .current()
-                            .map(|p| Some(p.destination.as_str()) == sender.as_deref())
-                            .unwrap_or(false)
-                    };
-                    if is_current {
-                        tracing::info!(tid, use_phone, "agent reported device selection");
-                        // Bounded queue, as for cancellations.
-                        let _ = select_tx.try_send((tid, use_phone));
-                    }
-                    Ok(())
-                },
-            );
         }
     });
     crossroads.insert(MANAGER_PATH, &[iface], ());
@@ -726,9 +676,6 @@ async fn dispatch_commands(
                         ),
                     )
                     .await
-            }
-            AgentCommand::Select { tid } => {
-                proxy.method_call(AGENT_INTERFACE, "Select", (tid,)).await
             }
             AgentCommand::Found { tid } => {
                 proxy.method_call(AGENT_INTERFACE, "Found", (tid,)).await
@@ -927,27 +874,6 @@ mod tests {
         // After the agent leaves there is nothing to abort on re-register.
         assert!(clear_if_matches(&slot, Some(":1.8")).is_some());
         assert_eq!(install_agent(&slot, agent(":1.9")), (3, None));
-    }
-
-    #[test]
-    fn select_records_its_transaction_for_a_later_close() {
-        let slot = Arc::new(Mutex::new(AgentSlot::default()));
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let client = AgentClient {
-            tx,
-            slot,
-            active_tid: Arc::new(AtomicU64::new(0)),
-        };
-
-        client.select(7);
-        assert_eq!(client.active_tid.load(Ordering::SeqCst), 7);
-        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Select { tid: 7 })));
-
-        // The close that follows a host cancellation now carries the
-        // selection's tid, so the agent closes the selection window instead
-        // of leaving it to its own timeout.
-        client.close();
-        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Close { tid: 7 })));
     }
 
     #[test]

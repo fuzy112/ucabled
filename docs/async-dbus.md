@@ -112,7 +112,7 @@ D-Bus 调用**（libdbus 会丢弃迟到的应答），语义与今天一致，�
 
 - main 改 `#[tokio::main]`；单条 `SyncConnection`，路由 task 喂
   crossroads（同 §3 形态）。
-- 上报（`TransactionCancelled`/`SelectionResult`）与注册
+- 上报（`TransactionCancelled`）与注册
   （`RegisterAgent`）改为同连接 nonblock 调用；唯一名身份由同连接
   天然保证（今天的"必须用服务连接上报"约束自动满足）。
 - 重注册：`NameOwnerChanged(name=org.ucabled, new_owner≠"")` 事件驱动——
@@ -134,7 +134,8 @@ D-Bus 调用**（libdbus 会丢弃迟到的应答），语义与今天一致，�
 - 真机/真会话验收（必须，覆盖单测到不了的 D-Bus 行为）：
   1. 正常 QR 注册 + 登录（Firefox）；
   2. 关窗取消路径（helper 退出 → `TransactionCancelled` → 0x2d）；
-  3. 实体密钥共存的选择窗口（`Select` → `SelectionResult` 两路）；
+  3. 实体密钥共存：blink 阶段直接显示 QR（扫码选中手机 / 触摸实体密钥
+     时浏览器取消探测）；
   4. agent 掉线（`kill` agent，事务按取消失败处理）与 daemon 重启后
      agent 自动重注册；
   5. `--no-ui` 回落不受影响。

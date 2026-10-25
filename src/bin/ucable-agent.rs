@@ -32,8 +32,6 @@ const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
 /// Unique sender of driver-generated signals; the same string as the
 /// interface by convention, but used here as the match's sender filter.
 const DBUS_DRIVER: &str = "org.freedesktop.DBus";
-/// How long the device-selection window stays up before declining.
-const SELECT_TIMEOUT_SECS: u64 = 60;
 
 /// A live helper window: its pid (to tell it apart when it exits), the
 /// transaction it belongs to, and a queue of stdin lines. The helper process
@@ -105,13 +103,10 @@ async fn main() -> Result<()> {
     // Helper exits are reported to the main loop, which is the only task
     // calling back into the daemon.
     let (cancel_tx, mut cancel_rx) = mpsc::unbounded_channel::<u64>();
-    // (tid, use_phone) from the device-selection window.
-    let (select_tx, mut select_rx) = mpsc::unbounded_channel::<(u64, bool)>();
     // The daemon (re)appeared on the bus; registration must be renewed.
     let (daemon_tx, mut daemon_rx) = mpsc::unbounded_channel::<()>();
 
     let qr_window: WindowSlot = Arc::new(Mutex::new(None));
-    let select_window: WindowSlot = Arc::new(Mutex::new(None));
     // Unique name of the process that currently owns org.ucabled.  The bus
     // policy already denies unprivileged sends to the agent's unique name, so
     // this is defence in depth: it keeps a future policy change (or a bus
@@ -121,13 +116,7 @@ async fn main() -> Result<()> {
     // and the match.
     let daemon_owner: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    let crossroads = build_crossroads(
-        &qr_window,
-        &select_window,
-        cancel_tx,
-        select_tx,
-        &daemon_owner,
-    );
+    let crossroads = build_crossroads(&qr_window, cancel_tx, &daemon_owner);
 
     let method = conn
         .add_match(MatchRule::new_method_call())
@@ -182,16 +171,12 @@ async fn main() -> Result<()> {
             Some(tid) = cancel_rx.recv() => {
                 notify_cancelled(&conn, tid).await;
             }
-            Some((tid, use_phone)) = select_rx.recv() => {
-                notify_selection(&conn, tid, use_phone).await;
-            }
             Some(()) = daemon_rx.recv() => {
                 // A daemon restart clears its in-memory agent slot. Any
                 // failure (refused or transient) drops our windows, like
                 // before; the next appearance signal starts a new attempt.
                 if !matches!(register_once(&conn).await, Ok(true)) {
                     close_window(&qr_window);
-                    close_window(&select_window);
                 }
             }
         }
@@ -200,18 +185,14 @@ async fn main() -> Result<()> {
 
 fn build_crossroads(
     qr_window: &WindowSlot,
-    select_window: &WindowSlot,
     cancel_tx: UnboundedSender<u64>,
-    select_tx: UnboundedSender<(u64, bool)>,
     daemon_owner: &Arc<Mutex<Option<String>>>,
 ) -> Crossroads {
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(AGENT_INTERFACE, {
         let qr_window = qr_window.clone();
-        let select_window = select_window.clone();
         let prompt_owner = daemon_owner.clone();
         let found_owner = daemon_owner.clone();
-        let select_owner = daemon_owner.clone();
         let close_owner = daemon_owner.clone();
         let notify_owner = daemon_owner.clone();
         move |builder| {
@@ -260,23 +241,7 @@ fn build_crossroads(
                 },
             );
 
-            let ask_window = select_window.clone();
-            let select_tx_slot = select_tx.clone();
-            builder.method(
-                "Select",
-                ("tid",),
-                (),
-                move |ctx, _: &mut (), (tid,): (u64,)| {
-                    if !from_daemon(ctx, &select_owner) {
-                        return Ok(());
-                    }
-                    show_select_window(&ask_window, &select_tx_slot, tid);
-                    Ok(())
-                },
-            );
-
             let close_qr = qr_window.clone();
-            let close_select = select_window.clone();
             builder.method(
                 "Close",
                 ("tid",),
@@ -286,7 +251,6 @@ fn build_crossroads(
                         return Ok(());
                     }
                     close_window_for_tid(&close_qr, tid);
-                    close_window_for_tid(&close_select, tid);
                     Ok(())
                 },
             );
@@ -585,33 +549,6 @@ fn show_window(
     );
 }
 
-/// Show the "another security key is present, use the phone instead?" window
-/// and report the user's answer. The helper exits 0 for "Use phone" and
-/// non-zero for cancel/close/timeout.
-fn show_select_window(state: &WindowSlot, result_tx: &UnboundedSender<(u64, bool)>, tid: u64) {
-    let Some(helper) = helper_path() else {
-        tracing::warn!("ucable-agent-helper not found next to the agent; cannot ask the user");
-        let _ = result_tx.send((tid, false));
-        return;
-    };
-    let mut command = Command::new(helper);
-    command
-        .arg("--select")
-        .arg("--timeout")
-        .arg(SELECT_TIMEOUT_SECS.to_string())
-        .stdin(Stdio::null());
-    let result_tx = result_tx.clone();
-    let decline_tx = result_tx.clone();
-    let opened = open_window(state, tid, &mut command, None, move |status| {
-        // Exit code 0 means "Use phone"; anything else (cancel, close,
-        // timeout, signal) declines and lets the other key win.
-        let _ = result_tx.send((tid, status.code() == Some(0)));
-    });
-    if !opened {
-        let _ = decline_tx.send((tid, false));
-    }
-}
-
 /// Show a desktop notification through the session bus.  Best-effort: a
 /// missing session bus or notification service only costs a log line.
 /// A fresh connection per call — notifications are rare (currently only a
@@ -688,21 +625,6 @@ async fn notify_cancelled(conn: &Arc<SyncConnection>, tid: u64) {
     .await;
     if let Err(e) = result {
         tracing::warn!("failed to report cancellation: {e:#}");
-    }
-}
-
-/// Report the user's device-selection answer over `conn`.
-async fn notify_selection(conn: &Arc<SyncConnection>, tid: u64, use_phone: bool) {
-    let result = async {
-        let proxy = Proxy::new(BUS_NAME, MANAGER_PATH, Duration::from_secs(5), conn.clone());
-        let _: () = proxy
-            .method_call(MANAGER_INTERFACE, "SelectionResult", (tid, use_phone))
-            .await?;
-        Ok::<(), dbus::Error>(())
-    }
-    .await;
-    if let Err(e) = result {
-        tracing::warn!("failed to report device selection: {e:#}");
     }
 }
 

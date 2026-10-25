@@ -340,7 +340,7 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
 | Snap/Flatpak 版浏览器看不到设备 | Snap：`udevadm info /dev/hidraw2 \| grep TAGS` 里应有 `snap_firefox_firefox`（Firefox 和 Chromium 均已验证；规则装好前启动的浏览器需重启）。Flatpak：未测试；确认沙箱能看到 `/dev/hidraw*`，例如 `flatpak override --user --device=all <app-id>` |
 | 事务总是失败 | 确认蓝牙已开（系统不会替你打开）；`journalctl -u ucabled -f` |
 | 手机扫不了二维码 | 确认日志里没有 `Bluetooth adapter is powered off`，且手机蓝牙正常 |
-| Firefox 提示 "Multiple devices found"（插着另一个安全密钥） | 触碰那个安全密钥来使用它，或在 ucabled 窗口中点击 **使用手机**。Firefox 本身只能通过触碰来选定认证器，因此通过 ucabled 自己的提示来选择手机 |
+| Firefox 提示 "Multiple devices found"（插着另一个安全密钥） | 扫描二维码用手机，或直接触碰那个安全密钥。Firefox 只能通过触碰选定认证器，所以 ucabled 会立刻显示二维码窗口，并在手机连上之后才把自己标记为已选中——在此之前触碰安全密钥就会赢 |
 
 日志只包含命令字节和长度，绝不含原始 CBOR 载荷。
 
@@ -358,8 +358,11 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
   因为手机的通行密钥提供方没有实现 Ed25519 算法。
 - 没有本地 PIN/UV，也不做证明信任决策——这些全由手机完成。
 - 插着其他认证器（例如一个物理安全密钥）时，Firefox 只允许通过触碰物理
-  密钥来挑选，因此 ucabled 会显示自己的"使用手机"窗口。加 `--no-ui` 则无法
-  参与选择，会自动退让。
+  密钥来挑选。ucabled 因此会立刻显示二维码窗口，并在手机真正连上之后才把
+  自己标记为已选中，于是"扫码"和"触碰实体密钥"是公平竞争。二维码里的
+  request type 只能取自 Firefox 的选择探测（永远是一个 `makeCredential`），
+  所以 getAssertion 也可能在手机上显示成 `mc`。加 `--no-ui` 则无法参与选择，
+  会自动退让。
 
 ## 开发
 

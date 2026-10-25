@@ -368,7 +368,7 @@ existing phone passkey asks before overwriting.
 | A Snap or Flatpak browser does not see the device | Snap: `udevadm info /dev/hidraw2 \| grep TAGS` should list `snap_firefox_firefox` (verified for Firefox and Chromium; restart a sandbox that started before the rule).  Flatpak: untested; make sure the sandbox exposes `/dev/hidraw*`, e.g. with `flatpak override --user --device=all <app-id>` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
-| Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window.  Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |
+| Firefox says "Multiple devices found" (another security key is plugged in) | Scan the QR code to use the phone, or touch that security key to use it instead.  Firefox can only pick an authenticator by touch, so the QR window is shown right away and ucabled marks itself selected only once the phone has connected — touching the key before that wins |
 
 Logs contain only command bytes and lengths, never raw CBOR payloads.
 
@@ -389,8 +389,12 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
 - There is no local PIN/UV and no attestation trust decision — the phone does
   all of that.
 - With another authenticator (e.g. a physical security key) plugged in, Firefox
-  only lets the user pick by touching a physical key, so ucabled shows its own
-  "Use phone" window.  With `--no-ui` it cannot participate and stands down.
+  only lets the user pick by touching a physical key.  ucabled therefore shows
+  its QR window immediately and only marks itself selected once the phone has
+  connected, so scanning the code and touching the key compete fairly.  The QR
+  code's request type is taken from Firefox's selection probe, which is always
+  a `makeCredential`, so a getAssertion ceremony may be announced as `mc` on
+  the phone.  With `--no-ui` ucabled cannot participate and stands down.
 
 ## Development
 

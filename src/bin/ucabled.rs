@@ -46,9 +46,11 @@ const HID_REPORT_LOG_PREFIX: usize = 5;
 /// systemd restart the service and recreate the device).
 const MAX_UHID_READ_FAILURES: u32 = 10;
 
-/// How long to wait for the user to answer the device-selection prompt before
-/// declining. The helper has its own, slightly shorter, timeout.
-const SELECT_TIMEOUT: Duration = Duration::from_secs(70);
+/// How long a blink probe may stay unanswered (the QR window is only open
+/// while it is pending, so this bounds the whole "scan the code, or touch
+/// another key" decision).  The helper gets the same value as its own window
+/// timeout.
+const BLINK_TIMEOUT: Duration = Duration::from_secs(70);
 
 /// How long a multi-credential session waits for the host's next
 /// `authenticatorGetNextAssertion` before the phone's assertion state is
@@ -81,47 +83,51 @@ details are in the system journal (journalctl -u ucabled).";
 /// a misbehaving agent; excess ones are dropped in the D-Bus layer.
 const CANCEL_QUEUE_SIZE: usize = 16;
 
-/// Bound on queued device-selection answers, same rationale as
-/// [`CANCEL_QUEUE_SIZE`].
-const SELECT_QUEUE_SIZE: usize = 16;
+/// The caBLE session behind a pending operation.
+struct Transaction {
+    cid: u32,
+    /// Per-transaction token, so a reply or a cancellation that was already
+    /// queued when the host moved on cannot touch a newer transaction.
+    generation: u64,
+    /// Aborts the session task, its tunnel, and its window.
+    abort: AbortHandle,
+    /// Drives the session task: its first command, then follow-ups.
+    next: mpsc::UnboundedSender<SessionCmd>,
+    /// Registration generation of the agent the window was opened from,
+    /// used to recognise a stale agent-gone signal.
+    agent: Option<u64>,
+}
 
-/// An in-flight operation that the daemon is waiting on.
-enum Pending {
-    /// A caBLE transaction is running for `cid`; `abort` cancels it.
-    /// `agent` is the registration generation of the agent the QR window
-    /// was requested from, used to recognise stale agent-gone signals.
-    /// `next` drives the session task once it becomes a multi-credential
-    /// session.
-    Relay {
-        cid: u32,
-        generation: u64,
-        abort: AbortHandle,
-        next: mpsc::UnboundedSender<SessionCmd>,
-        agent: Option<u64>,
-    },
+/// What the daemon is waiting for on a pending transaction.
+enum Phase {
+    /// Firefox's blink probe ("Multiple devices found") holds the channel and
+    /// the QR window is up.  `answered` flips once the phone has connected and
+    /// the probe got its Pin* status; while it is still `false` another
+    /// authenticator (a physical security key) can win the selection by being
+    /// touched, which makes Firefox cancel the probe.
+    Blink { answered: bool },
+    /// A CTAP command is being relayed.
+    Relay,
     /// The first reply reported more than one credential, so the caBLE
     /// session stays open and `getNextAssertion` follow-ups are forwarded
     /// through `next` instead of starting a new transaction.
-    Session {
-        cid: u32,
-        generation: u64,
-        abort: AbortHandle,
-        next: mpsc::UnboundedSender<SessionCmd>,
-        agent: Option<u64>,
-    },
-    /// The user is being asked to choose the phone over another
-    /// authenticator (e.g. a physical security key). Firefox's own prompt can
-    /// only be answered by touching a physical key, so we ask through the
-    /// agent.
-    Select {
-        cid: u32,
-        deadline: tokio::time::Instant,
-        agent: Option<u64>,
-    },
+    Multi,
 }
 
-/// A command from the daemon to a live multi-credential caBLE session.
+/// An in-flight operation that the daemon is waiting on.
+struct Pending {
+    transaction: Transaction,
+    phase: Phase,
+    /// When to give up on a blink probe (and on the host's first command
+    /// after it).  `None` once a real command is being relayed: those are
+    /// bounded by the phone and CTAP reply timeouts instead.
+    deadline: Option<tokio::time::Instant>,
+}
+
+/// A command from the daemon to a live caBLE session.
 enum SessionCmd {
+    /// The first (or only) CTAP command of the transaction.
+    Command(Vec<u8>),
     /// Relay one `authenticatorGetNextAssertion`.
     Next,
 }
@@ -139,26 +145,15 @@ struct RelayReply {
 
 impl Pending {
     fn cid(&self) -> u32 {
-        match self {
-            Pending::Relay { cid, .. }
-            | Pending::Session { cid, .. }
-            | Pending::Select { cid, .. } => *cid,
-        }
+        self.transaction.cid
     }
 
     fn generation(&self) -> u64 {
-        match self {
-            Pending::Relay { generation, .. } | Pending::Session { generation, .. } => *generation,
-            Pending::Select { .. } => 0,
-        }
+        self.transaction.generation
     }
 
     fn agent(&self) -> Option<u64> {
-        match self {
-            Pending::Relay { agent, .. }
-            | Pending::Session { agent, .. }
-            | Pending::Select { agent, .. } => *agent,
-        }
+        self.transaction.agent
     }
 }
 
@@ -228,12 +223,11 @@ fn main() -> Result<()> {
         .context("failed to acquire the single-instance lock")?;
     tracing::debug!(lock = %_instance.path().display(), "acquired the instance lock");
     let (cancel_tx, cancel_rx) = mpsc::channel::<CancelRequest>(CANCEL_QUEUE_SIZE);
-    let (select_tx, select_rx) = mpsc::channel::<(u64, bool)>(SELECT_QUEUE_SIZE);
     let rt = tokio::runtime::Runtime::new()?;
     let notifier = if no_ui {
         Notifier::Terminal
     } else {
-        match ucabled::agent::start(rt.handle(), cancel_tx.clone(), select_tx.clone()) {
+        match ucabled::agent::start(rt.handle(), cancel_tx.clone()) {
             Ok(ui) => Notifier::Agent(ui),
             // A name conflict means another daemon (with a different state
             // directory, or a foreign implementation) would compete for the
@@ -249,7 +243,7 @@ fn main() -> Result<()> {
         }
     };
 
-    rt.block_on(daemon_loop(notifier, cancel_rx, select_rx))
+    rt.block_on(daemon_loop(notifier, cancel_rx))
 }
 
 /// Build the keepalive timer.  The missed-tick policy is `Delay`, not the
@@ -265,7 +259,6 @@ fn keepalive_interval() -> tokio::time::Interval {
 async fn daemon_loop(
     notifier: Notifier,
     mut cancel_rx: mpsc::Receiver<CancelRequest>,
-    mut select_rx: mpsc::Receiver<(u64, bool)>,
 ) -> Result<()> {
     // Warn (do not fix) when /dev/uhid is writable by anyone but the ucabled
     // account: a loose node lets a local process create arbitrary virtual HID
@@ -317,6 +310,10 @@ async fn daemon_loop(
         });
     }
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<RelayReply>();
+    // A session task reports here when the phone has connected and the
+    // tunnel is open; only then is a blink probe answered with Pin*, so a
+    // physical key touched before that still wins the selection.
+    let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<(u32, u64)>();
     let mut pending: Option<Pending> = None;
     let mut next_generation: u64 = 1;
     // Credentials still to serve via `authenticatorGetNextAssertion` after a
@@ -371,10 +368,11 @@ async fn daemon_loop(
                                 // continues that session instead of opening
                                 // a new qr transaction.
                                 if payload == [CMD_GET_NEXT_ASSERTION]
-                                    && let Some(Pending::Session { cid: session_cid, next, .. }) = &pending
-                                    && *session_cid == cid
+                                    && let Some(p) = &pending
+                                    && matches!(p.phase, Phase::Multi)
+                                    && p.cid() == cid
                                 {
-                                    if next.send(SessionCmd::Next).is_err() {
+                                    if p.transaction.next.send(SessionCmd::Next).is_err() {
                                         tracing::warn!(
                                             "multi-credential session is gone; answering the follow-up"
                                         );
@@ -389,17 +387,27 @@ async fn daemon_loop(
                                 // on, so abandon it and serve the new command
                                 // instead of refusing a whole ceremony for
                                 // state nobody will ask for again.
-                                if matches!(pending, Some(Pending::Session { .. }))
-                                    && let Some(Pending::Session { abort, .. }) = pending.take()
+                                let idle_multi =
+                                    pending.as_ref().is_some_and(|p| matches!(p.phase, Phase::Multi));
+                                if idle_multi
+                                    && let Some(p) = pending.take()
                                 {
-                                    abort.abort();
+                                    p.transaction.abort.abort();
                                     notifier.hide();
                                     tracing::info!(
                                         "abandoned an idle multi-credential session \
                                          for a new request"
                                     );
                                 }
-                                if pending.is_some() {
+                                // Once a blink probe has been answered the host
+                                // keeps this channel and sends its preflight
+                                // and then the real command on it, so those
+                                // commands must not be refused as "busy".
+                                let blink_answered = pending.as_ref().is_some_and(|p| {
+                                    matches!(p.phase, Phase::Blink { answered: true })
+                                        && p.cid() == cid
+                                });
+                                if pending.is_some() && !blink_answered {
                                     // A second single-frame CBOR command is
                                     // already rejected by the CTAPHID layer,
                                     // but a host can restart a multi-frame
@@ -477,27 +485,107 @@ async fn daemon_loop(
                                     write_all(&device, reports, &mut write_failures).await;
                                     continue;
                                 }
+                                // The real request that follows an answered
+                                // blink probe: the caBLE session is already
+                                // open (and the phone connected), so hand the
+                                // command to it instead of starting a second QR
+                                // transaction.
+                                if blink_answered {
+                                    let Some(p) = pending.take() else { continue };
+                                    // Any preflight state is done with once the
+                                    // real request starts.
+                                    fake_assertions = None;
+                                    let cmd = payload.first().copied().unwrap_or(0);
+                                    let command = prepare_command(payload);
+                                    let sent =
+                                        p.transaction.next.send(SessionCmd::Command(command));
+                                    tracing::info!(
+                                        cmd = %format_args!("{cmd:#04x}"),
+                                        "relaying the request that followed the blink probe"
+                                    );
+                                    pending = Some(Pending {
+                                        transaction: p.transaction,
+                                        phase: Phase::Relay,
+                                        deadline: None,
+                                    });
+                                    if sent.is_err() {
+                                        tracing::warn!(
+                                            "caBLE session is gone; refusing the request \
+                                             that followed the blink probe"
+                                        );
+                                        pending = None;
+                                        notifier.hide();
+                                        let reports =
+                                            transport.complete_relay(cid, &[CTAP1_ERR_TIMEOUT]);
+                                        write_all(&device, reports, &mut write_failures).await;
+                                    }
+                                    continue;
+                                }
                                 // Firefox's dummy makeCredential is how it
                                 // asks the user to pick among several
                                 // authenticators ("Multiple devices found").
                                 // It only counts as "selected" if the device
                                 // answers with a Pin* status, which a physical
-                                // key only does once touched. Put the choice in
-                                // the user's hands with our own window.
+                                // key only does once touched.  Our device has
+                                // nothing to touch, so show the QR code right
+                                // away and answer Pin* only once the phone is
+                                // connected: until then the user can still
+                                // touch the other key, which makes Firefox
+                                // cancel this probe.
                                 if ucabled::ctap::is_blink_probe(&payload) {
-                                    if let Some(agent) = notifier.select(cid as u64) {
-                                        tracing::info!("asking the user to choose the phone");
-                                        pending = Some(Pending::Select {
-                                            cid,
-                                            deadline: tokio::time::Instant::now()
-                                                + SELECT_TIMEOUT,
-                                            agent: Some(agent),
-                                        });
-                                    } else {
-                                        tracing::info!("blink probe, no UI available, declining");
-                                        let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
+                                    if blink_answered {
+                                        // We are already selected; the host
+                                        // has no reason to blink us again.
+                                        tracing::debug!("ignoring a repeated blink probe");
+                                        let reports = transport
+                                            .complete_relay(cid, &[CTAP1_ERR_CHANNEL_BUSY]);
                                         write_all(&device, reports, &mut write_failures).await;
+                                        continue;
                                     }
+                                    // One atomic read: availability and the
+                                    // generation tag share it (see below).
+                                    let Some(ui) = notifier.ui_for_transaction() else {
+                                        tracing::info!("blink probe, no UI available, declining");
+                                        let reports = transport
+                                            .complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
+                                        write_all(&device, reports, &mut write_failures).await;
+                                        continue;
+                                    };
+                                    let generation = next_generation;
+                                    next_generation += 1;
+                                    // The QR contents need a request type and a
+                                    // command length, neither of which the probe
+                                    // reveals about the real command: the probe
+                                    // is itself a makeCredential, and its size
+                                    // is the best available estimate for the
+                                    // L2CAP MTU check.
+                                    tracing::info!(
+                                        "showing the QR code while Firefox asks which key to use"
+                                    );
+                                    let (abort, next) = spawn_session(
+                                        &notifier,
+                                        &result_tx,
+                                        &ready_tx,
+                                        cid,
+                                        generation,
+                                        payload.len(),
+                                        RequestType::MakeCredential,
+                                        None,
+                                        BLINK_TIMEOUT.as_secs(),
+                                    );
+                                    pending = Some(Pending {
+                                        transaction: Transaction {
+                                            cid,
+                                            generation,
+                                            abort,
+                                            next,
+                                            agent: ui.generation(),
+                                        },
+                                        phase: Phase::Blink { answered: false },
+                                        deadline: Some(
+                                            tokio::time::Instant::now() + BLINK_TIMEOUT,
+                                        ),
+                                    });
                                     continue;
                                 }
                                 // Any preflight state is done with once the real
@@ -523,21 +611,7 @@ async fn daemon_loop(
                                     len = payload.len(),
                                     "starting caBLE transaction"
                                 );
-                                // iOS requires rp.name / user.displayName;
-                                // inject them when Firefox omitted them.
-                                let payload = ucabled::ctap::patch_makecredential(&payload);
-                                // OpenSSH reuses one fixed user handle for
-                                // every sk key; give each registration its
-                                // own so the phone does not replace the
-                                // previous passkey.
-                                let payload = ucabled::ctap::dissociate_ssh_user(&payload);
-                                // Firefox tags USB credentials with a
-                                // transports hint that some phones reject.
-                                let payload = ucabled::ctap::strip_transport_hints(&payload);
-                                // The patchers borrow the original payload
-                                // when nothing changed; the relay task is
-                                // spawned and needs an owned buffer.
-                                let payload = payload.into_owned();
+                                let payload = prepare_command(payload);
                                 let request_type = if payload.first() == Some(&CMD_MAKE_CREDENTIAL) {
                                     RequestType::MakeCredential
                                 } else {
@@ -545,125 +619,35 @@ async fn daemon_loop(
                                 };
                                 let generation = next_generation;
                                 next_generation += 1;
-                                let (next_tx, mut next_rx) = mpsc::unbounded_channel::<SessionCmd>();
-                                let tx = result_tx.clone();
-                                let notifier2 = notifier.clone();
-                                let notifier3 = notifier.clone();
-                                let task = tokio::spawn(async move {
-                                    let opened = ucabled::relay::open_qr_session(
-                                        payload.len(),
-                                        request_type,
-                                        move |url| {
-                                            notifier2.show(
-                                                cid as u64,
-                                                url,
-                                                rp,
-                                                ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
-                                                request_type,
-                                            )
-                                        },
-                                        move || notifier3.phone_found(),
-                                    )
-                                    .await;
-                                    let mut session = match opened {
-                                        Ok(session) => session,
-                                        Err(e) => {
-                                            let _ = tx.send(RelayReply {
-                                                cid,
-                                                generation,
-                                                payload: Err(e),
-                                                remaining: 0,
-                                            });
-                                            return;
-                                        }
-                                    };
-                                    let first = session.ctap(&payload).await;
-                                    // A getAssertion reply that reports more
-                                    // than one credential leaves the rest
-                                    // reachable only through
-                                    // getNextAssertion on this same session.
-                                    // Only a getAssertion can start one: key 5
-                                    // means something else in other replies.
-                                    let mut remaining = match (&first, request_type) {
-                                        (Ok(reply), RequestType::GetAssertion) => {
-                                            ucabled::ctap::number_of_credentials(reply)
-                                                .unwrap_or(1)
-                                                .saturating_sub(1)
-                                                .min(MAX_NEXT_ASSERTIONS)
-                                        }
-                                        _ => 0,
-                                    };
-                                    let sent = tx.send(RelayReply {
-                                        cid,
-                                        generation,
-                                        payload: first,
-                                        remaining,
-                                    });
-                                    if sent.is_err() {
-                                        session.shutdown().await;
-                                        return;
-                                    }
-                                    // Wait for the host to pick another
-                                    // account.  The account picker may stay
-                                    // open for a while, so use the same
-                                    // budget as one CTAP reply; after that the
-                                    // phone's assertion state is dropped.  The
-                                    // absolute deadline keeps the idle window
-                                    // from being extended indefinitely.
-                                    let session_deadline =
-                                        tokio::time::Instant::now() + SESSION_MAX_LIFETIME;
-                                    while remaining > 0 {
-                                        let idle_deadline =
-                                            tokio::time::Instant::now() + SESSION_IDLE_TIMEOUT;
-                                        let cmd = tokio::time::timeout_at(
-                                            idle_deadline.min(session_deadline),
-                                            next_rx.recv(),
-                                        )
-                                        .await;
-                                        match cmd {
-                                            Ok(Some(SessionCmd::Next)) => {}
-                                            _ => break,
-                                        }
-                                        let reply =
-                                            session.ctap(&[CMD_GET_NEXT_ASSERTION]).await;
-                                        // Only a successful assertion leaves
-                                        // another credential reachable; a
-                                        // CTAP error status (e.g. 0x2e) means
-                                        // the phone's assertion state is gone,
-                                        // so close the session instead of
-                                        // forwarding further follow-ups.
-                                        remaining = match &reply {
-                                            Ok(p) if p.first() == Some(&ucabled::ctap::CTAP2_OK) => {
-                                                remaining.saturating_sub(1)
-                                            }
-                                            _ => 0,
-                                        };
-                                        if tx
-                                            .send(RelayReply {
-                                                cid,
-                                                generation,
-                                                payload: reply,
-                                                remaining,
-                                            })
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                    }
-                                    session.shutdown().await;
-                                    if remaining > 0 {
-                                        tracing::info!(
-                                            "multi-credential session closed with \
-                                             credentials left"
-                                        );
-                                    }
-                                });
-                                pending = Some(Pending::Relay {
+                                let (abort, next) = spawn_session(
+                                    &notifier,
+                                    &result_tx,
+                                    &ready_tx,
                                     cid,
                                     generation,
-                                    abort: task.abort_handle(),
-                                    next: next_tx,
-                                    agent: ui.generation(),
+                                    payload.len(),
+                                    request_type,
+                                    rp,
+                                    ucabled::relay::BLE_ADVERT_TIMEOUT.as_secs(),
+                                );
+                                if next.send(SessionCmd::Command(payload)).is_err() {
+                                    tracing::warn!("caBLE session task is gone; refusing the request");
+                                    abort.abort();
+                                    let reports = transport
+                                        .complete_relay(cid, &[CTAP1_ERR_TIMEOUT]);
+                                    write_all(&device, reports, &mut write_failures).await;
+                                    continue;
+                                }
+                                pending = Some(Pending {
+                                    transaction: Transaction {
+                                        cid,
+                                        generation,
+                                        abort,
+                                        next,
+                                        agent: ui.generation(),
+                                    },
+                                    phase: Phase::Relay,
+                                    deadline: None,
                                 });
                             }
                             Some(CtapAction::CancelRelay { cid: cancel_cid }) => {
@@ -672,25 +656,24 @@ async fn daemon_loop(
                                 if pending.as_ref().is_none_or(|p| p.cid() != cancel_cid) {
                                     continue;
                                 }
-                                match pending.take() {
-                                    Some(Pending::Relay { abort, .. }) => {
-                                        abort.abort();
-                                        notifier.hide();
-                                        tracing::info!("cancelled caBLE transaction");
+                                let Some(p) = pending.take() else { continue };
+                                // Nothing is answered here: the CTAPHID layer
+                                // already built the cancel response, and the
+                                // phone learns when the tunnel drops.
+                                p.transaction.abort.abort();
+                                notifier.hide();
+                                match p.phase {
+                                    // Another authenticator (the user touched
+                                    // the physical key) won the selection.
+                                    Phase::Blink { .. } => {
+                                        tracing::info!("device selection cancelled by the host")
                                     }
-                                    Some(Pending::Session { abort, .. }) => {
-                                        abort.abort();
-                                        notifier.hide();
-                                        tracing::info!("cancelled multi-credential session");
+                                    Phase::Relay => {
+                                        tracing::info!("cancelled caBLE transaction")
                                     }
-                                    Some(Pending::Select { .. }) => {
-                                        // The host cancelled because another
-                                        // authenticator (the user touched it) won
-                                        // the selection; drop our prompt.
-                                        notifier.hide();
-                                        tracing::info!("device selection cancelled by the host");
+                                    Phase::Multi => {
+                                        tracing::info!("cancelled multi-credential session")
                                     }
-                                    None => {}
                                 }
                             }
                             None => {}
@@ -748,11 +731,7 @@ async fn daemon_loop(
                             transport.reset();
                             fake_assertions = None;
                             if let Some(p) = pending.take() {
-                                match p {
-                                    Pending::Relay { abort, .. }
-                                    | Pending::Session { abort, .. } => abort.abort(),
-                                    Pending::Select { .. } => {}
-                                }
+                                p.transaction.abort.abort();
                                 notifier.hide();
                                 tracing::info!(
                                     "last hidraw handle closed, dropped pending transaction"
@@ -777,6 +756,25 @@ async fn daemon_loop(
                     continue;
                 }
                 let cid = reply.cid;
+                // While the blink probe is still unanswered the host is not
+                // waiting for a CBOR answer: the only reply that can arrive is
+                // a session that failed to open.  Decline the probe so another
+                // authenticator can still be selected.
+                let blink_unanswered = pending
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.phase, Phase::Blink { answered: false }));
+                if blink_unanswered {
+                    if let Err(e) = &reply.payload {
+                        tracing::warn!(
+                            "caBLE session failed before the blink probe was answered: {e}"
+                        );
+                    }
+                    pending = None;
+                    notifier.hide();
+                    let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
+                    write_all(&device, reports, &mut write_failures).await;
+                    continue;
+                }
                 notifier.hide();
                 let payload = match reply.payload {
                     Ok(p) => {
@@ -809,53 +807,55 @@ async fn daemon_loop(
                     // use would only extend the tunnel's lifetime; drop it.
                     tracing::warn!("reply not delivered; dropping the transaction state");
                     if let Some(p) = pending.take() {
-                        match p {
-                            Pending::Relay { abort, .. } | Pending::Session { abort, .. } => {
-                                abort.abort()
-                            }
-                            Pending::Select { .. } => {}
-                        }
+                        p.transaction.abort.abort();
                     }
                     continue;
                 }
                 // The phone still holds assertion state when more
                 // credentials remain: keep the session open for
-                // getNextAssertion follow-ups.  A first reply turns the
-                // Relay into a Session; later replies keep it as it is.
-                pending = match pending.take() {
-                    Some(Pending::Relay {
-                        cid,
-                        generation,
-                        abort,
-                        next,
-                        agent,
-                    }) if reply.remaining > 0 => Some(Pending::Session {
-                        cid,
-                        generation,
-                        abort,
-                        next,
-                        agent,
-                    }),
-                    Some(session @ Pending::Session { .. }) if reply.remaining > 0 => Some(session),
-                    _ => None,
+                // getNextAssertion follow-ups.
+                pending = if reply.remaining > 0 {
+                    pending.take().map(|p| Pending {
+                        transaction: p.transaction,
+                        phase: Phase::Multi,
+                        deadline: None,
+                    })
+                } else {
+                    None
                 };
                 if reply.remaining > 0 {
                     tracing::info!(remaining = reply.remaining, "multi-credential session open");
                 }
             }
-            Some((tid, use_phone)) = select_rx.recv() => {
-                if let Some(Pending::Select { cid, .. }) = &pending
-                    && *cid as u64 == tid {
-                        let cid = *cid;
-                        pending = None;
-                        // CTAP2_ERR_PIN_NOT_SET: on the blink probe a Pin*
-                        // status tells authenticator-rs that this device was
-                        // selected, so Firefox proceeds with the phone flow.
-                        let status = if use_phone { CTAP2_ERR_PIN_NOT_SET } else { CTAP2_ERR_INVALID_OPTION };
-                        let reports = transport.complete_relay(cid, &[status]);
-                        write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!(use_phone, "device selection answered");
+            // The phone has connected and the caBLE session is open: only now
+            // can this device be selected, by answering the blink probe with a
+            // Pin* status (CTAP2_ERR_PIN_NOT_SET).  Until this point a touch on
+            // another security key makes Firefox cancel the probe instead.
+            Some((ready_cid, ready_generation)) = ready_rx.recv() => {
+                let ours = pending.as_ref().is_some_and(|p| {
+                    matches!(p.phase, Phase::Blink { answered: false })
+                        && p.cid() == ready_cid
+                        && p.generation() == ready_generation
+                });
+                if !ours {
+                    tracing::debug!(
+                        cid = ready_cid,
+                        generation = ready_generation,
+                        "ignoring a stale session-ready signal"
+                    );
+                    continue;
+                }
+                let Some(p) = pending.as_mut() else { continue };
+                p.phase = Phase::Blink { answered: true };
+                let reports = transport.complete_relay(ready_cid, &[CTAP2_ERR_PIN_NOT_SET]);
+                tracing::info!("phone connected, selecting this device");
+                if !write_all(&device, reports, &mut write_failures).await {
+                    tracing::warn!("selection answer not delivered; dropping the transaction");
+                    if let Some(p) = pending.take() {
+                        p.transaction.abort.abort();
                     }
+                    notifier.hide();
+                }
             }
             Some(request) = cancel_rx.recv() => {
                 if !cancel_aborts(&request, pending.as_ref()) {
@@ -865,38 +865,12 @@ async fn daemon_loop(
                 let Some(p) = pending.take() else {
                     continue;
                 };
-                match p {
-                    Pending::Relay { cid, abort, .. } => {
-                        abort.abort();
-                        let reports = transport.cancel_relay(cid);
-                        write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!(?request, "pending transaction cancelled");
-                    }
-                    // A multi-credential session is usually idle between
-                    // getNextAssertion calls, so only answer the host when a
-                    // command is actually outstanding on the channel; either
-                    // way the task is aborted and the phone learns when the
-                    // tunnel drops.
-                    Pending::Session { cid, abort, .. } => {
-                        abort.abort();
-                        let reports = if transport.busy_channel() == Some(cid) {
-                            transport.cancel_relay(cid)
-                        } else {
-                            vec![]
-                        };
-                        write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!(?request, "pending multi-credential session cancelled");
-                    }
-                    // The selection window answers through SelectionResult,
-                    // so a TransactionCancelled for its tid should never
-                    // arrive; decline defensively if one does.
-                    Pending::Select { cid, .. } => {
-                        let reports =
-                            transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
-                        write_all(&device, reports, &mut write_failures).await;
-                        tracing::info!(?request, "pending device selection cancelled");
-                    }
-                }
+                let answered = matches!(p.phase, Phase::Blink { answered: true });
+                p.transaction.abort.abort();
+                notifier.hide();
+                let reports = give_up_reports(&mut transport, &p);
+                write_all(&device, reports, &mut write_failures).await;
+                tracing::info!(?request, answered, "pending transaction cancelled");
             }
             // The keepalive cadence is only needed while a transaction is
             // pending or an unfinished assembly needs its idle-expiry check;
@@ -912,24 +886,26 @@ async fn daemon_loop(
                 // A multi-credential session whose task has exited (idle
                 // timeout, tunnel failure) owns nothing any more; drop the
                 // stale slot instead of letting it refuse the next command.
-                if let Some(Pending::Session { next, .. }) = pending.as_ref()
-                    && next.is_closed()
-                {
+                let multi_gone = pending.as_ref().is_some_and(|p| {
+                    matches!(p.phase, Phase::Multi) && p.transaction.next.is_closed()
+                });
+                if multi_gone {
                     tracing::info!("multi-credential session task is gone; dropping its slot");
                     pending = None;
                 }
                 let Some(p) = pending.as_ref() else { continue };
                 let cid = p.cid();
-                let timed_out = matches!(
-                    p,
-                    Pending::Select { deadline, .. }
-                        if tokio::time::Instant::now() >= *deadline
-                );
-                if timed_out {
-                    pending = None;
-                    let reports = transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION]);
+                let expired = p
+                    .deadline
+                    .is_some_and(|deadline| tokio::time::Instant::now() >= deadline);
+                if expired {
+                    let Some(p) = pending.take() else { continue };
+                    let answered = matches!(p.phase, Phase::Blink { answered: true });
+                    p.transaction.abort.abort();
+                    notifier.hide();
+                    let reports = give_up_reports(&mut transport, &p);
                     write_all(&device, reports, &mut write_failures).await;
-                    tracing::warn!("device selection timed out, declining");
+                    tracing::warn!(answered, "blink probe timed out, giving up");
                 } else if transport.busy_channel() == Some(cid) {
                     // Keepalives tell the host its command is still being
                     // worked on.  An open multi-credential session between
@@ -941,6 +917,156 @@ async fn daemon_loop(
             }
         }
     }
+}
+
+/// Answer the host when the daemon gives up on a pending transaction: decline
+/// a blink probe that is still unanswered (so Firefox keeps another
+/// authenticator in the selection), cancel a command that is outstanding, or
+/// write nothing when the host is not waiting for an answer on that channel.
+fn give_up_reports(transport: &mut Transport, pending: &Pending) -> Vec<Vec<u8>> {
+    let cid = pending.cid();
+    if transport.busy_channel() != Some(cid) {
+        return Vec::new();
+    }
+    match pending.phase {
+        Phase::Blink { answered: false } => {
+            transport.complete_relay(cid, &[CTAP2_ERR_INVALID_OPTION])
+        }
+        // A multi-credential session is usually idle between
+        // getNextAssertion calls, in which case there is nothing to answer;
+        // either way the task is aborted and the phone learns when the tunnel
+        // drops.
+        _ => transport.cancel_relay(cid),
+    }
+}
+
+/// Make a CTAP command from the host ready to relay: iOS requires
+/// `rp.name`/`user.displayName`, OpenSSH reuses one fixed user handle for every
+/// sk key, and Firefox tags USB credentials with a transports hint some phones
+/// reject.  The patchers borrow the input when nothing changes; the session
+/// task needs the result across awaits, so it is owned.
+fn prepare_command(payload: Vec<u8>) -> Vec<u8> {
+    let payload = ucabled::ctap::patch_makecredential(&payload);
+    let payload = ucabled::ctap::dissociate_ssh_user(&payload);
+    let payload = ucabled::ctap::strip_transport_hints(&payload);
+    payload.into_owned()
+}
+
+/// Open a caBLE session in its own task and drive it with CTAP commands.
+///
+/// The task shows the QR window, waits for the phone and the handshake, then
+/// reports on `ready_tx` and relays the commands that arrive on the returned
+/// channel.  Replies go back through `result_tx`.  The session is opened ahead
+/// of the first command so that a blink probe can be answered only once the
+/// phone is really there (see [`Phase::Blink`]).
+#[allow(clippy::too_many_arguments)]
+fn spawn_session(
+    notifier: &Notifier,
+    result_tx: &mpsc::UnboundedSender<RelayReply>,
+    ready_tx: &mpsc::UnboundedSender<(u32, u64)>,
+    cid: u32,
+    generation: u64,
+    command_len: usize,
+    request_type: RequestType,
+    rp: Option<String>,
+    timeout_secs: u64,
+) -> (AbortHandle, mpsc::UnboundedSender<SessionCmd>) {
+    let (next_tx, mut next_rx) = mpsc::unbounded_channel::<SessionCmd>();
+    let tx = result_tx.clone();
+    let ready = ready_tx.clone();
+    let notifier2 = notifier.clone();
+    let notifier3 = notifier.clone();
+    let task = tokio::spawn(async move {
+        let opened = ucabled::relay::open_qr_session(
+            command_len,
+            request_type,
+            move |url| notifier2.show(cid as u64, url, rp, timeout_secs, request_type),
+            move || notifier3.phone_found(),
+        )
+        .await;
+        let mut session = match opened {
+            Ok(session) => session,
+            Err(e) => {
+                let _ = tx.send(RelayReply {
+                    cid,
+                    generation,
+                    payload: Err(e),
+                    remaining: 0,
+                });
+                return;
+            }
+        };
+        // The tunnel is up and the phone is connected.  A blink probe is
+        // answered from here on; a normal transaction has its command queued
+        // already.
+        let _ = ready.send((cid, generation));
+        let first_command = match next_rx.recv().await {
+            Some(SessionCmd::Command(command)) => command,
+            // Aborted, or the daemon dropped the sender without a command.
+            _ => return,
+        };
+        let first = session.ctap(&first_command).await;
+        // A getAssertion reply that reports more than one credential leaves
+        // the rest reachable only through getNextAssertion on this same
+        // session.  Only a getAssertion can start one: key 5 means something
+        // else in other replies.
+        let mut remaining = match (&first, request_type) {
+            (Ok(reply), RequestType::GetAssertion) => ucabled::ctap::number_of_credentials(reply)
+                .unwrap_or(1)
+                .saturating_sub(1)
+                .min(MAX_NEXT_ASSERTIONS),
+            _ => 0,
+        };
+        let sent = tx.send(RelayReply {
+            cid,
+            generation,
+            payload: first,
+            remaining,
+        });
+        if sent.is_err() {
+            session.shutdown().await;
+            return;
+        }
+        // Wait for the host to pick another account.  The account picker may
+        // stay open for a while, so use the same budget as one CTAP reply;
+        // after that the phone's assertion state is dropped.  The absolute
+        // deadline keeps the idle window from being extended indefinitely.
+        let session_deadline = tokio::time::Instant::now() + SESSION_MAX_LIFETIME;
+        while remaining > 0 {
+            let idle_deadline = tokio::time::Instant::now() + SESSION_IDLE_TIMEOUT;
+            let cmd =
+                tokio::time::timeout_at(idle_deadline.min(session_deadline), next_rx.recv()).await;
+            match cmd {
+                Ok(Some(SessionCmd::Next)) => {}
+                _ => break,
+            }
+            let reply = session.ctap(&[CMD_GET_NEXT_ASSERTION]).await;
+            // Only a successful assertion leaves another credential reachable;
+            // a CTAP error status (e.g. 0x2e) means the phone's assertion state
+            // is gone, so close the session instead of forwarding further
+            // follow-ups.
+            remaining = match &reply {
+                Ok(p) if p.first() == Some(&ucabled::ctap::CTAP2_OK) => remaining.saturating_sub(1),
+                _ => 0,
+            };
+            if tx
+                .send(RelayReply {
+                    cid,
+                    generation,
+                    payload: reply,
+                    remaining,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+        session.shutdown().await;
+        if remaining > 0 {
+            tracing::info!("multi-credential session closed with credentials left");
+        }
+    });
+    (task.abort_handle(), next_tx)
 }
 
 /// Write one response's reports to the host.
@@ -997,17 +1123,23 @@ async fn write_all(device: &UhidDevice, reports: Vec<Vec<u8>>, failures: &mut u3
 mod tests {
     use super::*;
 
-    fn select_pending(cid: u32, agent: Option<u64>) -> Pending {
-        Pending::Select {
-            cid,
-            deadline: tokio::time::Instant::now() + SELECT_TIMEOUT,
-            agent,
+    fn blink_pending(cid: u32, agent: Option<u64>) -> Pending {
+        Pending {
+            transaction: Transaction {
+                cid,
+                generation: 2,
+                abort: tokio::spawn(async {}).abort_handle(),
+                next: mpsc::unbounded_channel().0,
+                agent,
+            },
+            phase: Phase::Blink { answered: false },
+            deadline: Some(tokio::time::Instant::now() + BLINK_TIMEOUT),
         }
     }
 
-    #[test]
-    fn user_cancellation_matches_only_the_current_transaction() {
-        let p = select_pending(7, Some(1));
+    #[tokio::test]
+    async fn user_cancellation_matches_only_the_current_transaction() {
+        let p = blink_pending(7, Some(1));
         assert!(cancel_aborts(&CancelRequest::Transaction(7), Some(&p)));
         // Stale tid from an earlier, already-finished transaction.
         assert!(!cancel_aborts(&CancelRequest::Transaction(6), Some(&p)));
@@ -1015,9 +1147,9 @@ mod tests {
         assert!(!cancel_aborts(&CancelRequest::Transaction(7), None));
     }
 
-    #[test]
-    fn agent_gone_matches_only_the_owning_generation() {
-        let p = select_pending(7, Some(3));
+    #[tokio::test]
+    async fn agent_gone_matches_only_the_owning_generation() {
+        let p = blink_pending(7, Some(3));
         assert!(cancel_aborts(&CancelRequest::AgentGone(3), Some(&p)));
         // A departed predecessor or a not-yet-seen successor must not
         // abort this transaction.
@@ -1026,11 +1158,11 @@ mod tests {
         assert!(!cancel_aborts(&CancelRequest::AgentGone(3), None));
     }
 
-    #[test]
-    fn agent_gone_does_not_touch_agentless_transactions() {
+    #[tokio::test]
+    async fn agent_gone_does_not_touch_agentless_transactions() {
         // Terminal QR: no agent was involved, so no agent departure
         // applies.
-        let p = select_pending(7, None);
+        let p = blink_pending(7, None);
         assert!(!cancel_aborts(&CancelRequest::AgentGone(1), Some(&p)));
     }
 
@@ -1049,12 +1181,16 @@ mod tests {
     async fn a_stale_reply_does_not_match_the_current_transaction() {
         let (next, _rx) = mpsc::unbounded_channel();
         let abort = tokio::spawn(async {}).abort_handle();
-        let pending = Pending::Relay {
-            cid: 7,
-            generation: 2,
-            abort,
-            next,
-            agent: None,
+        let pending = Pending {
+            transaction: Transaction {
+                cid: 7,
+                generation: 2,
+                abort,
+                next,
+                agent: None,
+            },
+            phase: Phase::Relay,
+            deadline: None,
         };
         let reply = |cid, generation| RelayReply {
             cid,
