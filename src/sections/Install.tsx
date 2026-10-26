@@ -1,4 +1,3 @@
-import { useState } from "react";
 import Section from "../components/Section";
 import Reveal from "../components/Reveal";
 import CopyButton from "../components/CopyButton";
@@ -52,7 +51,6 @@ function Panel({
 
 export default function Install() {
   const c = useCopy();
-  const [showCache, setShowCache] = useState(false);
   return (
     <Section num="04" id="install" title={c.install.title}>
       <Reveal>
@@ -62,20 +60,18 @@ export default function Install() {
         </div>
       </Reveal>
       <Reveal delay={100}>
-        <div className="mt-6">
-          <button
-            onClick={() => setShowCache((v) => !v)}
-            className="hov text-[11px] uppercase tracking-widest"
+        <details className="group mt-6">
+          <summary
+            className="hov cursor-pointer list-none text-[11px] uppercase tracking-widest"
             style={{ color: "var(--phos-55)" }}
           >
-            {showCache ? "▾" : "▸"} {c.install.cacheToggle}
-          </button>
-          {showCache && (
-            <div className="mt-3">
-              <Panel label={c.install.cache.label} code={CACHIX} note={c.install.cache.note} />
-            </div>
-          )}
-        </div>
+            <span className="group-open:hidden">▸</span>
+            <span className="hidden group-open:inline">▾</span> {c.install.cacheToggle}
+          </summary>
+          <div className="mt-3">
+            <Panel label={c.install.cache.label} code={CACHIX} note={c.install.cache.note} />
+          </div>
+        </details>
       </Reveal>
       <Reveal delay={140}>
         <p className="mt-6 text-[12px]" style={{ color: "var(--phos-40)" }}>

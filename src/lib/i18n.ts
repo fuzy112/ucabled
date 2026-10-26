@@ -427,10 +427,7 @@ export const zh: Dict = {
 
 export const DICTS: Record<Lang, Dict> = { en, zh };
 
-export const LangContext = createContext<{
-  lang: Lang;
-  setLang: (l: Lang) => void;
-}>({ lang: "en", setLang: () => {} });
+export const LangContext = createContext<{ lang: Lang }>({ lang: "en" });
 
 export function useLang() {
   return useContext(LangContext);

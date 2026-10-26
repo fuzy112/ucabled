@@ -11,7 +11,7 @@ export default function CopyButton({ text }: { text: string }) {
         setOk(true);
         setTimeout(() => setOk(false), 1400);
       }}
-      className="hov shrink-0 border px-3 py-1 text-[11px] uppercase tracking-widest"
+      className="js-only hov shrink-0 border px-3 py-1 text-[11px] uppercase tracking-widest"
       style={{ borderColor: "var(--phos-25)", color: ok ? "#000" : "var(--phos-70)", background: ok ? "var(--phos)" : "transparent" }}
     >
       {ok ? c.copy.copied : c.copy.copy}

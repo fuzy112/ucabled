@@ -168,6 +168,24 @@ body {
   transform: translateY(0);
 }
 
+/* ---------- no-JS fallback ----------
+   Pages are prerendered to static HTML.  Without JavaScript there is no
+   reveal observer and no boot sequence, so show every block at once and drop
+   the controls that cannot work (copy buttons, the boot overlay). */
+html:not(.js) .rv {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+html:not(.js) #boot,
+html:not(.js) .js-only {
+  display: none;
+}
+
+/* details/summary is the no-JS cache toggle; hide the native marker */
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+
 /* ---------- hover: phosphor brighten ---------- */
 .hov { transition: color 0.12s steps(2), text-shadow 0.12s steps(2); }
 .hov:hover {

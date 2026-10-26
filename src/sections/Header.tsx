@@ -1,9 +1,15 @@
 import { VERSION_TAG } from "../lib/version";
 import { useCopy, useLang } from "../lib/i18n";
 
+// Each language has its own static page, so switching is a plain link and
+// keeps working with JavaScript disabled.
+const BASE = import.meta.env.BASE_URL;
+const EN_HREF = BASE;
+const ZH_HREF = `${BASE}zh/`;
+
 export default function Header() {
   const c = useCopy();
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
 
   const links: [string, string][] = [
     [c.nav.how, "#how"],
@@ -17,23 +23,25 @@ export default function Header() {
 
   const switcher = (
     <div className="flex items-center gap-1.5 uppercase">
-      <button
-        type="button"
+      <a
+        href={EN_HREF}
+        lang="en"
         className="hov"
-        onClick={() => setLang("en")}
+        aria-current={lang === "en" ? "page" : undefined}
         style={{ color: lang === "en" ? "var(--phos-hi)" : "var(--phos-40)" }}
       >
         EN
-      </button>
+      </a>
       <span style={{ color: "var(--phos-25)" }}>/</span>
-      <button
-        type="button"
+      <a
+        href={ZH_HREF}
+        lang="zh-CN"
         className="hov"
-        onClick={() => setLang("zh")}
+        aria-current={lang === "zh" ? "page" : undefined}
         style={{ color: lang === "zh" ? "var(--phos-hi)" : "var(--phos-40)" }}
       >
         中文
-      </button>
+      </a>
     </div>
   );
 
