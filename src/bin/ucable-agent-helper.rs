@@ -488,7 +488,7 @@ fn maybe_layer_shell(window: &gtk::ApplicationWindow, requested: bool) -> bool {
     window.init_layer_shell();
     window.set_namespace(Some("ucabled"));
     window.set_layer(Layer::Overlay);
-    window.set_keyboard_mode(KeyboardMode::OnDemand);
+    window.set_keyboard_mode(KeyboardMode::Exclusive);
     // No anchors: the compositor centres the fixed-size surface instead of
     // stretching it to the output.
     true
