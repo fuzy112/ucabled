@@ -95,11 +95,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   access but without the release key can no longer substitute the key
   stored in the tagged tree, and a future signing subkey keeps working.
 
-- The helper contract is v2: the relying party is passed as `--rp
+- The helper contract is v3: the relying party is passed as `--rp
   <value>` and the transaction URL is only read from stdin, so a relying
   party identifier cannot flip helper modes (not even one spelled
-  `--help` or `--select`) and the transaction secret cannot appear in a
-  world-readable command line.
+  `--help`) and the transaction secret cannot appear in a world-readable
+  command line.
 
 - Both UI agents now accept calls only from the current owner of the
   daemon's bus name, and the session agent only trusts name-change
@@ -115,6 +115,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Agent registration attempts are limited per user instead of per D-Bus
   connection, so extra connections can no longer multiply the polkit
   authorization work they cause.
+
+- The P-256 implementation moves to `crypto-bigint` 0.7.9, since 0.7.6
+  (what 0.2.1 pinned) was yanked upstream.  0.7.9 also fixes truncation
+  in `invert_odd_mod` and boundary cases in `mul_mod_special`, both on
+  the curve arithmetic the handshake depends on.
 
 ## [0.2.1] - 2026-10-24
 
