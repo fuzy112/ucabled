@@ -23,6 +23,10 @@ pkgs.mkShell {
     libadwaita
     gtk4-layer-shell
     gettext
+
+    dpkg
+
+    libfido2
   ];
 
   # Runtime libraries for the GTK4 helper. GDK needs its toolkit libs and, on
