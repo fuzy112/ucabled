@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.4.0-pre]
 
+### Fixed
+
+- With `--layer-shell` (or `UCABLED_HELPER_LAYER_SHELL=1`), Esc now closes
+  the helper window.  The overlay never asked for keyboard focus before, so
+  the key went elsewhere and only finishing or abandoning the request could
+  take the window away.
+
 ## [0.3.0] - 2026-10-27
 
 ### Added
