@@ -286,7 +286,7 @@ Esc or the agent.  Its strings are localized with gettext (the Nix package
 installs the catalogs).  Build with `--features adwaita` for GNOME-native window
 chrome.
 
-Any contract-v1 helper can replace it: set `UCABLED_HELPER` (an absolute path
+Any contract-v2 helper can replace it: set `UCABLED_HELPER` (an absolute path
 or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
 flags go in `services.ucabled.helperExtraArgs` (for example
 `[ "--layer-shell" ]`).
@@ -368,7 +368,7 @@ existing phone passkey asks before overwriting.
 | A Snap or Flatpak browser does not see the device | Snap: `udevadm info /dev/hidraw2 \| grep TAGS` should list `snap_firefox_firefox` (verified for Firefox and Chromium; restart a sandbox that started before the rule).  Flatpak: untested; make sure the sandbox exposes `/dev/hidraw*`, e.g. with `flatpak override --user --device=all <app-id>` |
 | Transactions keep failing | Make sure Bluetooth is on (the system will not enable it for you); `journalctl -u ucabled -f` |
 | Phone cannot scan the QR code | Make sure the log does not say `Bluetooth adapter is powered off` and that Bluetooth works on the phone |
-| Firefox says "Multiple devices found" (another security key is plugged in) | Touch that security key to use it, or click **Use phone** in the ucabled window.  Firefox itself can only pick an authenticator by touch, so the phone is chosen through ucabled's own prompt |
+| Firefox says "Multiple devices found" (another security key is plugged in) | Scan the QR code to use the phone, or touch that security key to use it instead.  Firefox can only pick an authenticator by touch, so the QR window is shown right away and ucabled marks itself selected only once the phone has connected — touching the key before that wins |
 
 Logs contain only command bytes and lengths, never raw CBOR payloads.
 
@@ -389,8 +389,12 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
 - There is no local PIN/UV and no attestation trust decision — the phone does
   all of that.
 - With another authenticator (e.g. a physical security key) plugged in, Firefox
-  only lets the user pick by touching a physical key, so ucabled shows its own
-  "Use phone" window.  With `--no-ui` it cannot participate and stands down.
+  only lets the user pick by touching a physical key.  ucabled therefore shows
+  its QR window immediately and only marks itself selected once the phone has
+  connected, so scanning the code and touching the key compete fairly.  The QR
+  code's request type is taken from Firefox's selection probe, which is always
+  a `makeCredential`, so a getAssertion ceremony may be announced as `mc` on
+  the phone.  With `--no-ui` ucabled cannot participate and stands down.
 
 ## Development
 
@@ -410,11 +414,15 @@ argument to choose another).  Push `master`, `next` and `website` first and
 wait for their checks, then push the tag.
 `.github/workflows/release.yml` checks tag/manifest/changelog consistency and
 the tag signature, then publishes the GitHub release with the changelog
-section as notes.  The Debian packages are then built, signed and uploaded
-locally by `admin/release-debs.sh`: it takes the version from the tag on
-HEAD, runs `nix run .#deb -- all`, signs each .deb with a detached
-GPG signature and uploads the assets to the release.  Keeping this step
-local means the signing key never leaves the maintainer's machine.
+section as notes.  The release artifacts are then built, signed and
+uploaded locally by `admin/release-debs.sh`: it takes the version from
+the tag on HEAD, runs `nix run .#deb -- all`, packs the source tarball
+with `git archive` on the tag, signs each artifact with a detached GPG
+signature and uploads everything to the release.  The uploaded tarball is
+the stable, signed source download; GitHub's automatic "Source code"
+archives are regenerated on demand, their bytes are not guaranteed
+stable, and they stay unsigned.  Keeping this step local means the
+signing key never leaves the maintainer's machine.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell

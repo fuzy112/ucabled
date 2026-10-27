@@ -37,7 +37,10 @@ pub enum Channel {
 }
 
 pub struct DesktopFlow {
-    /// e.g. "wss://cable.ua5v.com" or "ws://127.0.0.1:9000" for tests.
+    /// Test/development override pointing at a local relay (may be
+    /// cleartext `ws://`); production flows leave it `None` and dial the
+    /// EID-selected domain over `wss`.  Never wire this to configuration
+    /// or phone-supplied data.
     pub tunnel_base: Option<String>,
     /// Channel selected from the BLE advert (WebSocket unless it carried a PSM).
     pub channel: Channel,
@@ -61,57 +64,42 @@ pub struct DesktopResult {
     pub handshake_hash: [u8; 32],
 }
 
-impl DesktopFlow {
-    /// Run the desktop side: connect tunnel, perform Noise handshake, read the
-    /// post-handshake message, send one CTAP command, return its reply.
-    pub async fn run(mut self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
-        let components = eid::to_components(&self.plaintext_eid);
+/// An open caBLE session: the tunnel and Noise handshake are done, and CTAP
+/// commands can be exchanged one at a time.
+///
+/// The phone keeps per-assertion state (credential list, remaining
+/// credentials) on its side, so a `getAssertion` reply that reports several
+/// credentials can only be followed up with `getNextAssertion` while this
+/// session stays open.  Closing it (or `send_shutdown`) discards that state.
+pub struct DesktopSession {
+    link: CableLink,
+    post_handshake: Vec<u8>,
+    handshake_hash: [u8; 32],
+}
 
-        let mut tunnel_id = [0u8; 16];
-        derive(&self.qr_secret, &[], Purpose::TunnelId, &mut tunnel_id);
-        let mut psk = [0u8; 32];
-        derive(&self.qr_secret, &self.plaintext_eid, Purpose::Psk, &mut psk);
-        // The QR secret is no longer needed once the tunnel ID and PSK exist.
-        self.qr_secret.zeroize();
+impl DesktopSession {
+    /// The post-handshake message the phone sent right after the handshake.
+    ///
+    /// This is a CBOR map padded to a 512-byte boundary (Chromium's
+    /// `EncodePaddedCBORMap`): the last two bytes are the padding length as a
+    /// native-endian `u16`, preceded by that many zero bytes.  Older phones
+    /// use a one-byte length as the final byte instead (`DecodePaddedCBORMap8`,
+    /// which Chromium still accepts).  Consumers must strip the padding before
+    /// handing the bytes to a strict CBOR parser; no in-tree consumer parses
+    /// it yet.
+    pub fn post_handshake(&self) -> &[u8] {
+        &self.post_handshake
+    }
 
-        let mut transport = self
-            .connect_transport(&components, &tunnel_id, ctap_command.len())
-            .await?;
+    pub fn handshake_hash(&self) -> &[u8; 32] {
+        &self.handshake_hash
+    }
 
-        let mut handshake = HandshakeInitiator::new_qr(&psk, &self.identity);
-        // The PSK now lives inside the handshake state.
-        psk.zeroize();
-        let initial = handshake.build_initial_message();
-        transport
-            .send(initial)
-            .await
-            .map_err(TransactionError::transport)?;
-
-        let response = tokio::time::timeout(self.handshake_timeout, transport.recv())
-            .await
-            .map_err(|_| TransactionError::Timeout)?
-            .map_err(TransactionError::transport)?;
-        let (crypter, handshake_hash) = handshake
-            .process_response(&response)
-            .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("caBLE handshake failed")))?;
-        tracing::info!("caBLE handshake complete");
-
-        let mut link = CableLink {
-            transport,
-            crypter,
-            handshake_hash,
-        };
-
-        let post_handshake = tokio::time::timeout(POST_HANDSHAKE_TIMEOUT, recv_raw(&mut link))
-            .await
-            .map_err(|_| TransactionError::Timeout)?
-            .map_err(TransactionError::transport)?;
-        tracing::info!(
-            len = post_handshake.len(),
-            "received post-handshake message"
-        );
-
-        link.send_ctap(ctap_command)
+    /// Send one CTAP command and wait for its reply payload (status byte +
+    /// CBOR).
+    pub async fn ctap(&mut self, command: &[u8]) -> Result<Vec<u8>, TransactionError> {
+        self.link
+            .send_ctap(command)
             .await
             .map_err(TransactionError::transport)?;
 
@@ -119,13 +107,27 @@ impl DesktopFlow {
         // trusted and must not be able to keep the transaction alive forever
         // by trickling update messages.
         let reply_deadline = tokio::time::Instant::now() + CTAP_REPLY_TIMEOUT;
-        let ctap_reply = loop {
-            let (ty, payload) = tokio::time::timeout_at(reply_deadline, link.recv_message())
+        loop {
+            let (ty, payload) = tokio::time::timeout_at(reply_deadline, self.link.recv_message())
                 .await
                 .map_err(|_| TransactionError::Timeout)?
                 .map_err(TransactionError::transport)?;
             match ty {
-                MSG_CTAP => break payload,
+                MSG_CTAP => {
+                    // The phone (or whoever holds the QR/PSK) controls this
+                    // length.  A reply above the advertised maxMsgSize cannot
+                    // be framed as CTAPHID: the continuation sequence number
+                    // is a 7-bit field, so the host would misparse the 129th
+                    // frame as an INIT packet.
+                    if payload.len() as u64 > crate::ctap::MAX_MSG_SIZE {
+                        return Err(TransactionError::failed(anyhow::anyhow!(
+                            "authenticator reply is {} bytes, above maxMsgSize {}",
+                            payload.len(),
+                            crate::ctap::MAX_MSG_SIZE
+                        )));
+                    }
+                    return Ok(payload);
+                }
                 MSG_UPDATE => {
                     tracing::info!(len = payload.len(), "received update message");
                 }
@@ -140,13 +142,130 @@ impl DesktopFlow {
                     )));
                 }
             }
-        };
+        }
+    }
 
-        link.send_shutdown().await.ok();
+    /// Tell the phone the transaction is over.  Best effort: the phone drops
+    /// its state when the tunnel closes in any case.
+    pub async fn shutdown(mut self) {
+        self.link.send_shutdown().await.ok();
+    }
+}
 
+impl DesktopFlow {
+    /// Run the desktop side to completion for one command: open the session,
+    /// exchange the command, close the session.
+    pub async fn run(self, ctap_command: &[u8]) -> Result<DesktopResult, TransactionError> {
+        let mut session = self.open(ctap_command.len()).await?;
+        let ctap_reply = session.ctap(ctap_command).await?;
+        let post_handshake = session.post_handshake().to_vec();
+        let handshake_hash = *session.handshake_hash();
+        session.shutdown().await;
         Ok(DesktopResult {
             post_handshake,
             ctap_reply,
+            handshake_hash,
+        })
+    }
+
+    /// Connect the tunnel, perform the Noise handshake and read the
+    /// post-handshake message, leaving the session open for CTAP commands.
+    ///
+    /// `command_len` is the size of the largest command the caller may send;
+    /// the L2CAP arm uses it to decide whether the negotiated MTU can carry
+    /// it before committing to the BLE channel.
+    pub async fn open(mut self, command_len: usize) -> Result<DesktopSession, TransactionError> {
+        let components = eid::to_components(&self.plaintext_eid);
+
+        let mut tunnel_id = [0u8; 16];
+        derive(&self.qr_secret, &[], Purpose::TunnelId, &mut tunnel_id);
+        // `Zeroizing`: the PSK is needed until both handshake attempts are
+        // done, and the dial or a non-L2CAP handshake can return early.
+        let mut psk = zeroize::Zeroizing::new([0u8; 32]);
+        derive(
+            &self.qr_secret,
+            &self.plaintext_eid,
+            Purpose::Psk,
+            &mut *psk,
+        );
+        // The QR secret is no longer needed once the tunnel ID and PSK exist.
+        self.qr_secret.zeroize();
+
+        let transport = self
+            .connect_transport(&components, &tunnel_id, command_len)
+            .await?;
+
+        // Whether the data channel was picked from the BLE advertisement
+        // suffix rather than the tunnel.
+        #[cfg(feature = "l2cap")]
+        let over_l2cap = matches!(transport, CableTransport::L2cap(_));
+        #[cfg(not(feature = "l2cap"))]
+        let over_l2cap = false;
+
+        let mut link = match self.handshake(transport, &psk).await {
+            Ok(link) => link,
+            // The L2CAP channel is selected by the advertisement suffix,
+            // which is outside the EID's authenticated block; a BLE-range
+            // attacker can rebroadcast the phone's EID with their own PSM and
+            // win the first-match race in `ble::scan`.  A handshake failure on
+            // that channel may therefore be channel steering rather than a
+            // phone problem, so retry over the tunnel.  The spec allows the
+            // authenticator to attempt more than one channel from the QR
+            // intersection, and a phone that lost the race is still listening
+            // there.
+            Err(e) if over_l2cap => {
+                tracing::warn!(
+                    "caBLE handshake failed over the L2CAP channel ({e}); the advertised \
+                     PSM is not integrity-protected, so this may be channel steering; \
+                     trying the WebSocket channel"
+                );
+                let transport = self.connect_websocket(&components, &tunnel_id).await?;
+                self.handshake(transport, &psk).await?
+            }
+            Err(e) => return Err(e),
+        };
+
+        let handshake_hash = link.handshake_hash;
+        let post_handshake = tokio::time::timeout(POST_HANDSHAKE_TIMEOUT, recv_raw(&mut link))
+            .await
+            .map_err(|_| TransactionError::Timeout)?
+            .map_err(TransactionError::transport)?;
+        tracing::info!(
+            len = post_handshake.len(),
+            "received post-handshake message"
+        );
+
+        Ok(DesktopSession {
+            link,
+            post_handshake,
+            handshake_hash,
+        })
+    }
+
+    /// Run the Noise handshake over an open data channel.
+    async fn handshake(
+        &self,
+        mut transport: CableTransport,
+        psk: &[u8; 32],
+    ) -> Result<CableLink, TransactionError> {
+        let mut handshake = HandshakeInitiator::new_qr(psk, &self.identity);
+        let initial = handshake.build_initial_message();
+        transport
+            .send(initial)
+            .await
+            .map_err(TransactionError::transport)?;
+
+        let response = tokio::time::timeout(self.handshake_timeout, transport.recv())
+            .await
+            .map_err(|_| TransactionError::Timeout)?
+            .map_err(TransactionError::transport)?;
+        let (crypter, handshake_hash) = handshake
+            .process_response(&response)
+            .ok_or_else(|| TransactionError::failed(anyhow::anyhow!("caBLE handshake failed")))?;
+        tracing::info!("caBLE handshake complete");
+        Ok(CableLink {
+            transport,
+            crypter,
             handshake_hash,
         })
     }
@@ -246,9 +365,16 @@ impl DesktopFlow {
             hex::encode(tunnel_id)
         );
         tracing::info!("connecting caBLE tunnel");
-        let (ws, _response) = tunnel::dial(&url)
-            .await
-            .map_err(TransactionError::transport)?;
+        // A `tunnel_base` override exists for the local test relay and the
+        // development tools, so it may dial cleartext; the production path
+        // (None) builds a wss:// URL from the EID-selected domain and goes
+        // through the strict entry point that refuses ws://.
+        let dialed = if self.tunnel_base.is_some() {
+            tunnel::dial_cleartext(&url).await
+        } else {
+            tunnel::dial(&url).await
+        };
+        let (ws, _response) = dialed.map_err(TransactionError::transport)?;
         Ok(CableTransport::Websocket(Box::new(ws)))
     }
 }

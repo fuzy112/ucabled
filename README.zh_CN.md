@@ -266,7 +266,7 @@ GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加
 圆角卡片，可用 Esc 或由代理关闭。它的界面字符串用 gettext 本地化（Nix 包会
 安装这些翻译目录）。用 `--features adwaita` 构建可获得 GNOME 原生窗口外观。
 
-任何符合 contract-v1 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
+任何符合 contract-v2 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
 或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
 参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
 
@@ -340,7 +340,7 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
 | Snap/Flatpak 版浏览器看不到设备 | Snap：`udevadm info /dev/hidraw2 \| grep TAGS` 里应有 `snap_firefox_firefox`（Firefox 和 Chromium 均已验证；规则装好前启动的浏览器需重启）。Flatpak：未测试；确认沙箱能看到 `/dev/hidraw*`，例如 `flatpak override --user --device=all <app-id>` |
 | 事务总是失败 | 确认蓝牙已开（系统不会替你打开）；`journalctl -u ucabled -f` |
 | 手机扫不了二维码 | 确认日志里没有 `Bluetooth adapter is powered off`，且手机蓝牙正常 |
-| Firefox 提示 "Multiple devices found"（插着另一个安全密钥） | 触碰那个安全密钥来使用它，或在 ucabled 窗口中点击 **使用手机**。Firefox 本身只能通过触碰来选定认证器，因此通过 ucabled 自己的提示来选择手机 |
+| Firefox 提示 "Multiple devices found"（插着另一个安全密钥） | 扫描二维码用手机，或直接触碰那个安全密钥。Firefox 只能通过触碰选定认证器，所以 ucabled 会立刻显示二维码窗口，并在手机连上之后才把自己标记为已选中——在此之前触碰安全密钥就会赢 |
 
 日志只包含命令字节和长度，绝不含原始 CBOR 载荷。
 
@@ -358,8 +358,11 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
   因为手机的通行密钥提供方没有实现 Ed25519 算法。
 - 没有本地 PIN/UV，也不做证明信任决策——这些全由手机完成。
 - 插着其他认证器（例如一个物理安全密钥）时，Firefox 只允许通过触碰物理
-  密钥来挑选，因此 ucabled 会显示自己的"使用手机"窗口。加 `--no-ui` 则无法
-  参与选择，会自动退让。
+  密钥来挑选。ucabled 因此会立刻显示二维码窗口，并在手机真正连上之后才把
+  自己标记为已选中，于是"扫码"和"触碰实体密钥"是公平竞争。二维码里的
+  request type 只能取自 Firefox 的选择探测（永远是一个 `makeCredential`），
+  所以 getAssertion 也可能在手机上显示成 `mc`。加 `--no-ui` 则无法参与选择，
+  会自动退让。
 
 ## 开发
 
@@ -377,10 +380,13 @@ nix flake check
 指定）。先推送 `master`、`next` 和 `website` 并等待相应检查通过，再推送标签。
 `.github/workflows/release.yml` 会检查标签/manifest/changelog 的一致性以及
 标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
-随后由 `admin/release-debs.sh` 在本地构建、签名并上传 Debian 包：
-版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，为每个
-.deb 生成 GPG 分离签名，并把资产上传到该 release。这一步留在本地执行，
-签名密钥就不会离开维护者的机器。
+随后由 `admin/release-debs.sh` 在本地构建、签名并上传发布产物：
+版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，并用
+`git archive` 从 tag 打包源码 tarball，为每个产物生成 GPG
+分离签名后上传到该 release。上传的 tarball 是稳定且带签名的源码
+下载；GitHub 自动生成的 "Source code" 归档是按需重新生成的，字节
+内容不保证稳定，因此保持不签名。这一步留在本地执行，签名密钥就
+不会离开维护者的机器。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
 （以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加

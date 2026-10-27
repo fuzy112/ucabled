@@ -20,11 +20,13 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 /// Return a human-readable reason when `path` is writable by a principal other
-/// than root/the daemon's account, or `None` when it looks fine.
-pub fn loose_reason(path: &Path) -> Option<String> {
-    let md = fs::metadata(path).ok()?;
-    let tags = udev_tags(md.rdev());
-    evaluate(md.mode(), &tags)
+/// than root/the daemon's account, `Ok(None)` when it looks fine, and an error
+/// when the node cannot be inspected at all (which is *not* the same as
+/// tight: a transient stat failure must not be reported as a security
+/// improvement).
+pub fn loose_reason(path: &Path) -> std::io::Result<Option<String>> {
+    let md = fs::metadata(path)?;
+    Ok(evaluate(md.mode(), &udev_tags(md.rdev())))
 }
 
 /// Tags udev persisted for the device, e.g. `uaccess`, read from
@@ -90,6 +92,14 @@ mod tests {
     fn world_writable_is_reported() {
         let r = evaluate(0o666, &[]).unwrap();
         assert!(r.contains("world-writable"), "{r}");
+    }
+
+    #[test]
+    fn uninspectable_node_is_an_error_not_tight() {
+        let path =
+            std::env::temp_dir().join(format!("ucabled-missing-uhid-{}", std::process::id()));
+        let err = loose_reason(&path).expect_err("a missing node is not a tight one");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

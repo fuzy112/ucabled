@@ -22,8 +22,9 @@ satisfies exactly like the `ucable-agent` process.
   the transaction. When the phone is detected the code dims and the
   caption asks to confirm on the phone. On timeout the dialog announces
   "Code expired" and waits for dismissal, like the reference helper.
-- **Device selection** ("Use security key" vs. "Use phone") as a shell
-  dialog when a physical security key is also connected.
+  When a physical security key is also connected, Firefox's "Multiple
+  devices found" selection is answered by this QR dialog too: touching the
+  key (which cancels the probe) or scanning the code picks one or the other.
 - **Daemon notices** (e.g. refused tunnel redirects) as shell
   notifications.
 - **Translated UI**: shares the GTK helper's gettext catalogs (`po/`,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Minimal ucable-agent helper (Contract v1) built on the foot terminal.
+# Minimal ucable-agent helper (Contract v3) built on the foot terminal.
 # Dependencies: foot, qrencode, bash.
 #
 # Select with:
@@ -11,47 +11,39 @@
 # Contract notes:
 # - The caBLE URL arrives on stdin and is only ever piped into qrencode
 #   inside the terminal; it never touches argv, logs, or the filesystem.
+# - argv is display-only: the RP arrives as `--rp <value>`, and anything
+#   else — in particular a FIDO:/ argument — is ignored. stdin is the only
+#   URL channel.
 # - foot attaches its child to a pty, so the agent's stdin pipe cannot be
 #   read from inside the terminal directly. A 0600 FIFO under
 #   $XDG_RUNTIME_DIR forwards the stream; a FIFO stores nothing on disk,
 #   data only passes through the kernel pipe buffer. The in-terminal script
 #   unlinks the FIFO right after opening it (the open fd stays valid).
-# - Both modes `exec foot`, so the agent's lifecycle SIGKILL lands on foot
-#   itself and the window always disappears with the transaction.
-# - QR mode: any keypress cancels (exit 1); the timeout is enforced by the
-#   keypress read. Select mode: 'y' exits 0, anything else declines.
+# - `exec foot`, so the agent's lifecycle SIGKILL lands on foot itself and
+#   the window always disappears with the transaction.
+# - any keypress cancels (exit 1); the timeout is enforced by the keypress
+#   read.
 
 set -eu
 
-mode=qr
 rp=""
 rtype=""
 timeout_s=300
+also_key=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --select) mode=select ;;
         --timeout) timeout_s=$2; shift ;;
         --request-type) rtype=$2; shift ;;
-        FIDO:/*) ;; # legacy tolerance: the URL belongs on stdin, ignore
-        *) rp=$1 ;;
+        --also-key) also_key=1 ;;
+        --rp) rp=$2; shift ;;
+        --rp=*) rp=${1#--rp=} ;;
+        # argv is display-only; anything unknown (in particular a FIDO:/
+        # URL, which must only ever arrive on stdin) is ignored.
+        *) ;;
     esac
     shift
 done
-
-if [ "$mode" = select ]; then
-    # The single quotes are intentional: $1 is the inner bash's positional
-    # parameter, not this script's.
-    # shellcheck disable=SC2016
-    exec foot --app-id ucabled --title "Passkey" --window-size-chars 60x10 \
-        bash -c '
-            printf "Another authenticator (a security key) was detected.\n\nUse the phone instead? [y/N] "
-            read -rsn1 -t "$1" ans || exit 1
-            printf "\n"
-            case "$ans" in y|Y) exit 0 ;; esac
-            exit 1
-        ' _ "$timeout_s"
-fi
 
 runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
 fifo=$(mktemp -u "$runtime_dir/ucabled-helper.XXXXXX")
@@ -90,6 +82,8 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
             mc) printf "  to store a passkey\n" ;;
             ga) printf "  to authenticate with passkeys\n" ;;
         esac
+        [ "$also_key" = 1 ] &&
+            printf "\n  (or touch the connected security key instead)\n"
         printf "\n  Press any key to cancel.\n"
         (
             while IFS= read -r line <&3; do
@@ -101,4 +95,4 @@ exec foot --app-id ucabled --title "Passkey" --window-size-chars 76x34 \
         read -rsn1 -t "$timeout_s" || :
         kill "$watcher" 2>/dev/null || :
         exit 1
-    ' _ "$fifo" "$rp" "$timeout_s" "$rtype"
+    ' _ "$fifo" "$rp" "$timeout_s" "$rtype" "$also_key"

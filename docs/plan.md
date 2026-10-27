@@ -40,7 +40,7 @@ initiator。不需要浏览器扩展，不需要打补丁，不需要 native mes
 | --- | --- |
 | NFR-1 | 本机零密钥材料；隧道流量端到端加密（AES-256-GCM，密钥由 X25519 ECDH + QR secret 经 HKDF 派生），隧道服务器不可见明文 |
 | NFR-2 | 常驻进程资源占用小（systemd 常驻服务，事件驱动） |
-| NFR-3 | 与真实硬件密钥共存：Firefox 多设备选择时由 agent 弹"Use phone"窗口来选中虚拟设备（见 docs/system-service.md §3.4） |
+| NFR-3 | 与真实硬件密钥共存：Firefox 多设备选择时直接显示 QR 窗口，扫码即选中虚拟设备，触碰实体密钥则仍可选中它（见 docs/system-service.md §3.4） |
 | NFR-4 | NixOS 可打包（flake），附 udev 规则与 uhid 内核模块配置 |
 | NFR-5 | 纯 Rust 实现；BLE 使用 bluer（BlueZ D-Bus） |
 | NFR-6 | 安全默认值：pairing 状态文件权限 0600；日志只记命令字与长度，不落 CBOR payload 原文（含 clientDataHash、rpId 等敏感上下文） |
@@ -176,9 +176,10 @@ AD 为空；明文先补零至 32 字节倍数，末字节记补零数。消息�
 100–300ms）Firefox 会判超时；总操作时限 5 分钟。
 - **多通道**：繁忙时收到 broadcast INIT 回 ERR_CHANNEL_BUSY。
 - **多设备共存**：Firefox 检测到多个认证器时只允许触摸实体密钥来选择；虚拟
-设备没有可触摸的按键，所以 daemon 收到选择探测时让 agent 弹"Use phone"窗口，
-点按即选中虚拟设备（实现见 docs/system-service.md §3.4）。`--no-ui` 或无 agent
-时不弹窗，虚拟设备不参与选择，实体密钥照常可用。
+设备没有可触摸的按键，所以 daemon 收到选择探测时立刻显示 QR 窗口，但不回答
+探测——手机连上（用户扫码）后才回 `Pin*` 把自己标记为选中，此前触摸实体密钥
+则 Firefox 会取消我们的探测，实体密钥胜出（实现见 docs/system-service.md
+§3.4）。`--no-ui` 或无 agent 时不弹窗，虚拟设备不参与选择，实体密钥照常可用。
 - 沙箱 Firefox：Snap 版受 snapd 的 `u2f-devices` 白名单限制（基于 USB VID/PID，
   匹配不到 uhid 设备），由 `dist/90-ucabled.rules` 直接给节点打 `snap_*` 标签解决，
   已在 Firefox 与 Chromium snap 上验证。Flatpak 版 udev 规则无能为力，取决于沙箱
@@ -287,7 +288,7 @@ iOS 不接受 hybrid 上的裸 getInfo；iOS 用户取消时直接断隧道不�
 - [x] QR 浮窗：RP 域名、QR、取消（原生 GTK4 窗口，per-transaction
       子进程 `ucable-agent-helper`；Wayland 无法隐藏窗口，故不用常驻窗口）
 - [x] 取消/超时/断连路径；日志
-- [x] 与真实硬件密钥共存实测（多设备时弹出"Use phone"选择窗口，见 §5.3）
+- [x] 与真实硬件密钥共存实测（多设备时直接显示 QR 窗口，扫码或触摸实体密钥都可选中，见 §5.3）
 - [x] NixOS flake 打包 + systemd 常驻服务（module 见 §8）
 - [x] systemd 常驻实测通过（2026-09-29：登录自启、GUI 弹窗正常）
 
@@ -305,7 +306,8 @@ QR 流程的协议必需项（PSK 绑定解密后的 advert，proximity proof）
 隧道-only 在密码学上不可能。方案已调整为 BLE 扫描（FR-8a，仅接收、
 无需数据通道）+ 隧道传 CTAP；S0 真机验收已通过。
 2. ~~Firefox 多 FIDO 设备枚举行为~~——**已解决**：实测确认 Firefox 只能靠
-   触摸选择，故用"Use phone"窗口选中虚拟设备（见 §5.3）；无需 daemon 开关。
+   触摸选择，故在 blink 阶段直接显示 QR 窗口，手机连上后再回 `Pin*`
+   （见 §5.3）；无需 daemon 开关。
 3. getInfo extensions 静态广告与真机能力偏差——表现为个别 RP 报
 INVALID_OPTION，可接受、可迭代。
 4. 隧道服务器可用性/合规——二维码无法指定自建域名（域名由手机经 EID 选择），

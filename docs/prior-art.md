@@ -42,8 +42,9 @@ Android（含 cancel 流程），RP 覆盖 GitHub / webauthn.io / Google Account
 4. **取消冷却**（`src/engine.rs`,`cooldown_duration` 默认 5s）：取消后对后续
    请求直接回 `CTAP2_ERR_KEEPALIVE_CANCEL`,避免浏览器立刻重试。
 5. **dummy 探测集合**：它拦截 `make.me.blink` / `.dummy` / `dummy`。本项目只
-   识别 `make.me.blink`,且走"Use phone"选择窗口——与实体密钥共存这一点上
-   本项目更完整，不建议退回直接拒绝。
+   识别 `make.me.blink`,并在探测仍在等待时就显示 QR 窗口（手机连上才回
+   `Pin*`,未连上时触摸实体密钥仍可胜出）——与实体密钥共存这一点上本项目
+   更完整，不建议退回直接拒绝。
 
 ### 2.2 观察项（不推荐照抄）
 

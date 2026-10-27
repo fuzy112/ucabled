@@ -2,8 +2,7 @@
 //!
 //! The session agent spawns this program once per prompt (see
 //! `docs/helper-contract.md`). It renders the caBLE QR code in the passkey
-//! style, or asks whether to use the phone instead of an already-connected
-//! security key.
+//! style.
 //!
 //! Build with `--features adwaita` for GNOME-native window chrome.
 
@@ -17,11 +16,6 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, glib};
-
-/// Exit status meaning "use the phone" in select mode.
-const EXIT_USE_PHONE: i32 = 0;
-/// Exit status meaning "decline" / "keep the security key".
-const EXIT_DECLINE: i32 = 1;
 
 /// Corner radius of the card. GTK's own client-side decorations use a radius of
 /// the same order, so both window kinds end up looking alike.
@@ -121,29 +115,46 @@ fn scan_caption(request_type: Option<RequestKind>) -> &'static str {
 
 #[derive(Clone)]
 struct Options {
-    select: bool,
     timeout: Duration,
     rp: Option<String>,
     layer_shell: bool,
-    url: Option<String>,
     request_type: Option<RequestKind>,
+    /// Another authenticator is present; say that touching it also answers
+    /// the prompt.  Only true while the host is still choosing.
+    also_key: bool,
 }
 
-fn parse_args() -> Options {
+/// Outcome of parsing argv: run the UI, or answer the standard informational
+/// options and exit.
+enum ParsedArgs {
+    Run(Options),
+    Help,
+    Version,
+}
+
+fn parse_args<I>(args: I) -> ParsedArgs
+where
+    I: IntoIterator<Item = String>,
+{
     let mut opts = Options {
-        select: false,
         timeout: Duration::from_secs(300),
         rp: None,
         layer_shell: env_truthy("UCABLED_HELPER_LAYER_SHELL"),
-        url: None,
         request_type: None,
+        also_key: false,
     };
 
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--select" => opts.select = true,
+            // Informational options are parsed here rather than in a separate
+            // pre-scan, so a value-taking option consumes them first: an RP
+            // that happens to be `--help` (or any other flag-looking string)
+            // is data, never an option.
+            "-h" | "--help" => return ParsedArgs::Help,
+            "-V" | "--version" => return ParsedArgs::Version,
             "--layer-shell" => opts.layer_shell = true,
+            "--also-key" => opts.also_key = true,
             "--timeout" => {
                 if let Some(secs) = args.next().and_then(|v| v.parse::<u64>().ok()) {
                     opts.timeout = Duration::from_secs(secs);
@@ -154,6 +165,15 @@ fn parse_args() -> Options {
                     opts.request_type = RequestKind::from_wire(&value);
                 }
             }
+            "--rp" => {
+                if let Some(value) = args.next() {
+                    opts.rp = Some(value);
+                }
+            }
+            // Anything else is ignored: argv is display-only by contract.
+            // In particular a FIDO:/ argument is *not* accepted as the URL —
+            // stdin is the only channel for it, so the transaction secret
+            // can never sit in a world-readable /proc/<pid>/cmdline.
             _ => {
                 if let Some(secs) = arg
                     .strip_prefix("--timeout=")
@@ -162,17 +182,14 @@ fn parse_args() -> Options {
                     opts.timeout = Duration::from_secs(secs);
                 } else if let Some(value) = arg.strip_prefix("--request-type=") {
                     opts.request_type = RequestKind::from_wire(value);
-                } else if arg.starts_with("FIDO:/") && opts.url.is_none() {
-                    // Historical tolerance; the contract sends the URL on stdin.
-                    opts.url = Some(arg);
-                } else if !arg.starts_with('-') && opts.rp.is_none() {
-                    opts.rp = Some(arg);
+                } else if let Some(value) = arg.strip_prefix("--rp=") {
+                    opts.rp = Some(value.to_string());
                 }
             }
         }
     }
 
-    opts
+    ParsedArgs::Run(opts)
 }
 
 fn env_truthy(name: &str) -> bool {
@@ -540,6 +557,17 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     caption.set_wrap(true);
     caption.set_justify(gtk::Justification::Center);
     qr_page.append(&caption);
+    // Another authenticator is present, so touching it picks that one
+    // instead.  Hidden once the phone is detected: from then on the host has
+    // committed to this device.
+    let hint = opts.also_key.then(|| {
+        let hint = gtk::Label::new(Some(&tr("Or touch your security key instead")));
+        hint.add_css_class("dim-label");
+        hint.set_wrap(true);
+        hint.set_justify(gtk::Justification::Center);
+        qr_page.append(&hint);
+        hint
+    });
     stack.add_named(&qr_page, Some("qr"));
 
     stack.add_named(
@@ -554,7 +582,7 @@ fn build_qr_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell:
     content.append(&stack);
     set_window_content(window, &content, layer_shell);
 
-    watch_stdin(picture, caption, stack.clone(), opts.url.clone());
+    watch_stdin(picture, caption, hint, stack.clone());
 
     if !opts.timeout.is_zero() {
         let stack = stack.clone();
@@ -579,8 +607,8 @@ fn found_caption() -> String {
 fn watch_stdin(
     picture: gtk::Picture,
     caption: gtk::Label,
+    hint: Option<gtk::Label>,
     stack: gtk::Stack,
-    initial_url: Option<String>,
 ) {
     let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
@@ -598,12 +626,6 @@ fn watch_stdin(
     }
 
     let mut got_url = false;
-    if let Some(url) = initial_url {
-        if let Some(texture) = qr_texture(&url) {
-            picture.set_paintable(Some(&texture));
-        }
-        got_url = true;
-    }
 
     glib::timeout_add_local(Duration::from_millis(50), move || {
         let mut pending = queue.lock().unwrap();
@@ -620,64 +642,20 @@ fn watch_stdin(
             } else if line == "found" {
                 picture.add_css_class(FOUND_CSS_CLASS);
                 caption.set_label(&found_caption());
+                // The host has committed to this device: touching another
+                // authenticator no longer picks it.
+                if let Some(hint) = &hint {
+                    hint.set_visible(false);
+                }
             }
         }
         glib::ControlFlow::Continue
     });
 }
 
-fn build_select_window(window: &gtk::ApplicationWindow, opts: &Options, layer_shell: bool) {
-    window.set_default_size(400, 260);
-    // Closing the window (Esc / the header-bar button) means "declined".
-    window.connect_close_request(|_| {
-        exit(EXIT_DECLINE);
-    });
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    content.set_halign(gtk::Align::Center);
-    content.set_valign(gtk::Align::Center);
-    content.set_margin_top(24);
-    content.set_margin_bottom(24);
-    content.set_margin_start(24);
-    content.set_margin_end(24);
-
-    let title = gtk::Label::new(Some(&tr("Passkey request")));
-    title.add_css_class("title-2");
-    content.append(&title);
-
-    let desc = gtk::Label::new(Some(&tr(
-        "A security key is also connected. Use your phone's passkey instead?",
-    )));
-    desc.add_css_class("dim-label");
-    desc.set_wrap(true);
-    desc.set_justify(gtk::Justification::Center);
-    content.append(&desc);
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    buttons.set_halign(gtk::Align::Center);
-
-    let keep = gtk::Button::with_label(&tr("Keep using the security key"));
-    keep.connect_clicked(|_| exit(EXIT_DECLINE));
-    buttons.append(&keep);
-
-    let use_phone = gtk::Button::with_label(&tr("Use phone"));
-    use_phone.add_css_class("suggested-action");
-    use_phone.connect_clicked(|_| exit(EXIT_USE_PHONE));
-    buttons.append(&use_phone);
-
-    content.append(&buttons);
-    set_window_content(window, &content, layer_shell);
-
-    if !opts.timeout.is_zero() {
-        glib::timeout_add_seconds_local_once(opts.timeout.as_secs() as u32, || {
-            exit(EXIT_DECLINE);
-        });
-    }
-}
-
 /// Esc dismisses the window. It goes through the same path as the header-bar
-/// close button, so the exit code is decided in one place: QR mode ends
-/// normally (0), select mode reports "declined" (1).
+/// close button, so the exit code is decided in one place: the daemon treats
+/// any exit as "the user gave up on the phone".
 fn bind_escape(window: &gtk::ApplicationWindow) {
     let keys = gtk::EventControllerKey::new();
     let win = window.clone();
@@ -694,15 +672,9 @@ fn bind_escape(window: &gtk::ApplicationWindow) {
 
 fn activate(app: &gtk::Application, opts: Options) {
     let window = new_app_window(app);
-    // The title is what the compositor and taskbar show. In QR mode it should
-    // say what the window is asking for; a layer surface draws no title bar,
-    // which is why the card carries its own headline there.
-    let title = if opts.select {
-        "ucabled".to_string()
-    } else {
-        tr("Passkey request")
-    };
-    window.set_title(Some(title.as_str()));
+    // The title is what the compositor and taskbar show.  A layer surface
+    // draws no title bar, which is why the card carries its own headline there.
+    window.set_title(Some(&tr("Passkey request")));
     window.set_resizable(false);
 
     bind_escape(&window);
@@ -712,49 +684,46 @@ fn activate(app: &gtk::Application, opts: Options) {
     // also decides whether the window carries a header bar.
     let layer_shell = maybe_layer_shell(&window, opts.layer_shell);
 
-    if opts.select {
-        build_select_window(&window, &opts, layer_shell);
-    } else {
-        build_qr_window(&window, &opts, layer_shell);
-    }
+    build_qr_window(&window, &opts, layer_shell);
 
     window.present();
 }
 
-fn main() {
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                println!(
-                    "ucable-agent-helper {} — QR/selection window for ucable-agent\n\
-                     \n\
-                     Usage: ucable-agent-helper [RP] [--select] [--layer-shell]\n\
-                     \x20                            [--timeout SECS] [--request-type mc|ga]\n\
-                     \n\
-                     The caBLE URL is read from the first stdin line; a later\n\
-                     \"found\" line blurs the code and asks to confirm on the\n\
-                     phone. In --select mode the exit status answers:\n\
-                     \x20 0 = use the phone, 1 = decline.\n\
-                     \n\
-                     Environment:\n\
-                     \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
-                     \n\
-                     Options:\n\
-                     \x20 -h, --help     print this help\n\
-                     \x20 -V, --version  print the version",
-                    env!("CARGO_PKG_VERSION")
-                );
-                std::process::exit(0);
-            }
-            "-V" | "--version" => {
-                println!("ucable-agent-helper {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
-            }
-            _ => {}
-        }
-    }
+fn print_help() {
+    println!(
+        "ucable-agent-helper {} — QR window for ucable-agent\n\
+         \n\
+         Usage: ucable-agent-helper [--rp RP] [--layer-shell] [--also-key]\n\
+         \x20                            [--timeout SECS] [--request-type mc|ga]\n\
+         \n\
+         The caBLE URL is read from the first stdin line (never\n\
+         argv: the URL is a secret and argv is world-readable);\n\
+         a later \"found\" line blurs the code and asks to confirm\n\
+         on the phone.\n\
+         \n\
+         Environment:\n\
+         \x20 UCABLED_HELPER_LAYER_SHELL  truthy = --layer-shell\n\
+         \n\
+         Options:\n\
+         \x20 --also-key     note that touching another security key works\n\
+         \x20 -h, --help     print this help\n\
+         \x20 -V, --version  print the version",
+        env!("CARGO_PKG_VERSION")
+    );
+}
 
-    let opts = parse_args();
+fn main() {
+    let opts = match parse_args(std::env::args().skip(1)) {
+        ParsedArgs::Help => {
+            print_help();
+            return;
+        }
+        ParsedArgs::Version => {
+            println!("ucable-agent-helper {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        ParsedArgs::Run(opts) => opts,
+    };
     init_i18n();
 
     let app = gtk::Application::builder()
@@ -813,6 +782,69 @@ mod tests {
             scan_caption(RequestKind::from_wire("weird")),
             "Scan with your phone"
         );
+    }
+
+    #[test]
+    fn flag_shaped_rp_values_are_data_not_options() {
+        let layer_shell_default = env_truthy("UCABLED_HELPER_LAYER_SHELL");
+        for rp in [
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+            "--layer-shell",
+            "--also-key",
+        ] {
+            // Both spellings must consume the next token as the RP value.
+            for args in [
+                vec!["--rp".to_string(), rp.to_string()],
+                vec![format!("--rp={rp}")],
+            ] {
+                match parse_args(args) {
+                    ParsedArgs::Run(opts) => {
+                        assert_eq!(opts.rp.as_deref(), Some(rp), "RP {rp} was not kept");
+                        assert_eq!(opts.layer_shell, layer_shell_default);
+                        assert!(!opts.also_key, "RP {rp} flipped --also-key");
+                    }
+                    _ => panic!("RP {rp} was parsed as an informational option"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bare_informational_options_still_win() {
+        assert!(matches!(
+            parse_args(["--help".to_string()]),
+            ParsedArgs::Help
+        ));
+        assert!(matches!(
+            parse_args(["-V".to_string()]),
+            ParsedArgs::Version
+        ));
+        assert!(matches!(
+            parse_args(["--layer-shell".to_string(), "-h".to_string()]),
+            ParsedArgs::Help
+        ));
+    }
+
+    #[test]
+    fn options_after_the_rp_are_parsed() {
+        match parse_args([
+            "--rp".to_string(),
+            "example.com".to_string(),
+            "--layer-shell".to_string(),
+            "--also-key".to_string(),
+            "--timeout=7".to_string(),
+        ]) {
+            ParsedArgs::Run(opts) => {
+                assert_eq!(opts.rp.as_deref(), Some("example.com"));
+                assert!(opts.layer_shell);
+                assert!(opts.also_key);
+                assert_eq!(opts.timeout, Duration::from_secs(7));
+            }
+            _ => panic!("expected run options"),
+        }
     }
 
     #[test]

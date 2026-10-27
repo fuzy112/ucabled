@@ -1,10 +1,10 @@
-# UI helper 进程契约（Contract v1）
+# UI helper 进程契约（Contract v3）
 
 > 状态：已实现。契约以 `src/bin/ucable-agent.rs`（发现与调用方）与
 > `src/bin/ucable-agent-helper.rs`（自带参考实现）的当前行为为准。
 > 本文只描述 agent 与 helper 之间的边界，不约束窗口内部的任何实现细节。
 >
-> 目标：把"QR / 设备选择窗口"从具体 GUI 实现中解耦，使任何语言、任何 GUI
+> 目标：把"QR 窗口"从具体 GUI 实现中解耦，使任何语言、任何 GUI
 > 工具包都能替换 helper，而不必改动 agent。
 
 ## 1. 目的与插件模型
@@ -37,25 +37,24 @@ agent 按以下顺序解析 helper 可执行文件：
 > 裸名字意味着 helper 必须位于会话 agent 的 `PATH` 中；绝对路径则是
 > 自包含部署（Nix、Flatpak、容器）的推荐形态。
 
-找不到 helper 时，agent 不弹窗：QR 模式直接放弃该事务，select 模式按
-"放弃、保留实体密钥"作答，两者各记一条 `tracing::warn!`。
+找不到 helper 时，agent 不弹窗，只记一条 `tracing::warn!`：这次提示就这样
+静默丢失，事务在守护进程/浏览器的时限到达后失败（blink 阶段守护进程回
+`0x2C`，其余情况按各自的超时收场）。
 
 NixOS 模块暴露 `services.ucabled.helper`，其值会作为 `UCABLED_HELPER` 注入每
 用户会话 agent 的环境，从而在系统配置里指定替代 helper。
 
-## 3. 模式与 argv
-
-helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 两种
-模式都会传入。
-
-### 3.1 QR 模式
+## 3. argv
 
 ```
-<helper> [RP] --timeout <SECS> [--request-type <mc|ga>]
+<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>] [--also-key]
 ```
 
-- `RP`：可选的位置参数，依赖方（relying party）域名字符串，**仅用于显示**
-  （参考实现把它画在标题下方）。agent 只在其非空时传入。
+- `--rp <RP>`：可选的**带值选项**，依赖方（relying party）域名字符串，
+  **仅用于显示**（参考实现把它画在标题下方）。agent 只在其非空时传入。
+  RP 来自 CTAP 载荷、内容不受信，因此必须以选项值的形式传递（参考实现
+  也接受 `--rp=<RP>`），而不是位置参数——位置参数会让以 `-` 开头的值
+  被误解析为标志位。
 - `--timeout <SECS>`：十进制秒数，agent 原样透传守护进程给出的超时值。
 - `--request-type <mc|ga>`：本次转发的 CTAP 命令，`mc` 对应
   `authenticatorMakeCredential`（在手机上保存通行密钥），`ga` 对应
@@ -64,29 +63,26 @@ helper 有两种模式，由是否存在 `--select` 区分。`--timeout <SECS>` 
   helper 可据此说明扫码之后会发生什么；不认识这个参数（或只实现早期契约）
   的 helper 忽略即可，此时文案应退化为不涉及操作类型的说法。该值不是秘密，
   可以显示。
+  在 Firefox 的 blink 选择阶段守护进程只能按探测本身填 `mc`，因此真实的
+  getAssertion 也可能以 `mc` 到达；文案不应把 `mc` 当成承诺。
+- `--also-key`：无值选项，表示**还接着另一个认证器**（物理安全密钥）。此时
+  helper 应提示"直接触摸那把密钥也可以"；该提示在手机被发现（stdin 的
+  `found`）之后必须撤掉，因为那时浏览器已经锁定本设备，触摸不再生效。
+  不认识这个参数的 helper 忽略即可，只是少一句提示。
 
-### 3.2 Select 模式
-
-```
-<helper> --select --timeout <SECS>
-```
-
-- 用于"检测到另一把安全密钥，是否改用手机"的选择窗口。
-- 没有 RP 位置参数，也没有 `--request-type`：该窗口与具体命令无关。
-
-> 参考实现的解析器还把 argv 中以 `FIDO:/` 开头的参数当作 QR URL。这只是
-> 历史容错：按契约 URL 必须走 stdin（见 §4），agent 从不在 argv 里传 URL。
+> **argv 整体仅用于显示。** argv 上的所有内容都是非秘密的展示数据
+> （RP、超时、请求类型），任何本地用户都能通过 `/proc/<pid>/cmdline`
+> 读到。caBLE URL **绝不**经 argv 传递（见 §4）：helper 必须忽略 argv
+> 上任何形如 `FIDO:/…` 的参数，也不得提供任何从 argv 接收 URL 的
+> 备用通道。
 
 ## 4. stdin
 
-stdin 的行为按模式不同：
-
-- **QR 模式**：stdin 是管道。**第一行就是 caBLE URL**（`FIDO:/…`），它
-  内含本事务的 16 字节 secret，因此**故意经管道传递**：它**绝不能**出现在
-  argv 或日志里。第一行之后的行是 agent 发来的状态更新，目前只有 `found`
-  一条，含义是"已收到手机发出的 BLE advertisement"；helper 应据此提示
-  "已检测到手机"（参考实现把 QR 模糊掉并改显 "Phone detected"）。
-- **Select 模式**：stdin 接 `/dev/null`，helper 不应读取。
+stdin 是管道。**第一行就是 caBLE URL**（`FIDO:/…`），它内含本事务的 16
+字节 secret，因此**故意经管道传递**：它**绝不能**出现在 argv 或日志里。
+第一行之后的行是 agent 发来的状态更新，目前只有 `found` 一条，含义是
+"已收到手机发出的 BLE advertisement"；helper 应据此提示"已检测到手机"
+（参考实现把 QR 模糊掉并改显 "Phone detected"）。
 
 > 状态行以换行结尾，agent 在 `Prompt` 后立即写入 URL 行；`found` 可能在
 > helper 启动前、窗口存续期间随时到达。
@@ -99,34 +95,25 @@ agent 传递的信息只有退出码（§6）。
 
 ## 6. 退出码
 
-退出码是 helper 回传结果的唯一通道。
+退出码是 helper 回传结果的唯一通道，且只有一种含义：进程退出即表示这次
+UI 交互结束，agent 上报 `TransactionCancelled(tid)`，守护进程据此放弃该
+事务（在 blink 选择阶段则回 `0x2C`，让实体密钥继续参与选择）。
+具体取值不作区分。
 
-| 退出码 | QR 模式 | Select 模式 |
-| --- | --- | --- |
-| `0` | 肯定：该窗口是当前存活的窗口，交互正常结束；agent 随即取消该事务 | 用户选择"用手机" |
-| 非 `0` | 取消 / 关窗 / 超时 / 被信号杀死 | 放弃，保留实体密钥（保留其它密钥） |
-
-> 当前 agent 在 QR 模式**不区分**退出码：只要 helper 退出，就上报
-> `TransactionCancelled(tid)`（参考实现的 QR 路径也只会退出 0）。非 0 的
-> 语义主要是为 select 模式定义、并为将来可能的区分预留。
->
 > 被 agent 主动 `SIGKILL`（事务被取代或已关闭）的 helper，其退出不会被
 > 上报（见 §8）。
 
 ## 7. 超时
 
-`--timeout` 由 **helper 自己执行**，agent 不设看门狗、也不会在超时后杀进程。
+`--timeout` 由 **helper 自己执行**，agent 不设看门狗、也不会在超时后杀
+进程。参考实现把超时渲染为 "Code expired" 并等待用户关窗，并不自动退出。
 
-- Select 模式：到点后立即以非 0（参考实现为 `EXIT_DECLINE = 1`）退出。
-- QR 模式：参考实现把超时渲染为 "Code expired" 并等待用户关窗，并不自动
-  退出；此时退出码仍为 0。
-
-> 新 helper 必须自己保证在时限内退出。QR 模式若不自动退出，至少要在界面上
-> 明示已过期，且不得让过期后的扫码继续被视为有效。
+> 新 helper 必须自己保证在时限内收场。若不自动退出，至少要在界面上明示
+> 已过期，且不得让过期后的扫码继续被视为有效。
 
 ## 8. 生命周期
 
-- QR 与 select 各有一个窗口槽，同一槽**一次只允许一个 helper**。
+- 同一槽**一次只允许一个 helper**。
 - 每次收到提示都**新起**一个 helper（无常驻复用）。
 - 新提示到达、收到 `Close`、或依赖方要求关闭时，agent 对旧 helper 发
   `SIGKILL` 并**回收**它：进程由其窗口任务 `wait()` 收尸，被杀的 helper
@@ -136,30 +123,39 @@ agent 传递的信息只有退出码（§6）。
 
 ## 9. 版本
 
-本文件描述 **Contract v1**。
+本文件描述 **Contract v3**。与 v2 的差异：
+
+- 删除了 select 模式（`--select`、argv 上的选择窗口、退出码 0 = 用手机）。
+  Firefox 的多设备选择现在由**同一个 QR 窗口**完成：扫码选中手机，触摸
+  实体密钥则由浏览器取消 blink。`--select` 会被忽略。
+
+与 v1 的差异（历史）：
+
+- RP 由位置参数改为带值选项 `--rp <RP>`（v1 的 `[RP]` 会让以 `-` 开头
+  的 RP 被当作标志位解析）；
+- 删除了 v1 参考实现把 argv 上的 `FIDO:/…` 当作 URL 的历史容错：stdin
+  现在是 URL 的唯一通道，helper 必须忽略 argv 上的 `FIDO:/` 参数。
 
 > 建议后续在 argv 上增加 `--protocol-version <N>`（或等价的
 > `--contract-version`），让 agent 在启动前声明契约版本，helper 可就地
 > 拒绝不理解的版本而不是静默错行为。当前版本未实现该标志；在它落地前，
-> 双方只能按 v1 假定兼容。
+> 双方只能按 v3 假定兼容。
 
 ## 10. 实现一个新 helper 的清单
 
-1. 接受 `<helper> [RP] --timeout <SECS>`（QR）与
-   `<helper> --select --timeout <SECS>`（选择）两种调用。
-2. QR 模式下从 stdin 第一行读 URL；**不要**把 URL 写进 argv、日志、临时
-   文件或任何持久位置。
-3. QR 模式继续消费 stdin 后续行，识别 `found` 并给出"检测到手机"的反馈。
-4. QR 模式让用户能取消（关窗 / Esc / 按钮），并自行在 `--timeout` 后收场。
-5. Select 模式不读 stdin，提供"用手机"与"保留安全密钥"两条路径。
-6. 用退出码回传结果：select 模式 0 = 用手机，非 0 = 放弃；QR 模式正常
-   结束用 0。
-7. 假定同一槽内旧进程随时可能被 `SIGKILL`，不做跨进程的状态持久化。
-8. 把 stdout / stderr 当作可丢弃的诊断，不依赖 agent 读取。
+1. 接受 `<helper> [--rp <RP>] --timeout <SECS> [--request-type <mc|ga>]
+   [--also-key]`；argv 仅用于显示，忽略一切不认识的参数（包括任何
+   `FIDO:/…`）。
+2. 从 stdin 第一行读 URL；**不要**把 URL 写进 argv、日志、临时
+   文件或任何持久位置，也不要接受 argv 上的 URL。
+3. 继续消费 stdin 后续行，识别 `found` 并给出"检测到手机"的反馈。
+4. 让用户能取消（关窗 / Esc / 按钮），并自行在 `--timeout` 后收场。
+5. 假定同一槽内旧进程随时可能被 `SIGKILL`，不做跨进程的状态持久化。
+6. 把 stdout / stderr 当作可丢弃的诊断，不依赖 agent 读取。
 
 ## 11. 社区/示例实现
 
 - `contrib/ucable-agent-helper-foot`：极简 shell 版，用 foot 终端 +
-  qrencode 显示 QR（ANSI 半方块），按键取消，select 模式按 y 选择手机。
-  依赖仅 foot、qrencode、bash；agent 的 stdin 经 0600 FIFO 转发进终端
-  （foot 子进程拿的是 pty，读不到 agent 管道；FIFO 只过内核缓冲不落盘）。
+  qrencode 显示 QR（ANSI 半方块），按键取消。依赖仅 foot、qrencode、
+  bash；agent 的 stdin 经 0600 FIFO 转发进终端（foot 子进程拿的是 pty，
+  读不到 agent 管道；FIFO 只过内核缓冲不落盘）。

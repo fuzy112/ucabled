@@ -1,4 +1,6 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# The re-exec wrapper below is POSIX; the body it runs is bash.
+# shellcheck shell=bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Install ucabled on a non-NixOS systemd distribution.
@@ -14,8 +16,36 @@
 # The installation prefix defaults to /usr/local and can be changed with
 # --prefix or the PREFIX environment variable.  The system paths below have
 # sane defaults and can be overridden for distributions that differ.
+#
+# The shebang is /bin/sh, not `#!/usr/bin/env bash`: this script runs as root,
+# and an `env` shebang resolves the interpreter through the *caller's* PATH,
+# so a `bash` earlier in that PATH would execute instead of this script and
+# would inherit root.  `sh` is resolved by the kernel as an absolute path.
+# The body needs bash, so the POSIX wrapper below re-executes it with the bash
+# found through the pinned PATH.
+
+if [ -z "${UCABLED_INSTALL_REEXEC:-}" ]; then
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    export PATH
+    UCABLED_INSTALL_REEXEC=1
+    export UCABLED_INSTALL_REEXEC
+    if ! command -v bash >/dev/null 2>&1; then
+        if [ -e /etc/NIXOS ] || [ -e /run/current-system ]; then
+            echo "install.sh: NixOS detected; use nixosModules.ucabled instead of this script" >&2
+            exit 1
+        fi
+        echo "install.sh: bash not found in the pinned PATH" >&2
+        exit 1
+    fi
+    exec bash "$0" "$@"
+fi
 
 set -euo pipefail
+
+# The script runs as root, so never trust the caller's PATH: everything
+# below resolves through this pinned list, and nothing else.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 PREFIX="${PREFIX:-/usr/local}"
 
@@ -33,6 +63,26 @@ UNINSTALL=0
 die() {
     printf 'install.sh: %s\n' "$*" >&2
     exit 1
+}
+
+# A resolved tool path is baked into files root executes later (the udev
+# rule, the service account's shell), so a poisoned PATH must not be able
+# to smuggle in an attacker-controlled binary: require an absolute,
+# root-owned path that neither group nor others can write.  Symlinks are
+# resolved first, because `stat` without -L reports the link itself (mode
+# 0777) and the caller has to bake in the target that was checked, not the
+# link.  Prints the resolved path on success.
+check_resolved() {
+    local what="$1" path="$2" mode
+    [[ "$path" = /* ]] || die "$what did not resolve to an absolute path: $path"
+    path="$(readlink -f -- "$path")" || die "$what cannot be resolved: $path"
+    [[ -f "$path" ]] || die "$what not found at $path"
+    [[ "$(stat -c %u "$path")" = 0 ]] || die "$what ($path) is not owned by root"
+    mode="$(stat -c %a "$path")"
+    # `stat %a` prints octal digits without a prefix; the leading 0 makes the
+    # arithmetic parse them as octal instead of decimal (0755 must pass).
+    (( (0$mode & 022) == 0 )) || die "$what ($path) is group- or world-writable"
+    printf '%s\n' "$path"
 }
 
 usage() {
@@ -74,9 +124,6 @@ if [[ -e /etc/NIXOS || -e /run/current-system ]]; then
 fi
 command -v systemctl >/dev/null || die "systemd is required"
 command -v udevadm >/dev/null || die "udev is required"
-
-nologin="$(command -v nologin || true)"
-[[ -n "$nologin" ]] || nologin=/usr/sbin/nologin
 
 udev_reload() {
     udevadm control --reload-rules
@@ -156,10 +203,10 @@ The ucabled user/group and the /dev/uhid ACL were kept.  To remove them:
 The ACL also disappears on the next reboot, or after
 'udevadm trigger /sys/class/misc/uhid' now that the rule is gone.
 
-The long-term caBLE identity key was kept at
-/var/lib/ucabled/identity.key.  Delete it (and the directory) only if
-you will not reinstall: phones will no longer recognise this machine
-once a different key is generated.
+The state directory was kept at /var/lib/ucabled.  QR transactions use a
+fresh per-transaction key, so nothing there is needed to scan codes; the
+long-term identity key is only groundwork for a future caBLE linking
+feature.  Delete the directory if you will not reinstall.
 EOF
     exit 0
 fi
@@ -173,8 +220,17 @@ if ((${#missing[@]})); then
 build them first as your normal user with:  cargo build --release"
 fi
 
+nologin="$(command -v nologin || true)"
+[[ -n "$nologin" ]] || nologin=/usr/sbin/nologin
+# A missing nologin is fine (the account simply cannot log in either way),
+# but an existing one must be a system binary; use the resolved target.
+if [[ -e "$nologin" ]]; then
+    nologin="$(check_resolved nologin "$nologin")"
+fi
+
 SETFACL="$(command -v setfacl)" ||
     die 'setfacl not found; install the "acl" package (the udev rule needs it)'
+SETFACL="$(check_resolved setfacl "$SETFACL")"
 
 # Dedicated service account; the human user only needs the hidraw node.
 getent group ucabled >/dev/null || groupadd --system ucabled

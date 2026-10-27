@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Persistent desktop identity key for caBLE transactions.
+//! Persistent desktop identity key, groundwork for caBLE linking.
 //!
-//! Chromium keeps a long-term identity key per device; ucabled originally
-//! generated a fresh random key for every QR transaction. Using a persistent
-//! identity aligns with Chromium and is a prerequisite for caBLE linking
-//! (see `docs/linking.md`): the phone's linking signature is verified with
-//! `ECDH(identity, phone public key)`, and a linked phone may later recognise
-//! the desktop by this key.
+//! In Chromium, the persistent sync-derived identity (`IdentityKey` from the
+//! caBLE root secret) exists only in the *phone-side* authenticator code; the
+//! desktop QR flow uses a fresh random P-256 identity per transaction
+//! (`crypto::RandBytes` per WebAuthn ceremony, so no two QR codes can be
+//! linked to one desktop). ucabled matches that: QR transactions generate
+//! their own ephemeral identity (see [`crate::relay`]) and never use this
+//! key. The persistent key is kept for caBLE linking (`docs/linking.md`):
+//! the phone's linking signature is verified with `ECDH(identity, phone
+//! public key)`, and a linked phone may later recognise the desktop by this
+//! key.
 
 use std::fs;
 use std::io;
@@ -39,6 +43,12 @@ pub fn state_dir() -> PathBuf {
 /// random one when none exists. A corrupt or unreadable existing file is an
 /// error, not a silent regeneration: losing the key is visible, accidentally
 /// replacing it must not be.
+///
+/// Two concurrent callers that both see the file missing would each generate
+/// a key and the last rename would win, leaving one caller with an in-memory
+/// key that differs from the disk.  The daemon prevents that with the
+/// exclusive lock on this directory (see [`crate::instance`]), which it takes
+/// before calling this function; the bus name is only a UI-ownership marker.
 pub fn load_or_create(dir: &Path) -> Result<SecretKey> {
     let path = dir.join(IDENTITY_FILE_NAME);
     match fs::read(&path) {

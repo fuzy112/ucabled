@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use p256::SecretKey;
+use p256::elliptic_curve::Generate;
 use p256::elliptic_curve::sec1::ToSec1Point;
 use std::time::Duration;
 use zeroize::Zeroize;
@@ -39,16 +40,39 @@ fn ble_channel_enabled() -> bool {
 /// `on_qr` is invoked with the QR contents once; the caller decides how to
 /// present it (terminal, GTK window, ...). `on_advert` is invoked when the
 /// phone's BLE advert has been received, so the UI can stop waiting.
-///
-/// `identity` is the daemon's persistent identity key (see
-/// [`crate::identity`]); its public key goes into the QR code.
 pub async fn run_qr_transaction(
     ctap_command: &[u8],
     request_type: RequestType,
-    identity: &SecretKey,
     on_qr: impl FnOnce(&str),
     on_advert: impl FnOnce(),
 ) -> Result<Vec<u8>, TransactionError> {
+    let mut session = open_qr_session(ctap_command.len(), request_type, on_qr, on_advert).await?;
+    let reply = session.ctap(ctap_command).await?;
+    session.shutdown().await;
+    Ok(reply)
+}
+
+/// Everything up to (and including) the handshake: show the QR code, wait
+/// for the phone's advert, and open the caBLE session, without sending a
+/// CTAP command yet.
+///
+/// `command_len` is the size of the first CTAP command the caller will send;
+/// follow-up commands are smaller, so this is the largest message the
+/// session may have to carry and what the L2CAP MTU check uses.
+///
+/// The caller sends commands through [`crate::session::DesktopSession`] and
+/// keeps the session open when the phone reports more than one credential.
+pub async fn open_qr_session(
+    command_len: usize,
+    request_type: RequestType,
+    on_qr: impl FnOnce(&str),
+    on_advert: impl FnOnce(),
+) -> Result<crate::session::DesktopSession, TransactionError> {
+    // Fresh identity per transaction, like Chromium (a fresh random QR key
+    // per WebAuthn ceremony, `crypto::RandBytes` in ConfigureDiscoveries):
+    // a persistent identity would make every QR code from this desktop
+    // linkable by whoever sees them and by the phone.
+    let identity = SecretKey::generate();
     let compressed = identity.public_key().to_sec1_point(true);
     let compressed: &[u8; 33] = compressed.as_bytes().try_into().unwrap();
 
@@ -93,13 +117,12 @@ pub async fn run_qr_transaction(
         tunnel_base: None,
         channel,
         qr_secret,
-        identity: identity.clone(),
+        identity,
         plaintext_eid: advert.plaintext_eid,
         handshake_timeout: crate::session::HANDSHAKE_RESPONSE_TIMEOUT,
         connect_timeout: crate::tunnel::DIAL_TIMEOUT,
     };
-    let result = flow.run(ctap_command).await?;
-    Ok(result.ctap_reply)
+    flow.open(command_len).await
 }
 
 /// Pick the data transfer channel from the advert: the L2CAP CoC if the phone

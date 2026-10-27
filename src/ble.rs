@@ -145,7 +145,15 @@ async fn scan(
             tracing::debug!(%address, len = payload.len(), "saw fff9 service data");
             // Only the first 20 bytes are the encrypted EID; any remainder is
             // the advertisement suffix (CTAP 2.3, PXP §5.4.1; e.g. the L2CAP
-            // PSM).
+            // PSM).  The EID's HMAC covers only those 20 bytes, so the
+            // suffix — including the PSM that selects the data channel — is
+            // not authenticated by it: anyone in BLE range can rebroadcast the
+            // phone's EID with a suffix of their own, and the first advert
+            // that trial-decrypts wins this loop.  That lets an attacker
+            // steer the daemon onto their L2CAP socket (or none) for a
+            // denial of service; the Noise handshake still authenticates the
+            // phone, so no traffic leaks.  See the handshake fallback in
+            // `session.rs`.
             if let Some(plaintext) = eid::decrypt(&payload[..eid::ADVERT_SIZE], eid_key) {
                 let psm = crate::advert::parse_psm(&payload[eid::ADVERT_SIZE..]);
                 let address_type = device

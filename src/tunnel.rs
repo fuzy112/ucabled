@@ -103,16 +103,19 @@ fn root_store() -> rustls::RootCertStore {
 /// The tunnel server is not trusted, so redirects must stay on the authority
 /// the EID selected: an unchecked `Location` would let the server steer the
 /// daemon's outbound connections at arbitrary hosts (blind SSRF) or downgrade
-/// the transport to cleartext `ws://`.  Plain `ws` is accepted for the
-/// initial URL only so the local test relay keeps working; the production
-/// URLs built by [`new_tunnel_url`]/[`connect_url`] are always `wss`.
-fn tunnel_authority(url: &str) -> Result<(String, String, u16)> {
+/// the transport to cleartext `ws://`.  Plain `ws` is refused unless
+/// `allow_cleartext`, which only the in-process test relay and the
+/// development tools (mock-phone, ucabled-spike) may pass; the production
+/// URLs built by [`new_tunnel_url`]/[`connect_url`] are always `wss`, and a
+/// cleartext override must never be wired to configuration or phone-supplied
+/// data.
+fn tunnel_authority(url: &str, allow_cleartext: bool) -> Result<(String, String, u16)> {
     let uri = url
         .parse::<Uri>()
         .with_context(|| format!("invalid tunnel url {url}"))?;
     let scheme = uri.scheme_str().unwrap_or_default();
-    if scheme != "wss" && scheme != "ws" {
-        bail!("tunnel url must use ws(s)://");
+    if scheme != "wss" && !(allow_cleartext && scheme == "ws") {
+        bail!("tunnel url must use wss://");
     }
     let authority = uri
         .authority()
@@ -146,8 +149,9 @@ impl std::error::Error for RedirectRefused {}
 fn validate_redirect(
     expected: &(String, String, u16),
     location: &str,
+    allow_cleartext: bool,
 ) -> std::result::Result<String, RedirectRefused> {
-    let got = tunnel_authority(location)
+    let got = tunnel_authority(location, allow_cleartext)
         .map_err(|e| RedirectRefused(format!("unparsable Location {location:?}: {e:#}")))?;
     if &got != expected {
         return Err(RedirectRefused(format!(
@@ -214,12 +218,27 @@ fn check_subprotocol(headers: &HeaderMap) -> Result<()> {
     }
 }
 
+/// Dial a tunnel URL.  Cleartext `ws://` is refused: TLS with certificate
+/// verification is part of the transport's defense in depth and a
+/// production dial path must never drop it silently.
 pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
+    dial_inner(url, false).await
+}
+
+/// Like [`dial`], but permits cleartext `ws://` URLs.  For the in-process
+/// test relay and the development tools (mock-phone, ucabled-spike) only;
+/// a URL derived from phone- or network-supplied data must never reach
+/// this function.
+pub async fn dial_cleartext(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
+    dial_inner(url, true).await
+}
+
+async fn dial_inner(url: &str, allow_cleartext: bool) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
     ensure_crypto_provider();
     // The spec requires following HTTP redirects; tokio-tungstenite does not,
     // so do it manually. The redirect target must stay on the EID-selected
     // authority; the tunnel server is not trusted to pick our connections.
-    let expected = tunnel_authority(url)?;
+    let expected = tunnel_authority(url, allow_cleartext)?;
     let mut url = url.to_string();
     for _ in 0..MAX_REDIRECTS {
         let mut request = url
@@ -253,7 +272,7 @@ pub async fn dial(url: &str) -> Result<(Ws, Response<Option<Vec<u8>>>)> {
                     .map(|s| s.to_string());
                 match (status.as_u16(), location) {
                     (code, Some(loc)) if REDIRECT_STATUSES.contains(&code) => {
-                        match validate_redirect(&expected, &loc) {
+                        match validate_redirect(&expected, &loc, allow_cleartext) {
                             Ok(next) => {
                                 tracing::info!(%status, redirect = %next, "following tunnel redirect");
                                 url = next;
@@ -344,40 +363,53 @@ mod tests {
     }
 
     #[test]
+    fn cleartext_initial_url_requires_opt_in() {
+        // Production callers use `dial`, which must refuse ws:// even for a
+        // loopback address; only the explicit cleartext entry point accepts
+        // it (the local test relay and the development tools).
+        assert!(tunnel_authority("ws://127.0.0.1:8080/cable/new/00", false).is_err());
+        assert!(tunnel_authority("ws://127.0.0.1:8080/cable/new/00", true).is_ok());
+        assert!(tunnel_authority("wss://cable.ua5v.com/cable/new/00", false).is_ok());
+    }
+
+    #[test]
     fn redirect_to_same_authority_is_followed() {
-        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        let expected =
+            tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00", false).unwrap();
         let loc = "wss://cable.ua5v.com/cable/connect/010203/ff";
-        assert_eq!(validate_redirect(&expected, loc).unwrap(), loc);
+        assert_eq!(validate_redirect(&expected, loc, false).unwrap(), loc);
         // Explicit default port and host case differences still match.
-        assert!(validate_redirect(&expected, "wss://CABLE.ua5v.com:443/x").is_ok());
+        assert!(validate_redirect(&expected, "wss://CABLE.ua5v.com:443/x", false).is_ok());
         // The local test relay dials plain ws; same-scheme same-host is fine.
-        let local = tunnel_authority("ws://127.0.0.1:8080/cable/connect/010203/00").unwrap();
-        assert!(validate_redirect(&local, "ws://127.0.0.1:8080/other").is_ok());
-        assert!(validate_redirect(&local, "ws://127.0.0.1:9090/other").is_err());
+        let local = tunnel_authority("ws://127.0.0.1:8080/cable/connect/010203/00", true).unwrap();
+        assert!(validate_redirect(&local, "ws://127.0.0.1:8080/other", true).is_ok());
+        assert!(validate_redirect(&local, "ws://127.0.0.1:9090/other", true).is_err());
     }
 
     #[test]
     fn redirect_to_another_authority_is_rejected() {
-        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        let expected =
+            tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00", false).unwrap();
         for loc in [
             "wss://cable.auth.com/cable/connect/010203/ff",
             "wss://cable.ua5v.com:444/cable/connect/010203/ff",
             "wss://127.0.0.1/internal/admin",
         ] {
-            assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
+            assert!(validate_redirect(&expected, loc, false).is_err(), "{loc}");
         }
     }
 
     #[test]
     fn redirect_downgrade_and_userinfo_are_rejected() {
-        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
+        let expected =
+            tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00", false).unwrap();
         for loc in [
             "ws://cable.ua5v.com/cable/connect/010203/ff",
             "wss://user@cable.ua5v.com/cable/connect/010203/ff",
             "/cable/connect/010203/ff",
             "https://cable.ua5v.com/cable/connect/010203/ff",
         ] {
-            assert!(validate_redirect(&expected, loc).is_err(), "{loc}");
+            assert!(validate_redirect(&expected, loc, false).is_err(), "{loc}");
         }
     }
 
@@ -412,8 +444,9 @@ mod tests {
 
     #[test]
     fn refused_redirect_is_a_typed_error() {
-        let expected = tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00").unwrap();
-        let err = validate_redirect(&expected, "wss://cable.auth.com/x").unwrap_err();
+        let expected =
+            tunnel_authority("wss://cable.ua5v.com/cable/connect/010203/00", false).unwrap();
+        let err = validate_redirect(&expected, "wss://cable.auth.com/x", false).unwrap_err();
         // The daemon detects this through the anyhow chain, so the type
         // must survive the conversion.
         let any = anyhow::Error::new(err);

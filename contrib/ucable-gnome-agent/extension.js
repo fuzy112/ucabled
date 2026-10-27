@@ -36,15 +36,12 @@ const BUS_NAME = 'org.ucabled';
 const MANAGER_PATH = '/org/ucabled/Manager';
 const MANAGER_IFACE = 'org.ucabled.Manager1';
 const AGENT_PATH = '/org/ucabled/GnomeAgent';
+const AGENT_IFACE = 'org.ucabled.Agent1';
 const ERR_NOT_AUTHORIZED = 'org.ucabled.NotAuthorized';
 
 /// Registration is retried on transient failures (daemon not up yet); the
 /// daemon rate-limits one attempt per second per sender, so 2s stays clear.
 const REGISTER_RETRY_MS = 2000;
-
-/// The daemon waits 70s for a SelectionResult; answer "declined" after 60s,
-/// mirroring the reference GTK helper.
-const SELECT_TIMEOUT_SECS = 60;
 
 /// QR quiet zone in modules, matching the GTK helper.
 const QR_QUIET = 4;
@@ -96,9 +93,7 @@ const AGENT_XML = `
       <arg type="s" direction="in" name="rp"/>
       <arg type="t" direction="in" name="timeout_secs"/>
       <arg type="s" direction="in" name="request_type"/>
-    </method>
-    <method name="Select">
-      <arg type="t" direction="in" name="tid"/>
+      <arg type="b" direction="in" name="also_key"/>
     </method>
     <method name="Found">
       <arg type="t" direction="in" name="tid"/>
@@ -198,7 +193,7 @@ function qrSvgBytes(url) {
 /// contract, where a SIGKILLed helper reports nothing).
 const QrDialog = GObject.registerClass(
 class QrDialog extends ModalDialog.ModalDialog {
-    _init({url, rp, requestType, onUserClose}) {
+    _init({url, rp, requestType, alsoKey, onUserClose}) {
         super._init({styleClass: 'prompt-dialog', destroyOnClose: true});
         this._onUserClose = onUserClose;
         this._closedByDaemon = false;
@@ -228,6 +223,19 @@ class QrDialog extends ModalDialog.ModalDialog {
         });
         layout.add_child(this._caption);
 
+        // Another authenticator is present: touching it picks that one
+        // instead.  Hidden once the phone is detected, when the host has
+        // committed to this device.
+        this._hint = null;
+        if (alsoKey) {
+            this._hint = new St.Label({
+                text: _('Or touch your security key instead'),
+                style_class: 'prompt-dialog-description',
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            layout.add_child(this._hint);
+        }
+
         this.contentLayout.add_child(layout);
 
         this.setButtons([{
@@ -251,6 +259,8 @@ class QrDialog extends ModalDialog.ModalDialog {
             this._qrIcon.opacity = 110;
         this._caption.text =
             _('Phone detected.\nConfirm the sign-in on your phone.');
+        if (this._hint)
+            this._hint.hide();
     }
 
     /// Like the reference helper, an expired code is announced but the
@@ -268,64 +278,6 @@ class QrDialog extends ModalDialog.ModalDialog {
     }
 });
 
-/// Device-selection dialog: answer flows back through SelectionResult.
-/// Closing without a button (Escape maps to the decline button, so this is
-/// only a fallback) counts as "declined".
-const SelectDialog = GObject.registerClass(
-class SelectDialog extends ModalDialog.ModalDialog {
-    _init({onAnswer}) {
-        super._init({styleClass: 'prompt-dialog', destroyOnClose: true});
-        this._answered = false;
-        this._onAnswer = onAnswer;
-
-        const layout = new St.BoxLayout({vertical: true});
-        layout.set_style('spacing: 12px;');
-        layout.add_child(new St.Label({
-            text: _('Passkey request'),
-            style_class: 'prompt-dialog-headline',
-            x_align: Clutter.ActorAlign.CENTER,
-        }));
-        layout.add_child(new St.Label({
-            text: _('A security key is also connected.\n' +
-                'Use your phone’s passkey instead?'),
-            style_class: 'prompt-dialog-description',
-            x_align: Clutter.ActorAlign.CENTER,
-        }));
-        this.contentLayout.add_child(layout);
-
-        this.setButtons([
-            {
-                label: _('Use security key'),
-                action: () => this.answer(false),
-                key: Clutter.KEY_Escape,
-                default: true,
-            },
-            {
-                label: _('Use phone'),
-                action: () => this.answer(true),
-            },
-        ]);
-
-        this.connect('closed', () => {
-            if (!this._answered)
-                this.answer(false);
-        });
-    }
-
-    answer(usePhone) {
-        if (this._answered)
-            return;
-        this._answered = true;
-        this._onAnswer?.(usePhone);
-        this.close(global.get_current_time());
-    }
-
-    closeFromDaemon() {
-        this._answered = true;
-        this.close(global.get_current_time());
-    }
-});
-
 export default class UcabledAgentExtension extends Extension {
     enable() {
         // Bind the "ucable" domain (shared with the GTK helper) to this
@@ -333,7 +285,7 @@ export default class UcabledAgentExtension extends Extension {
         // runtime, after this point.
         this.initTranslations();
 
-        this._dialogs = new Map(); // tid -> QrDialog | SelectDialog
+        this._dialogs = new Map(); // tid -> QrDialog
         this._timers = new Set(); // GLib source ids
         this._registerTimer = null;
         this._registered = false;
@@ -341,9 +293,8 @@ export default class UcabledAgentExtension extends Extension {
         // A plain facade object, so wrapJSObject does not have to walk the
         // extension class prototype.
         this._agentFacade = {
-            Prompt: (tid, url, rp, timeoutSecs, requestType) =>
-                this._prompt(tid, url, rp, timeoutSecs, requestType),
-            Select: tid => this._select(tid),
+            Prompt: (tid, url, rp, timeoutSecs, requestType, alsoKey) =>
+                this._prompt(tid, url, rp, timeoutSecs, requestType, alsoKey),
             Found: tid => this._found(tid),
             Close: tid => this._close(tid),
             Notify: (summary, body) => Main.notify(summary, body),
@@ -352,11 +303,51 @@ export default class UcabledAgentExtension extends Extension {
             AGENT_XML, this._agentFacade);
         this._dbusObject.export(Gio.DBus.system, AGENT_PATH);
 
+        // Defence in depth: the shipped bus policy already denies
+        // unprivileged sends to our unique name, so only the daemon can reach
+        // this object.  Filtering the method calls by sender as well keeps a
+        // missing or relaxed org.ucabled.conf from handing the daemon's
+        // authority to another local process.
+        this._daemonOwner = null;
+        this._agentFilter = null;
+        if (typeof Gio.DBus.system.add_filter === 'function') {
+            this._agentFilter = Gio.DBus.system.add_filter(
+                (_conn, message, incoming) => {
+                    if (!incoming ||
+                        message.get_message_type() !==
+                            Gio.DBusMessageType.METHOD_CALL ||
+                        message.get_path() !== AGENT_PATH)
+                        return message;
+                    // Fail closed: the filter is the only check when the bus
+                    // policy is missing or relaxed, so a call is accepted
+                    // only when it provably comes from the current daemon.
+                    // Until watch_name has resolved the owner (and after the
+                    // name disappears) every call is refused.
+                    const sender = message.get_sender();
+                    if (!this._daemonOwner ||
+                        message.get_interface() !== AGENT_IFACE ||
+                        sender !== this._daemonOwner) {
+                        console.warn(
+                            `ucabled: ignoring agent call from ${sender}`);
+                        return null;
+                    }
+                    return message;
+                });
+        } else {
+            console.warn(
+                'ucabled: Gio.DBus.system.add_filter is unavailable; ' +
+                'only the shipped bus policy guards the agent object');
+        }
+
         // Register now, and again whenever the daemon's name reappears.
         this._nameWatch = Gio.DBus.system.watch_name(
             BUS_NAME, Gio.BusNameWatcherFlags.NONE,
-            () => this._register(),
+            (_conn, _name, owner) => {
+                this._daemonOwner = owner;
+                this._register();
+            },
             () => {
+                this._daemonOwner = null;
                 this._registered = false;
             });
         this._register();
@@ -374,6 +365,10 @@ export default class UcabledAgentExtension extends Extension {
         if (this._nameWatch) {
             Gio.DBus.system.unwatch_name(this._nameWatch);
             this._nameWatch = null;
+        }
+        if (this._agentFilter && typeof Gio.DBus.system.remove_filter === 'function') {
+            Gio.DBus.system.remove_filter(this._agentFilter);
+            this._agentFilter = null;
         }
         for (const id of this._timers)
             GLib.source_remove(id);
@@ -425,7 +420,7 @@ export default class UcabledAgentExtension extends Extension {
     }
 
     /// Fire-and-forget call on the daemon's Manager1 (TransactionCancelled,
-    /// SelectionResult, UnregisterAgent); failures are only logged.
+    /// UnregisterAgent); failures are only logged.
     _callManager(method, params) {
         Gio.DBus.system.call(
             BUS_NAME, MANAGER_PATH, MANAGER_IFACE, method, params,
@@ -465,7 +460,7 @@ export default class UcabledAgentExtension extends Extension {
         }
     }
 
-    _prompt(tid, url, rp, timeoutSecs, requestType) {
+    _prompt(tid, url, rp, timeoutSecs, requestType, alsoKey) {
         this._closeAll();
 
         let dialog;
@@ -474,6 +469,7 @@ export default class UcabledAgentExtension extends Extension {
                 url,
                 rp,
                 requestType,
+                alsoKey,
                 onUserClose: () => this._cancelTransaction(tid),
             });
         } catch (e) {
@@ -496,35 +492,6 @@ export default class UcabledAgentExtension extends Extension {
                 });
             this._timers.add(id);
         }
-    }
-
-    _select(tid) {
-        this._closeAll();
-
-        const dialog = new SelectDialog({
-            onAnswer: usePhone => {
-                this._dialogs.delete(tid);
-                this._callManager('SelectionResult',
-                    new GLib.Variant('(tb)', [tid, usePhone]));
-            },
-        });
-
-        // If the dialog cannot open at all, decline immediately rather than
-        // let the daemon wait out its 70s selection deadline.
-        this._open(tid, dialog, () =>
-            this._callManager('SelectionResult',
-                new GLib.Variant('(tb)', [tid, false])));
-        if (!this._dialogs.has(tid))
-            return;
-
-        const id = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT, SELECT_TIMEOUT_SECS, () => {
-                this._timers.delete(id);
-                if (this._dialogs.get(tid) === dialog)
-                    dialog.answer(false);
-                return GLib.SOURCE_REMOVE;
-            });
-        this._timers.add(id);
     }
 
     _found(tid) {

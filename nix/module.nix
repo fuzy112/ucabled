@@ -23,8 +23,8 @@ let
       toString cfg.helper;
 
   # The agent passes arguments of its own (the relying party, --timeout and
-  # --select), so extra helper arguments need a launcher in front of it. The
-  # agent's arguments come last and win where the two overlap.
+  # --request-type), so extra helper arguments need a launcher in front of it.
+  # The agent's arguments come last and win where the two overlap.
   helperLauncher = pkgs.writeShellScript "ucable-agent-helper-launcher" ''
     exec ${helperExe} ${lib.escapeShellArgs cfg.helperExtraArgs} "$@"
   '';
@@ -101,7 +101,7 @@ in
       description = ''
         Extra arguments to start the UI helper with. They are helper-specific:
         the agent adds its own arguments on top (the relying party,
-        `--timeout`, `--select`), which win where the two overlap.
+        `--timeout`, `--request-type`), which win where the two overlap.
 
         Use this for flags the agent does not know about — for example
         `--layer-shell`, which makes the GTK4 helper a wlr-layer-shell overlay
@@ -159,8 +159,11 @@ in
         # keeps this watchdog fed at half the interval.
         Type = "notify";
         WatchdogSec = "30s";
-        # Persistent caBLE identity key lives in /var/lib/ucabled.
+        # Persistent caBLE identity key lives in /var/lib/ucabled.  The unit
+        # directory is tightened from systemd's 0755 default; the key file
+        # itself is written 0600.
         StateDirectory = "ucabled";
+        StateDirectoryMode = "0700";
         # The daemon only needs /dev/uhid plus the system bus and the network.
         NoNewPrivileges = true;
         PrivateTmp = true;

@@ -65,6 +65,14 @@ const CAP_CBOR: u8 = 0x04;
 /// single truncated frame would wedge the busy slot (and with it all
 /// WebAuthn traffic) until someone happened to send a CANCEL.
 pub const ASSEMBLY_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Absolute lifetime of one multi-frame assembly.
+///
+/// The idle timeout alone only bounds *silence*: a sender that keeps one
+/// frame per interval alive can hold the single global busy slot (and with
+/// it every other local WebAuthn client) for as long as it likes.  A
+/// maximal 7609-byte message needs well under a second on any real host, so
+/// 10s is generous while still bounding the slot.
+pub const ASSEMBLY_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, PartialEq)]
 pub enum CtapAction {
@@ -72,7 +80,7 @@ pub enum CtapAction {
     /// to be relayed to the phone; response comes back asynchronously.
     Relay(Vec<u8>),
     /// The host cancelled the pending relay on this channel.
-    CancelRelay,
+    CancelRelay { cid: u32 },
 }
 
 struct Assembly {
@@ -81,6 +89,7 @@ struct Assembly {
     buf: Vec<u8>,
     next_seq: u8,
     last_frame: Instant,
+    started: Instant,
 }
 
 pub struct Transport {
@@ -123,6 +132,12 @@ impl Transport {
             return (vec![], None);
         }
         let cid = u32::from_be_bytes(report[0..CID_LEN].try_into().unwrap());
+        // CID 0 is reserved (like the broadcast CID) and must never name a
+        // channel; answering reports on it would let a host believe it owns
+        // one.
+        if cid == 0 {
+            return (error_response(cid, ERR_INVALID_CHANNEL), None);
+        }
         let b4 = report[INIT_CMD_OFFSET];
 
         if b4 & INIT_FLAG != 0 {
@@ -138,16 +153,22 @@ impl Transport {
                 self.dispatch(cid, cmd, &payload[..len])
             } else {
                 // Start assembly.
-                if self.busy.is_some() && self.busy != Some(cid) {
+                // `busy` is either an in-progress assembly for this channel
+                // (a restarted message replaces it) or a relayed operation
+                // whose slot belongs to the daemon.  The latter must not be
+                // overwritten by a new multi-frame message.
+                if self.busy.is_some() && (self.busy != Some(cid) || self.assembly.is_none()) {
                     return (error_response(cid, ERR_CHANNEL_BUSY), None);
                 }
                 self.busy = Some(cid);
+                let now = Instant::now();
                 self.assembly = Some(Assembly {
                     cmd,
                     total_len: len,
                     buf: payload.to_vec(),
                     next_seq: 0,
-                    last_frame: Instant::now(),
+                    last_frame: now,
+                    started: now,
                 });
                 (vec![], None)
             }
@@ -155,7 +176,9 @@ impl Transport {
             // CONT frame
             let seq = b4;
             let Some(assembly) = &mut self.assembly else {
-                return (error_response(cid, ERR_INVALID_CMD), None);
+                // U2FHID §4.3.2: a continuation frame with no message in
+                // progress is a sequence error, not an unknown command.
+                return (error_response(cid, ERR_INVALID_SEQ), None);
             };
             if self.busy != Some(cid) {
                 return (error_response(cid, ERR_INVALID_CHANNEL), None);
@@ -193,6 +216,22 @@ impl Transport {
                 if payload.len() != INIT_NONCE_LEN {
                     return (error_response(cid, ERR_INVALID_LEN), None);
                 }
+                // INIT on an allocated channel is a resynchronization: per
+                // U2FHID §4.4.1 (and Chromium) it aborts whatever is in
+                // progress on that channel, so a wedged or cancelled
+                // operation must not survive it.  Report the cancel even
+                // when no command is in flight: the daemon may hold an idle
+                // multi-credential session on this channel, which would
+                // otherwise keep the phone and its tunnel alive until the
+                // session idle timeout.
+                let mut action = None;
+                if cid != BROADCAST_CID {
+                    if self.busy == Some(cid) {
+                        self.busy = None;
+                        self.assembly = None;
+                    }
+                    action = Some(CtapAction::CancelRelay { cid });
+                }
                 let new_cid = if cid == BROADCAST_CID {
                     self.alloc_cid()
                 } else {
@@ -206,11 +245,14 @@ impl Transport {
                 resp.push(DEVICE_VERSION_MINOR);
                 resp.push(DEVICE_VERSION_BUILD);
                 resp.push(CAP_WINK | CAP_CBOR);
-                (build_response(cid, CMD_INIT, &resp), None)
+                (build_response(cid, CMD_INIT, &resp), action)
             }
             CMD_PING => (build_response(cid, CMD_PING, payload), None),
             CMD_WINK => (build_response(cid, CMD_WINK, &[]), None),
-            CMD_LOCK => (build_response(cid, CMD_LOCK, &[]), None),
+            // CAP_LOCK is not advertised, so a conforming host never sends
+            // LOCK; answering with a success we do not implement would be a
+            // lie for the ones that do.
+            CMD_LOCK => (error_response(cid, ERR_INVALID_CMD), None),
             CMD_CANCEL => {
                 // CTAPHID_CANCEL itself gets no response, but a pending CBOR
                 // command on this channel must be answered with
@@ -218,16 +260,21 @@ impl Transport {
                 // Only this channel's state: an in-progress assembly implies
                 // busy == its own cid, so the busy check covers both, and a
                 // cancel must not clear another channel's assembly.
-                if self.busy == Some(cid) {
+                let busy = self.busy == Some(cid);
+                if busy {
                     self.busy = None;
                     self.assembly = None;
-                    (
-                        build_response(cid, CMD_CBOR, &[CTAP2_ERR_KEEPALIVE_CANCEL]),
-                        Some(CtapAction::CancelRelay),
-                    )
-                } else {
-                    (vec![], None)
                 }
+                let reports = if busy {
+                    build_response(cid, CMD_CBOR, &[CTAP2_ERR_KEEPALIVE_CANCEL])
+                } else {
+                    vec![]
+                };
+                // Reported even when the busy slot is free: after a
+                // multi-credential reply the daemon still holds an open
+                // caBLE session, and the host cancelling the account picker
+                // must close it instead of leaving it to time out.
+                (reports, Some(CtapAction::CancelRelay { cid }))
             }
             CMD_CBOR => self.dispatch_cbor(cid, payload),
             CMD_MSG => (error_response(cid, ERR_INVALID_CMD), None),
@@ -268,11 +315,13 @@ impl Transport {
     /// (status byte + CBOR), to be sent back over the given channel.
     pub fn complete_relay(&mut self, cid: u32, payload: &[u8]) -> Vec<Vec<u8>> {
         self.busy = None;
+        self.assembly = None;
         build_response(cid, CMD_CBOR, payload)
     }
 
     pub fn cancel_relay(&mut self, cid: u32) -> Vec<Vec<u8>> {
         self.busy = None;
+        self.assembly = None;
         build_response(cid, CMD_CBOR, &[CTAP2_ERR_KEEPALIVE_CANCEL])
     }
 
@@ -290,16 +339,19 @@ impl Transport {
         self.assembly.is_some()
     }
 
-    /// Drop a multi-frame assembly whose sender has been silent for at
-    /// least [`ASSEMBLY_IDLE_TIMEOUT`], freeing the busy slot.  Returns
-    /// whether anything was dropped.  Only unfinished assemblies expire:
-    /// the busy slot of a relayed CTAP operation is owned by the daemon's
+    /// Drop a multi-frame assembly that has been silent for
+    /// [`ASSEMBLY_IDLE_TIMEOUT`] or has lived longer than
+    /// [`ASSEMBLY_TOTAL_TIMEOUT`], freeing the busy slot.  Returns whether
+    /// anything was dropped.  Only unfinished assemblies expire: the busy
+    /// slot of a relayed CTAP operation is owned by the daemon's
     /// pending-transaction lifecycle and can legitimately last minutes.
     pub fn expire_assembly(&mut self, now: Instant) -> bool {
         let Some(assembly) = &self.assembly else {
             return false;
         };
-        if now.saturating_duration_since(assembly.last_frame) < ASSEMBLY_IDLE_TIMEOUT {
+        let idle = now.saturating_duration_since(assembly.last_frame) >= ASSEMBLY_IDLE_TIMEOUT;
+        let aged = now.saturating_duration_since(assembly.started) >= ASSEMBLY_TOTAL_TIMEOUT;
+        if !idle && !aged {
             return false;
         }
         self.assembly = None;
@@ -342,6 +394,14 @@ pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
     first[INIT_DATA_OFFSET..INIT_DATA_OFFSET + first_take].copy_from_slice(&payload[..first_take]);
     reports.push(first);
 
+    // Byte 4 of a continuation report is the sequence number, and hosts treat
+    // bit 7 of that byte as the INIT marker: only 128 continuation frames
+    // (MAX_PAYLOAD) are representable.  `DesktopSession::ctap` rejects larger
+    // phone replies, so this is a local invariant.
+    debug_assert!(
+        payload.len() <= MAX_PAYLOAD,
+        "CTAPHID response needs more than 128 continuation frames"
+    );
     let mut offset = first_take;
     let mut seq = 0u8;
     while offset < payload.len() {
@@ -359,14 +419,21 @@ pub fn build_response(cid: u32, cmd: u8, payload: &[u8]) -> Vec<Vec<u8>> {
 }
 
 // `build_response` panics above u16::MAX; it stays unreachable only while
-// the frame limits keep a decrypted caBLE reply below that: the frame minus
-// the 16-byte GCM tag, the padding length byte and the message type byte.
-// Both channels share the limit (l2cap::MAX_SDU == tunnel::MAX_FRAME_SIZE),
-// so pin the coupling here — a future limit bump must fail to compile
-// rather than open a remotely triggerable daemon panic.
+// each channel's frame limit keeps a decrypted caBLE reply below that: the
+// frame minus the 16-byte GCM tag, the padding length byte and the message
+// type byte.  The channels have different ceilings (l2cap::MAX_SDU is 5
+// bytes below tunnel::MAX_FRAME_SIZE), so pin each coupling here — a future
+// limit bump must fail to compile rather than open a remotely triggerable
+// daemon panic.  The 128-frame (7-bit sequence) limit is both asserted above
+// and enforced at the session boundary with `ctap::MAX_MSG_SIZE`.
 const _: () = assert!(
     crate::tunnel::MAX_FRAME_SIZE - 16 - 2 <= u16::MAX as usize,
-    "frame limits must keep decrypted caBLE replies within u16::MAX"
+    "the tunnel frame limit must keep decrypted caBLE replies within u16::MAX"
+);
+#[cfg(feature = "l2cap")]
+const _: () = assert!(
+    crate::l2cap::MAX_SDU - 16 - 2 <= u16::MAX as usize,
+    "the L2CAP SDU limit must keep decrypted caBLE replies within u16::MAX"
 );
 
 fn error_response(cid: u32, code: u8) -> Vec<Vec<u8>> {
@@ -494,13 +561,14 @@ mod tests {
         assert_eq!(resp.len(), 1);
         assert_eq!(resp[0][4], CMD_CBOR);
         assert_eq!(resp[0][7], 0x2d); // KEEPALIVE_CANCEL
-        assert_eq!(action, Some(CtapAction::CancelRelay));
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
         assert_eq!(t.busy_channel(), None);
 
-        // Cancel with nothing pending: no response.
+        // Cancel with nothing pending gets no response, but is still
+        // reported so the daemon can close an idle multi-credential session.
         let (resp, action) = t.handle_report(&init_frame(1, CMD_CANCEL, &[]));
         assert!(resp.is_empty());
-        assert!(action.is_none());
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
     }
 
     #[test]
@@ -518,8 +586,98 @@ mod tests {
         // A cancel on channel 2 must not disturb channel 1's assembly.
         let (resp, action) = t.handle_report(&init_frame(2, CMD_CANCEL, &[]));
         assert!(resp.is_empty());
-        assert!(action.is_none());
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 2 }));
         assert_eq!(t.busy_channel(), Some(1));
+    }
+
+    #[test]
+    fn cid_zero_is_rejected() {
+        let mut t = Transport::new([0u8; 16]);
+        let (resp, action) = t.handle_report(&init_frame(0, CMD_INIT, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        assert!(action.is_none());
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_INVALID_CHANNEL);
+        let (resp, _) = t.handle_report(&init_frame(0, CMD_PING, &[1]));
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_INVALID_CHANNEL);
+    }
+
+    #[test]
+    fn init_resynchronizes_a_busy_channel() {
+        let mut t = Transport::new([0u8; 16]);
+        let (_, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        assert!(matches!(action, Some(CtapAction::Relay(_))));
+        // INIT on the same channel answers the nonce and aborts the relay.
+        let (resp, action) = t.handle_report(&init_frame(1, CMD_INIT, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(resp[0][4], CMD_INIT);
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
+        assert_eq!(t.busy_channel(), None);
+    }
+
+    #[test]
+    fn init_cancels_an_idle_multicredential_session() {
+        let mut t = Transport::new([0u8; 16]);
+        // Nothing is in flight, but the daemon may still hold an idle
+        // multi-credential session on this channel; the resync must close it.
+        let (resp, action) = t.handle_report(&init_frame(1, CMD_INIT, &[1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(resp[0][4], CMD_INIT);
+        assert_eq!(action, Some(CtapAction::CancelRelay { cid: 1 }));
+    }
+
+    #[test]
+    fn stray_continuation_is_a_sequence_error() {
+        let mut t = Transport::new([0u8; 16]);
+        let mut c = vec![0u8; REPORT_SIZE];
+        c[0..4].copy_from_slice(&1u32.to_be_bytes());
+        c[4] = 0;
+        let (resp, _) = t.handle_report(&c);
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_INVALID_SEQ);
+    }
+
+    #[test]
+    fn lock_is_not_advertised_and_not_answered_with_success() {
+        let mut t = Transport::new([0u8; 16]);
+        let (resp, _) = t.handle_report(&init_frame(1, CMD_LOCK, &[]));
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_INVALID_CMD);
+    }
+
+    #[test]
+    fn assembly_start_is_refused_while_a_relay_owns_the_slot() {
+        let mut t = Transport::new([0u8; 16]);
+        let (_, action) = t.handle_report(&init_frame(1, CMD_CBOR, &[0x01, 0xa4]));
+        assert!(matches!(action, Some(CtapAction::Relay(_))));
+        // A multi-frame message on the same channel would have replaced the
+        // relay's busy slot; it gets CHANNEL_BUSY instead.
+        let mut f = vec![0u8; REPORT_SIZE];
+        f[0..4].copy_from_slice(&1u32.to_be_bytes());
+        f[4] = CMD_PING | INIT_FLAG;
+        f[5..7].copy_from_slice(&200u16.to_be_bytes());
+        let (resp, action) = t.handle_report(&f);
+        assert!(action.is_none());
+        assert_eq!(resp[0][4], CMD_ERROR);
+        assert_eq!(resp[0][7], ERR_CHANNEL_BUSY);
+        // The relay can still complete and frees the slot.
+        let _ = t.complete_relay(1, &[0x00]);
+        assert_eq!(t.busy_channel(), None);
+    }
+
+    #[test]
+    fn relay_completion_drops_a_parked_assembly() {
+        let mut t = Transport::new([0u8; 16]);
+        // Start an assembly on channel 1, then have the daemon complete a
+        // relay on it (the host restarted the message after the reply was
+        // queued): the assembly must not survive.
+        let mut f = vec![0u8; REPORT_SIZE];
+        f[0..4].copy_from_slice(&1u32.to_be_bytes());
+        f[4] = CMD_PING | INIT_FLAG;
+        f[5..7].copy_from_slice(&200u16.to_be_bytes());
+        let _ = t.handle_report(&f);
+        assert!(t.has_assembly());
+        let _ = t.complete_relay(1, &[0x00]);
+        assert!(!t.has_assembly());
+        assert_eq!(t.busy_channel(), None);
     }
 
     #[test]
@@ -600,6 +758,27 @@ mod tests {
         assert_eq!(t.busy_channel(), None);
         let (resp, _) = t.handle_report(&init_frame(2, CMD_CBOR, &[0x04]));
         assert_eq!(resp[0][4], CMD_CBOR);
+    }
+
+    #[test]
+    fn trickled_assembly_expires_at_the_total_timeout() {
+        let mut t = Transport::new([0u8; 16]);
+        let payload: Vec<u8> = (0..200u32).map(|i| (i % 256) as u8).collect();
+        let mut f = vec![0u8; REPORT_SIZE];
+        f[0..4].copy_from_slice(&1u32.to_be_bytes());
+        f[4] = CMD_PING;
+        f[5..7].copy_from_slice(&200u16.to_be_bytes());
+        f[7..].copy_from_slice(&payload[..57]);
+        let _ = t.handle_report(&f);
+
+        // Keep the idle timer fresh, but the total deadline still bounds it.
+        // Use a wide margin: `now` is taken after the frame was recorded, so
+        // an idle deadline only 1 ms in the future would already have passed
+        // on a loaded machine.
+        let now = Instant::now();
+        assert!(!t.expire_assembly(now + ASSEMBLY_IDLE_TIMEOUT / 2));
+        assert!(t.expire_assembly(now + ASSEMBLY_TOTAL_TIMEOUT));
+        assert_eq!(t.busy_channel(), None);
     }
 
     #[test]

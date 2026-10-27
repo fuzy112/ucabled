@@ -4,6 +4,109 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0-pre]
+
+### Added
+
+- GitHub releases now carry a source tarball (`ucabled-X.Y.Z.tar.zst`)
+  archived from the signed tag, with a detached GPG signature, alongside
+  the Debian/Ubuntu packages.  GitHub's automatic "Source code" archives
+  are regenerated on demand and stay unsigned.
+
+### Changed
+
+- When Firefox asks which of several authenticators to use ("Multiple
+  devices found"), the QR code now appears right away instead of a
+  "use the phone instead?" question first: scan the code to pick the
+  phone, or touch the other security key (the window says so) to pick
+  that one.  The phone is only marked as selected once it has connected,
+  so touching the key before that still wins.  The UI helper contract is
+  now v3 and has no `--select` mode (see `docs/helper-contract.md`).
+
+### Fixed
+
+- Every matching passkey now reaches the browser's account picker.  When
+  the phone answered a sign-in with more than one credential, only the
+  first was relayed and the rest were lost; the follow-up requests now
+  continue on the same caBLE session, which is closed when the account
+  picker is abandoned instead of making the next request fail as busy.
+
+- A failed BLE handshake now falls back to the WebSocket tunnel instead
+  of failing the ceremony: the advertisement's channel selector is not
+  integrity-protected, so a handshake failure there can mean channel
+  steering rather than a phone problem.
+
+- A failed phone handshake or an unexpected tunnel message is now
+  reported as a failed attempt rather than as "no passkeys found".
+  Firefox still shows a generic not-allowed error for both, so this is
+  about protocol accuracy rather than a different browser prompt.
+
+- A browser that stops reading a passkey response can no longer stall
+  the daemon: each HID report write is bounded, a whole response has a
+  deadline, and a response that cannot be completed is abandoned.  The
+  host still learns about the truncation from its own timeout, but the
+  daemon and the HID channel are free for the next request.
+
+- A stale reply from a cancelled transaction can no longer be delivered
+  as the answer to the next request on the same HID channel.
+
+- Several CTAP-HID state-machine details were tightened: a multi-frame
+  request that arrives while a transaction is in progress is refused
+  instead of overwriting it, truncated multi-frame requests expire after
+  10 seconds even if frames keep trickling in, an INIT resynchronization
+  closes an idle multi-credential session, and the reserved channel 0,
+  stray continuation frames and LOCK are answered per the specification.
+
+- Starting a second daemon now fails with a clear error instead of
+  registering a second virtual authenticator alongside the first.
+
+- Registering a new UI agent now aborts the transaction bound to the
+  previous one instead of holding the HID channel until its timeout.
+
+### Security
+
+- Each passkey QR code now carries a fresh, per-transaction identity key
+  instead of the installation's persistent one, matching Chromium.  QR
+  codes shown by one installation can no longer be recognised as coming
+  from the same machine — neither by a phone that scans them nor by
+  anyone who records several of them.
+
+- QR public keys are now checked to be valid P-256 points before use,
+  so a crafted QR code cannot feed an invalid key into the handshake.
+
+- The installer pins `PATH`, starts itself through an absolute `/bin/sh`
+  instead of `env`, and rejects a `setfacl`/`nologin` that is not a
+  root-owned, non-writable file (checking the symlink target and baking
+  that in) before either ends up in a root-executed udev rule or the
+  service account's shell.  A poisoned environment can no longer turn
+  installation into root code execution.
+
+- Release tag verification compares the signing-key and primary-key
+  fingerprints against a repository variable, so an account with push
+  access but without the release key can no longer substitute the key
+  stored in the tagged tree, and a future signing subkey keeps working.
+
+- The helper contract is v2: the relying party is passed as `--rp
+  <value>` and the transaction URL is only read from stdin, so a relying
+  party identifier cannot flip helper modes (not even one spelled
+  `--help` or `--select`) and the transaction secret cannot appear in a
+  world-readable command line.
+
+- Both UI agents now accept calls only from the current owner of the
+  daemon's bus name, and the session agent only trusts name-change
+  signals sent by the bus driver, so another local process can no longer
+  impersonate the daemon or silence the QR prompt.
+
+- The daemon's state directory (which holds the long-term identity key)
+  is created with mode `0700` instead of systemd's `0755` default.
+
+- The production tunnel dial path now refuses cleartext `ws://` URLs,
+  including from redirects, so transaction traffic cannot be downgraded.
+
+- Agent registration attempts are limited per user instead of per D-Bus
+  connection, so extra connections can no longer multiply the polkit
+  authorization work they cause.
+
 ## [0.2.1] - 2026-10-24
 
 ### Security
@@ -42,7 +145,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `ucable`, and the GTK helper and the GNOME Shell extension now share
   the same catalogs in `po/`.
 
-- Optimize performance.
+- Faster sign-in round trips: the CTAPHID, hidraw and tunnel paths copy
+  less, and the request path parses and allocates less per command.
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into
   `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
   `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
@@ -163,6 +267,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
+[0.3.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/fuzy112/ucabled/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fuzy112/ucabled/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/fuzy112/ucabled/compare/v0.1.5...v0.1.6

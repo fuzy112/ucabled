@@ -141,6 +141,28 @@ pub fn mock_getinfo_response() -> Vec<u8> {
     out
 }
 
+/// Number of credentials still available from a getAssertion reply
+/// (`numberOfCredentials`, CTAP 2.2 §6.2 key 5).
+///
+/// Returns `None` when the reply reports an error, omits the field, or does
+/// not parse; callers treat that as "no follow-up credentials".
+pub fn number_of_credentials(reply: &[u8]) -> Option<usize> {
+    let (status, body) = reply.split_first()?;
+    if *status != CTAP2_OK {
+        return None;
+    }
+    let mut d = cbor::Decoder::new(body);
+    let entries = d.map_header()?;
+    for _ in 0..entries {
+        let key = d.uint()?;
+        if key == 5 {
+            return usize::try_from(d.uint()?).ok();
+        }
+        d.skip_value()?;
+    }
+    None
+}
+
 /// Extract the RP ID from a makeCredential (key 2 -> rp map -> "id") or
 /// getAssertion (key 1 -> string) request payload. Used for UI display, and
 /// to tell a U2F AppID probe apart from a normal one via [`is_u2f_appid`].
@@ -678,6 +700,29 @@ fn strip_transports_from_array(data: &[u8]) -> Option<(Vec<u8>, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_of_credentials_reads_the_get_assertion_field() {
+        // status + {1: rpId, 5: 3}
+        let mut reply = vec![CTAP2_OK];
+        cbor::map(&mut reply, 2);
+        cbor::uint(&mut reply, 1);
+        cbor::text(&mut reply, "example.com");
+        cbor::uint(&mut reply, 5);
+        cbor::uint(&mut reply, 3);
+        assert_eq!(number_of_credentials(&reply), Some(3));
+
+        // A single-credential reply omits the field.
+        let mut one = vec![CTAP2_OK];
+        cbor::map(&mut one, 1);
+        cbor::uint(&mut one, 1);
+        cbor::text(&mut one, "example.com");
+        assert_eq!(number_of_credentials(&one), None);
+
+        // Errors and truncated CBOR never claim extra credentials.
+        assert_eq!(number_of_credentials(&[CTAP2_ERR_NO_CREDENTIALS]), None);
+        assert_eq!(number_of_credentials(&[CTAP2_OK, 0xa2]), None);
+    }
 
     #[test]
     fn getinfo_shape() {

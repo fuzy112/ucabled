@@ -272,9 +272,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-bigint"
-version = "0.7.6"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb08299a6046833a879ace115697f12fd2bd6c8d3e93c909ffc9e0738e7cae0"
+checksum = "d811ea23fdfbcce2e2d5132344d471abdb8f901ac496a0893a3df92e70525e52"
 dependencies = [
  "cpubits",
  "ctutils",
@@ -2067,7 +2067,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -2303,7 +2303,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "ucabled"
-version = "0.2.1"
+version = "0.3.0-pre"
 dependencies = [
  "aes",
  "aes-gcm",

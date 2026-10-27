@@ -29,8 +29,9 @@ use ucabled::agent::{
 
 const AGENT_PATH: &str = "/org/ucabled/Agent";
 const DBUS_INTERFACE: &str = "org.freedesktop.DBus";
-/// How long the device-selection window stays up before declining.
-const SELECT_TIMEOUT_SECS: u64 = 60;
+/// Unique sender of driver-generated signals; the same string as the
+/// interface by convention, but used here as the match's sender filter.
+const DBUS_DRIVER: &str = "org.freedesktop.DBus";
 
 /// A live helper window: its pid (to tell it apart when it exits), the
 /// transaction it belongs to, and a queue of stdin lines. The helper process
@@ -102,32 +103,51 @@ async fn main() -> Result<()> {
     // Helper exits are reported to the main loop, which is the only task
     // calling back into the daemon.
     let (cancel_tx, mut cancel_rx) = mpsc::unbounded_channel::<u64>();
-    // (tid, use_phone) from the device-selection window.
-    let (select_tx, mut select_rx) = mpsc::unbounded_channel::<(u64, bool)>();
     // The daemon (re)appeared on the bus; registration must be renewed.
     let (daemon_tx, mut daemon_rx) = mpsc::unbounded_channel::<()>();
 
     let qr_window: WindowSlot = Arc::new(Mutex::new(None));
-    let select_window: WindowSlot = Arc::new(Mutex::new(None));
+    // Unique name of the process that currently owns org.ucabled.  The bus
+    // policy already denies unprivileged sends to the agent's unique name, so
+    // this is defence in depth: it keeps a future policy change (or a bus
+    // without the shipped configuration) from handing the daemon's authority
+    // to another local process.  It is filled in after the NameOwnerChanged
+    // match below is installed, so a restart cannot fall between the query
+    // and the match.
+    let daemon_owner: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    let crossroads = build_crossroads(&qr_window, &select_window, cancel_tx, select_tx);
+    let crossroads = build_crossroads(&qr_window, cancel_tx, &daemon_owner);
 
     let method = conn
         .add_match(MatchRule::new_method_call())
         .await
         .context("match method calls")?;
     let signal = conn
-        .add_match(MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged"))
+        // Only the bus driver may report name changes: the stock system-bus
+        // policy lets any local user emit signals, so without this sender
+        // restriction a local process could forge a NameOwnerChanged for
+        // org.ucabled, clear (or replace) the cached owner, and durably
+        // silence the UI.
+        .add_match(
+            MatchRule::new_signal(DBUS_INTERFACE, "NameOwnerChanged").with_sender(DBUS_DRIVER),
+        )
         .await
         .context("match NameOwnerChanged")?;
     let (_method_match, methods) = method.msg_stream();
     let (_signal_match, signals) = signal.msg_stream();
+    // Query the owner only after the match exists: a daemon restart between
+    // an earlier query and `add_match` would otherwise be missed, leaving the
+    // agent with a dead unique name as its sender filter and with every
+    // Prompt/Found/Close call from the new daemon rejected.
+    let owner = current_daemon_owner(&conn).await;
+    *daemon_owner.lock().unwrap() = owner;
     tokio::spawn(route_messages(
         conn.clone(),
         crossroads,
         methods,
         signals,
         daemon_tx,
+        daemon_owner,
     ));
 
     // Register with the daemon, retrying while it is not up yet.
@@ -151,16 +171,12 @@ async fn main() -> Result<()> {
             Some(tid) = cancel_rx.recv() => {
                 notify_cancelled(&conn, tid).await;
             }
-            Some((tid, use_phone)) = select_rx.recv() => {
-                notify_selection(&conn, tid, use_phone).await;
-            }
             Some(()) = daemon_rx.recv() => {
                 // A daemon restart clears its in-memory agent slot. Any
                 // failure (refused or transient) drops our windows, like
                 // before; the next appearance signal starts a new attempt.
                 if !matches!(register_once(&conn).await, Ok(true)) {
                     close_window(&qr_window);
-                    close_window(&select_window);
                 }
             }
         }
@@ -169,29 +185,35 @@ async fn main() -> Result<()> {
 
 fn build_crossroads(
     qr_window: &WindowSlot,
-    select_window: &WindowSlot,
     cancel_tx: UnboundedSender<u64>,
-    select_tx: UnboundedSender<(u64, bool)>,
+    daemon_owner: &Arc<Mutex<Option<String>>>,
 ) -> Crossroads {
     let mut crossroads = Crossroads::new();
     let iface = crossroads.register(AGENT_INTERFACE, {
         let qr_window = qr_window.clone();
-        let select_window = select_window.clone();
+        let prompt_owner = daemon_owner.clone();
+        let found_owner = daemon_owner.clone();
+        let close_owner = daemon_owner.clone();
+        let notify_owner = daemon_owner.clone();
         move |builder| {
             let prompt_window = qr_window.clone();
             builder.method(
                 "Prompt",
-                ("tid", "url", "rp", "timeout", "request_type"),
+                ("tid", "url", "rp", "timeout", "request_type", "also_key"),
                 (),
-                move |_ctx,
+                move |ctx,
                       _: &mut (),
-                      (tid, url, rp, timeout, request_type): (
+                      (tid, url, rp, timeout, request_type, also_key): (
                     u64,
                     String,
                     String,
                     u64,
                     String,
+                    bool,
                 )| {
+                    if !from_daemon(ctx, &prompt_owner) {
+                        return Ok(());
+                    }
                     let rp = (!rp.is_empty()).then_some(rp);
                     show_window(
                         &prompt_window,
@@ -201,6 +223,7 @@ fn build_crossroads(
                         rp,
                         timeout,
                         &request_type,
+                        also_key,
                     );
                     Ok(())
                 },
@@ -211,33 +234,25 @@ fn build_crossroads(
                 "Found",
                 ("tid",),
                 (),
-                move |_ctx, _: &mut (), (tid,): (u64,)| {
+                move |ctx, _: &mut (), (tid,): (u64,)| {
+                    if !from_daemon(ctx, &found_owner) {
+                        return Ok(());
+                    }
                     forward_line_for_tid(&found_window, tid, "found\n");
                     Ok(())
                 },
             );
 
-            let ask_window = select_window.clone();
-            let select_tx_slot = select_tx.clone();
-            builder.method(
-                "Select",
-                ("tid",),
-                (),
-                move |_ctx, _: &mut (), (tid,): (u64,)| {
-                    show_select_window(&ask_window, &select_tx_slot, tid);
-                    Ok(())
-                },
-            );
-
             let close_qr = qr_window.clone();
-            let close_select = select_window.clone();
             builder.method(
                 "Close",
                 ("tid",),
                 (),
-                move |_ctx, _: &mut (), (tid,): (u64,)| {
+                move |ctx, _: &mut (), (tid,): (u64,)| {
+                    if !from_daemon(ctx, &close_owner) {
+                        return Ok(());
+                    }
                     close_window_for_tid(&close_qr, tid);
-                    close_window_for_tid(&close_select, tid);
                     Ok(())
                 },
             );
@@ -246,7 +261,10 @@ fn build_crossroads(
                 "Notify",
                 ("summary", "body"),
                 (),
-                move |_ctx, _: &mut (), (summary, body): (String, String)| {
+                move |ctx, _: &mut (), (summary, body): (String, String)| {
+                    if !from_daemon(ctx, &notify_owner) {
+                        return Ok(());
+                    }
                     tokio::spawn(desktop_notify(summary, body));
                     Ok(())
                 },
@@ -257,6 +275,45 @@ fn build_crossroads(
     crossroads
 }
 
+/// Whether `ctx`'s caller is the current owner of `org.ucabled`.
+///
+/// A missing caller or an unknown owner is rejected: an agent that has not
+/// seen the daemon's name yet must not act on anybody's request.
+fn from_daemon(ctx: &dbus_crossroads::Context, owner: &Mutex<Option<String>>) -> bool {
+    let owner = owner.lock().unwrap();
+    match (ctx.message().sender(), owner.as_deref()) {
+        (Some(sender), Some(owner)) => sender == owner,
+        _ => {
+            tracing::warn!(
+                sender = ?ctx.message().sender(),
+                "ignoring agent call that does not come from the daemon"
+            );
+            false
+        }
+    }
+}
+
+/// Ask the bus who currently owns `org.ucabled`; `None` when the name is not
+/// owned (yet) or the bus cannot tell us.
+async fn current_daemon_owner(conn: &Arc<SyncConnection>) -> Option<String> {
+    let proxy = Proxy::new(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        Duration::from_secs(5),
+        conn.clone(),
+    );
+    let result: std::result::Result<(String,), dbus::Error> = proxy
+        .method_call("org.freedesktop.DBus", "GetNameOwner", (BUS_NAME,))
+        .await;
+    match result {
+        Ok((owner,)) => Some(owner),
+        Err(e) => {
+            tracing::debug!("org.ucabled has no owner yet: {e}");
+            None
+        }
+    }
+}
+
 /// The single task owning the crossroads: serves agent method calls and
 /// notices when the daemon (re)appears on the bus.
 async fn route_messages(
@@ -265,6 +322,7 @@ async fn route_messages(
     mut methods: MessageReceiver<Message>,
     mut signals: MessageReceiver<Message>,
     daemon_tx: UnboundedSender<()>,
+    daemon_owner: Arc<Mutex<Option<String>>>,
 ) {
     loop {
         tokio::select! {
@@ -275,9 +333,14 @@ async fn route_messages(
             sig = signals.next() => {
                 let Some(sig) = sig else { break };
                 if let Ok((name, _old_owner, new_owner)) = sig.read3::<String, String, String>()
-                    && name == BUS_NAME && !new_owner.is_empty() {
-                        tracing::info!("daemon appeared on the bus, re-registering");
-                        let _ = daemon_tx.send(());
+                    && name == BUS_NAME {
+                        let appeared = !new_owner.is_empty();
+                        *daemon_owner.lock().unwrap() =
+                            appeared.then(|| new_owner.clone());
+                        if appeared {
+                            tracing::info!("daemon appeared on the bus, re-registering");
+                            let _ = daemon_tx.send(());
+                        }
                     }
             }
         }
@@ -446,6 +509,7 @@ fn open_window(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_window(
     state: &WindowSlot,
     cancel_tx: &UnboundedSender<u64>,
@@ -454,6 +518,7 @@ fn show_window(
     rp: Option<String>,
     timeout_secs: u64,
     request_type: &str,
+    also_key: bool,
 ) {
     let Some(helper) = helper_path() else {
         tracing::warn!("ucable-agent-helper not found next to the agent; cannot show the QR code");
@@ -461,7 +526,10 @@ fn show_window(
     };
     let mut command = Command::new(helper);
     if let Some(rp) = &rp {
-        command.arg(rp);
+        // A valued option, never a bare positional: the RP comes from the
+        // CTAP payload and may begin with '-', which a positional slot would
+        // hand to the helper's flag parser.
+        command.arg("--rp").arg(rp);
     }
     command
         .arg("--timeout")
@@ -471,6 +539,10 @@ fn show_window(
         // Says which command is being relayed so the helper can phrase the QR
         // page; a helper that does not know the flag shows a plain caption.
         command.arg("--request-type").arg(request_type);
+    }
+    if also_key {
+        // Another authenticator is present: say that touching it works too.
+        command.arg("--also-key");
     }
     // The URL carries the transaction secret, so it goes over the pipe.
     let cancel_tx = cancel_tx.clone();
@@ -483,33 +555,6 @@ fn show_window(
             let _ = cancel_tx.send(tid);
         },
     );
-}
-
-/// Show the "another security key is present, use the phone instead?" window
-/// and report the user's answer. The helper exits 0 for "Use phone" and
-/// non-zero for cancel/close/timeout.
-fn show_select_window(state: &WindowSlot, result_tx: &UnboundedSender<(u64, bool)>, tid: u64) {
-    let Some(helper) = helper_path() else {
-        tracing::warn!("ucable-agent-helper not found next to the agent; cannot ask the user");
-        let _ = result_tx.send((tid, false));
-        return;
-    };
-    let mut command = Command::new(helper);
-    command
-        .arg("--select")
-        .arg("--timeout")
-        .arg(SELECT_TIMEOUT_SECS.to_string())
-        .stdin(Stdio::null());
-    let result_tx = result_tx.clone();
-    let decline_tx = result_tx.clone();
-    let opened = open_window(state, tid, &mut command, None, move |status| {
-        // Exit code 0 means "Use phone"; anything else (cancel, close,
-        // timeout, signal) declines and lets the other key win.
-        let _ = result_tx.send((tid, status.code() == Some(0)));
-    });
-    if !opened {
-        let _ = decline_tx.send((tid, false));
-    }
 }
 
 /// Show a desktop notification through the session bus.  Best-effort: a
@@ -588,21 +633,6 @@ async fn notify_cancelled(conn: &Arc<SyncConnection>, tid: u64) {
     .await;
     if let Err(e) = result {
         tracing::warn!("failed to report cancellation: {e:#}");
-    }
-}
-
-/// Report the user's device-selection answer over `conn`.
-async fn notify_selection(conn: &Arc<SyncConnection>, tid: u64, use_phone: bool) {
-    let result = async {
-        let proxy = Proxy::new(BUS_NAME, MANAGER_PATH, Duration::from_secs(5), conn.clone());
-        let _: () = proxy
-            .method_call(MANAGER_INTERFACE, "SelectionResult", (tid, use_phone))
-            .await?;
-        Ok::<(), dbus::Error>(())
-    }
-    .await;
-    if let Err(e) = result {
-        tracing::warn!("failed to report device selection: {e:#}");
     }
 }
 
