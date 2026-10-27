@@ -4,6 +4,8 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0-pre]
+
 ## [0.3.0] - 2026-10-27
 
 ### Added
@@ -267,6 +269,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
+[0.4.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/fuzy112/ucabled/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/fuzy112/ucabled/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fuzy112/ucabled/compare/v0.1.6...v0.2.0
