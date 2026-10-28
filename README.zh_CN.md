@@ -266,7 +266,7 @@ GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加
 圆角卡片，可用 Esc 或由代理关闭。它的界面字符串用 gettext 本地化（Nix 包会
 安装这些翻译目录）。用 `--features adwaita` 构建可获得 GNOME 原生窗口外观。
 
-任何符合 contract-v2 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
+任何符合 contract-v3 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
 或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
 参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
 

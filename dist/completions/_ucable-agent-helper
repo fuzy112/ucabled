@@ -4,7 +4,7 @@ _arguments \
     '--rp[requesting party ID]:rp:' \
     '--layer-shell[Wayland layer-shell surface]' \
     '--also-key[note that touching another security key works]' \
-    '--timeout[close after SECS seconds]:seconds:' \
+    '--timeout[show Code expired after SECS seconds]:seconds:' \
     '--request-type[request type]:type:(mc ga)' \
     '(-h --help)'{-h,--help}'[print help]' \
     '(-V --version)'{-V,--version}'[print version]'

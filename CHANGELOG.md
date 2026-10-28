@@ -4,6 +4,16 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0-pre]
+
+### Fixed
+
+- With `--layer-shell` (or `UCABLED_HELPER_LAYER_SHELL=1`), Esc now closes
+  the helper window.  The overlay holds the keyboard while it is up, so
+  compositor shortcuts stay out until the card goes away; previously it
+  never asked for focus, the key went elsewhere, and only finishing or
+  abandoning the request could take the window away.
+
 ## [0.3.0] - 2026-10-27
 
 ### Added
@@ -86,11 +96,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   access but without the release key can no longer substitute the key
   stored in the tagged tree, and a future signing subkey keeps working.
 
-- The helper contract is v2: the relying party is passed as `--rp
+- The helper contract is v3: the relying party is passed as `--rp
   <value>` and the transaction URL is only read from stdin, so a relying
   party identifier cannot flip helper modes (not even one spelled
-  `--help` or `--select`) and the transaction secret cannot appear in a
-  world-readable command line.
+  `--help`) and the transaction secret cannot appear in a world-readable
+  command line.
 
 - Both UI agents now accept calls only from the current owner of the
   daemon's bus name, and the session agent only trusts name-change
@@ -106,6 +116,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Agent registration attempts are limited per user instead of per D-Bus
   connection, so extra connections can no longer multiply the polkit
   authorization work they cause.
+
+- The P-256 implementation moves to `crypto-bigint` 0.7.9, since 0.7.6
+  (what 0.2.1 pinned) was yanked upstream.  0.7.9 also fixes truncation
+  in `invert_odd_mod` and boundary cases in `mul_mod_special`, both on
+  the curve arithmetic the handshake depends on.
 
 ## [0.2.1] - 2026-10-24
 
@@ -147,6 +162,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Faster sign-in round trips: the CTAPHID, hidraw and tunnel paths copy
   less, and the request path parses and allocates less per command.
+
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into
   `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
   `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
@@ -215,8 +231,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - The QR window now blurs the code in place once the phone is
   detected, instead of switching to a separate status page.
+
 - nixpkgs flake input now points to the official channel tarball
   rather than the GitHub branch.
+
 - Experimental BLE data channel (`l2cap` feature): the L2CAP connect
   now has a timeout and falls back to the WebSocket tunnel when it
   fails or when the negotiated MTU cannot carry the command, instead
@@ -242,8 +260,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   for this website": the daemon declines Firefox's AppID discovery
   probe so it keeps the WebAuthn RP ID the phone stored the passkey
   under.
+
 - Time out transactions when the phone connects but never answers the
   handshake, instead of waiting until the user cancels.
+
 - Refuse requests arriving mid-transaction instead of leaving the
   channel stuck.
 
@@ -267,6 +287,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
+[0.4.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/fuzy112/ucabled/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/fuzy112/ucabled/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fuzy112/ucabled/compare/v0.1.6...v0.2.0
