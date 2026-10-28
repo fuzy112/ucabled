@@ -9,9 +9,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - With `--layer-shell` (or `UCABLED_HELPER_LAYER_SHELL=1`), Esc now closes
-  the helper window.  The overlay never asked for keyboard focus before, so
-  the key went elsewhere and only finishing or abandoning the request could
-  take the window away.
+  the helper window.  The overlay holds the keyboard while it is up, so
+  compositor shortcuts stay out until the card goes away; previously it
+  never asked for focus, the key went elsewhere, and only finishing or
+  abandoning the request could take the window away.
 
 ## [0.3.0] - 2026-10-27
 
