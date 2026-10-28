@@ -162,6 +162,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Faster sign-in round trips: the CTAPHID, hidraw and tunnel paths copy
   less, and the request path parses and allocates less per command.
+
 - Debian/Ubuntu packaging: split the monolithic `ucabled` package into
   `ucabled` (daemon), `ucable-agent` (default GTK4 session agent) and
   `ucable-gnome-agent` (GNOME Shell extension).  Upgrades pull the
@@ -230,8 +231,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - The QR window now blurs the code in place once the phone is
   detected, instead of switching to a separate status page.
+
 - nixpkgs flake input now points to the official channel tarball
   rather than the GitHub branch.
+
 - Experimental BLE data channel (`l2cap` feature): the L2CAP connect
   now has a timeout and falls back to the WebSocket tunnel when it
   fails or when the negotiated MTU cannot carry the command, instead
@@ -257,8 +260,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   for this website": the daemon declines Firefox's AppID discovery
   probe so it keeps the WebAuthn RP ID the phone stored the passkey
   under.
+
 - Time out transactions when the phone connects but never answers the
   handshake, instead of waiting until the user cancels.
+
 - Refuse requests arriving mid-transaction instead of leaving the
   channel stuck.
 
