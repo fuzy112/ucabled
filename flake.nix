@@ -6,11 +6,9 @@
   outputs =
     { self, nixpkgs }:
     let
-      allSystems = [
-        "x86_64-linux"
-        "aarch64-linux"
-      ];
-      forAllSystems = f: nixpkgs.lib.genAttrs allSystems (system: f nixpkgs.legacyPackages.${system});
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed (system: f nixpkgs.legacyPackages.${system});
     in
     {
       packages = forAllSystems (pkgs: {

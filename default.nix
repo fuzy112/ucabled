@@ -1,6 +1,5 @@
-# Stable (non-flake) Nix entry point: everything flake.nix offers that
-# makes sense without flakes, with nixpkgs pinned through flake.lock
-# (see nix/nixpkgs.nix).
+# Stable (non-flake) Nix entry point: the packages, overlay and NixOS
+# module, with nixpkgs pinned through flake.lock (see nix/nixpkgs.nix).
 #
 #   nix-build -A ucabled
 #   nix-build -A ucable-gnome-agent
@@ -15,44 +14,29 @@
 #   ];
 #   services.ucabled.enable = true;
 {
+  # With pkgs passed: only the module's packages.<system> lookup key.
   system ? builtins.currentSystem,
+  # Build with this package set instead of the pinned nixpkgs.  The
+  # default is only forced when a package value is.
   pkgs ? import (import ./nix/nixpkgs.nix) { inherit system; },
 }:
 
 let
-  lib = pkgs.lib;
-
-  # Keep in step with flake.nix's allSystems.
-  allSystems = [
-    "x86_64-linux"
-    "aarch64-linux"
-  ];
-
-  # Per-system package sets, evaluated lazily: the NixOS module picks its
-  # target system out of this attrset without instantiating the others.
-  packages = lib.genAttrs allSystems (
-    s:
-    let
-      p = import (import ./nix/nixpkgs.nix) { system = s; };
-    in
-    {
-      ucabled = p.callPackage ./nix/package.nix { };
-      ucable-gnome-agent = p.callPackage ./nix/gnome-agent.nix { };
-    }
-  );
+  packages = {
+    ucabled = pkgs.callPackage ./nix/package.nix { };
+    ucable-gnome-agent = pkgs.callPackage ./nix/gnome-agent.nix { };
+  };
 in
 
-# The requested system's packages at the top level, so plain `nix-build`
-# and `nix-env -iA ucabled -f .` work.
-packages.${system}
+packages
 // {
-  inherit packages;
-
   overlay = import ./nix/overlay.nix;
 
   # nix/module.nix takes the flake's `self`; hand it a shim with the
   # same packages.<system> shape so it needs no flake of its own.
   nixosModule = import ./nix/module.nix {
-    self = { inherit packages; };
+    self = {
+      packages.${system} = packages;
+    };
   };
 }
