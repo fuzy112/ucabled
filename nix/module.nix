@@ -137,9 +137,11 @@ in
     };
 
     services.dbus.packages = [ dbusPolicy ];
-    environment.systemPackages =
-      [ polkitAction ]
-      ++ lib.optional cfg.gnomeAgent.enable
+    environment.systemPackages = [
+      polkitAction
+    ]
+    ++
+      lib.optional cfg.gnomeAgent.enable
         self.packages.${pkgs.stdenv.hostPlatform.system}.ucable-gnome-agent;
 
     # BlueZ needs no polkit rule: it registers no polkit actions, and the

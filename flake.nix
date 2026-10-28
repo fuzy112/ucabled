@@ -39,7 +39,8 @@
         inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) ucabled;
         fmt =
           pkgs.runCommand "ucabled-fmt-check"
-            { nativeBuildInputs = [
+            {
+              nativeBuildInputs = [
                 pkgs.cargo
                 pkgs.rustfmt
               ];
