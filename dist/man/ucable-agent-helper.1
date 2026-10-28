@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-3.0-or-later
-.TH UCABLE-AGENT-HELPER 1 "2026-10-13" "ucabled" "User Commands"
+.TH UCABLE-AGENT-HELPER 1 "2026-10-28" "ucabled" "User Commands"
 .SH NAME
 ucable\-agent\-helper \- QR code window for ucabled
 .SH SYNOPSIS
@@ -22,6 +22,11 @@ as a QR code; a later
 .B found
 line blurs the code and asks the user to confirm on the phone.
 .PP
+Press Esc or close the window to give up on the prompt; there is no header
+bar to close under
+.BR \-\-layer\-shell ,
+so Esc is the only way out on such a surface.
+.PP
 The URL is a per-transaction secret, so it only ever travels over standard
 input.  Everything on the command line is display-only and world-readable
 via /proc; unknown arguments, including any FIDO:/ URL, are ignored.
@@ -40,9 +45,11 @@ Another authenticator is connected: note in the window that touching it
 also answers the prompt.  The note disappears once the phone is detected.
 .TP
 .BI \-\-timeout " SECS"
-Close the window after
+Replace the QR code with a "Code expired" page after
 .I SECS
-seconds.  Default 300.
+seconds, so a code that outlived its transaction is no longer on screen.
+The window stays open until the user closes it.  Default 300;
+0 disables the expiry.
 .TP
 .BI \-\-request\-type " mc|ga"
 Phrase the caption for
@@ -62,8 +69,10 @@ Print the version and exit.
 Truthy to imply
 .BR \-\-layer\-shell .
 .SH EXIT STATUS
-0 on success; non\-zero on cancel, close, timeout or signal.  The daemon
-treats any exit as "the user gave up on the phone".
+The agent only observes that the process exited; it does not distinguish
+exit codes.  The reference helper exits 0 after Esc, the window close button
+or an expired code, and a non\-zero status means it failed to start rather
+than that the user cancelled.
 .SH SEE ALSO
 .BR ucabled (1),
 .BR ucable\-agent (1)

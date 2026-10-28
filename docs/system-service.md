@@ -92,7 +92,8 @@ Wayland/X11 会话。解决办法是拆出一个每用户的 UI agent。
 ### 3.3 QR helper `ucable-agent-helper`
 
 - 从 stdin 第一行读取 QR URL、后续读取状态行的一次性窗口进程。
-- 关窗 / Esc / 超时都以非 0 退出，agent 上报 `TransactionCancelled(tid)`。
+- 关窗 / Esc / 超时都以 `TransactionCancelled(tid)` 收场，agent 上报后由
+  守护进程放弃该事务；退出码取值不作区分（见 `docs/helper-contract.md` §6）。
 
 ## 3.4 多设备选择（与实体密钥共存）
 
