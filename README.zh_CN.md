@@ -9,6 +9,9 @@ ucabled 让你把手机（iPhone / Android）当作 Linux 桌面上的 FIDO2 安
 Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上也不存任何密钥
 材料——通行密钥始终只存在于手机上。
 
+Chromium 已原生支持使用手机上的通行密钥；ucabled 把同样的能力带给了
+Firefox 及其他浏览器。
+
 底层上，它向内核注册一个虚拟的 USB HID FIDO2 设备（`/dev/uhid`），并通过
 **caBLE v2**（二维码 + BLE 距离证明 + WSS 隧道，即 PXP / 原 CTAP hybrid
 传输）把浏览器发来的 WebAuthn 注册/登录请求中继到手机，再把手机的响应送回
@@ -40,61 +43,47 @@ Face ID 或指纹确认即可。无需改动浏览器，无需扩展，机器上
   └─────────────────────┘
 ```
 
-你的电脑只是中继：不在磁盘上保存任何密钥，也不做 FIDO 密码学运算。唯一的例外是少量
-本地兼容性应答与改写——getInfo、Firefox 的探测请求，以及 iOS 必需的
-`rp.name`/`user.displayName` 注入。解析 rpId 是只读的，仅用于给二维码窗口
-取标题。
+你的电脑只负责中继：不在磁盘上保存密钥，FIDO 密码学运算都在手机上完成。
 
 ## 状态
 
-- 已在 NixOS + Firefox + iPhone 上验证注册与登录，覆盖三款测试过的 iOS
-  通行密钥提供方：iCloud 钥匙串、Google 密码管理器和 Strongbox。
-- Android（Google 密码管理器）使用同一协议，预计可用，但未在真机上测试。
-- 需要 Linux（`/dev/uhid`）、蓝牙，以及能看到 hidraw 的浏览器。随包安装的 udev
-  规则会为 Firefox/Chromium snap 打上标签，并已验证（snapd 的 `u2f-devices`
-  白名单基于 USB VID/PID，匹配不到虚拟 HID 设备）。Flatpak 浏览器未测试：其沙箱
-  需要能看到 `/dev/hidraw*`，例如 `flatpak override --user --device=all <app-id>`。
+- 已在 NixOS + Firefox + iPhone 上验证注册与登录，覆盖 iCloud 钥匙串、
+  Google 密码管理器和 Strongbox。
+- Android 预计可用，但未在真机上测试。
+- 需要 Linux（`/dev/uhid`）、蓝牙和能访问 hidraw 的浏览器。Firefox/Chromium
+  的 Snap 版已验证；Flatpak 未测试，可能需要
+  `flatpak override --user --device=all <app-id>`。
 
 ## 安装（NixOS，推荐）
 
-把这个仓库加进你的 flake 并启用模块：
+NixOS 模块支持 flakes，也支持不使用 flakes 的 stable Nix。
+
+### 使用 flakes
+
+在 `flake.nix` 中添加输入：
 
 ```nix
 {
   inputs.ucabled.url = "github:fuzy112/ucabled/master";
+}
+```
 
-  # 在你的 NixOS 模块中：
+然后在 NixOS 配置中导入并启用模块：
+
+```nix
+{
   imports = [ inputs.ucabled.nixosModules.ucabled ];
   services.ucabled.enable = true;
 
-  # 可选：在 GNOME 上安装 Shell 扩展，它自己注册为会话 agent，
-  # 把提示画成 shell 模态对话框（然后每个用户执行
+  # 可选：安装 GNOME Shell 扩展（每个用户还需执行
   # gnome-extensions enable ucable-gnome-agent@fuzy.me）；
   # 取舍见 contrib/ucable-gnome-agent/README.md
   # services.ucabled.gnomeAgent.enable = true;
 
-  # 可选：额外的 helper 参数。内置 GTK4 helper 支持
-  # --layer-shell，在 Sway、Hyprland 等 wlroots 合成器上
-  # 把提示显示为 wlr-layer-shell 覆盖层：
+  # 可选：在 Sway、Hyprland 等合成器上使用覆盖层显示提示：
   # services.ucabled.helperExtraArgs = [ "--layer-shell" ];
 }
 ```
-
-模块会配置好一切：
-
-- 专用的 `ucabled` 用户和用户组
-- 一条 udev 规则，通过 ACL 给 `ucabled` 账户对 `/dev/uhid` 的读写权限
-  （`RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`），不改动该设备的属组
-- `boot.kernelModules = [ "uhid" ]`
-- `hardware.bluetooth.enable = true`（`mkDefault`，可覆盖；caBLE 需要 BLE
-  广播）
-- `systemd.services.ucabled` 服务
-- 为每个用户启用的 `systemd.user.services.ucable-agent` 会话代理
-- D-Bus 策略和 polkit 动作 `org.ucabled.register-agent`（BlueZ 不需要
-  polkit 规则）
-
-执行 `nixos-rebuild switch`，然后注销再登录（或运行
-`systemctl --user start ucable-agent`），让代理完成注册。
 
 ### 不使用 flakes
 
@@ -115,8 +104,22 @@ nixpkgs 锁定到本仓库的 `flake.lock`：
 ```
 
 它读取与 flake 相同的 `flake.lock`，因此下文的二进制缓存同样适用。
-在源码检出中，用 `nix-build -A ucabled`（或 `-A ucable-gnome-agent`）
-即可构建，`nix-shell` 进入与 `nix develop` 相同的开发环境。
+
+无论使用哪种方式，模块都会配置好一切：
+
+- 专用的 `ucabled` 用户和用户组
+- 一条 udev 规则，通过 ACL 给 `ucabled` 账户对 `/dev/uhid` 的读写权限
+  （`RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`），不改动该设备的属组
+- `boot.kernelModules = [ "uhid" ]`
+- `hardware.bluetooth.enable = true`（`mkDefault`，可覆盖；caBLE 需要 BLE
+  广播）
+- `systemd.services.ucabled` 服务
+- 为每个用户启用的 `systemd.user.services.ucable-agent` 会话 agent
+- D-Bus 策略和 polkit 动作 `org.ucabled.register-agent`（BlueZ 不需要
+  polkit 规则）
+
+执行 `nixos-rebuild switch`，然后注销再登录（或运行
+`systemctl --user start ucable-agent`），让 agent 完成注册。
 
 ### 二进制缓存
 
@@ -131,13 +134,6 @@ nix.settings = {
   ];
 };
 ```
-
-在其他系统上，`cachix use ucabled` 会把同样两项设置写入
-`$HOME/.config/nix/nix.conf`。
-
-每次向 `master` 推送时 CI 都会填充缓存。只缓存本仓库的构建产物（依赖仍来自
-`cache.nixos.org`），且替换要求相同的提交与 `flake.lock`，因此本地改过的
-源码树照常本地构建。
 
 ## 安装（Debian / Ubuntu）
 
@@ -155,12 +151,6 @@ sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 sudo apt install ../ucable-gnome-agent_*.deb
 ```
 
-从 Git 检出构建、但当前提交不是干净的发布标签时，属于开发构建：上面两个
-hook 会把 HEAD 的提交日期和短哈希加到版本号里，例如
-`0.2.0~20261022.gaf437b0`；它排在更早的开发快照之后、`0.2.0` 正式版之前。
-发布 tarball 没有 `.git`，版本号保持打包时的原样。`nix run .#deb` 会自动
-加上同样的后缀。
-
 构建需要 cargo 1.92 或更新版本，因为 GTK4 绑定要求如此。若发行版自带的
 工具链更旧（Debian trixie、Ubuntu 24.04），改用 rustup 安装的工具链：
 
@@ -172,22 +162,9 @@ dpkg-buildpackage -b -us -uc -d \
     --hook-done=debian/dev-version.sh
 ```
 
-在 NixOS 上，`nix run .#deb` 会在 rootless podman 容器里构建同样的三个包，
-产物写到 `debian-build/<发行版>/`，宿主机无需安装上述构建依赖；前提是
-rootless podman 可用。默认构建两个受支持的发行版，也可只构建其一
-（`nix run .#deb -- debian13` 或 `ubuntu26.04`）。Ubuntu 24.04 LTS 不是
-目标：gtk4-layer-shell 从 Ubuntu 25.04 起才进入仓库。
-加 `sudo` 运行则改用 rootful podman，不需要配置 subuid/subgid，
-产物会 chown 回调用者。
-
-源码包会生成三个二进制包：`ucabled`（系统守护进程、systemd 单元、udev 规则
-以及 D-Bus/polkit 策略）、`ucable-agent`（默认的 GTK4 会话代理及其 helper）
-和 `ucable-gnome-agent`（可选的 GNOME Shell 扩展）。`ucabled` 推荐
-`ucable-agent`，所以 `apt install ucabled` 会一并装上默认代理。守护进程的
-postinst 会重载 D-Bus 策略、polkit 与 udev 规则，然后在新装时启动、升级时
-重启守护进程；代理的 postinst 会全局启用用户单元，并在已登录会话中重载和
-重启它。caBLE 身份密钥位于 `/var/lib/ucabled/identity.key`：`apt remove`
-会保留，`apt purge` 会删除。
+源码包会生成 `ucabled`（守护进程）、`ucable-agent`（默认 GTK4 会话 agent）
+和 `ucable-gnome-agent`（可选 GNOME Shell 扩展）。`apt remove` 会保留
+身份密钥，`apt purge` 会将其删除。
 
 ## 安装（其他发行版）
 
@@ -199,7 +176,7 @@ sudo ./install.sh            # --prefix DIR 安装到其他位置
 ```
 
 它会安装三个二进制、创建 `ucabled` 服务账户、放置 udev、D-Bus、polkit 和
-systemd 文件，并启用守护进程和会话代理。`sudo ./install.sh --uninstall`
+systemd 文件，并启用守护进程和会话 agent。`sudo ./install.sh --uninstall`
 可撤销；`./install.sh --help` 列出可覆盖的路径。
 
 <details><summary>
@@ -235,7 +212,7 @@ sudo cp dist/ucabled.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ucabled
 
-# 每用户会话代理
+# 每用户会话 agent
 mkdir -p ~/.config/systemd/user
 cp dist/ucable-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -252,27 +229,20 @@ systemctl --user enable --now ucable-agent
 二维码窗口；扫码，在手机上确认（Face ID / 指纹），浏览器随即完成操作。关闭
 窗口或点击取消即可中止。
 
-- 窗口由 `ucable-agent` 会话代理显示。如果它没在运行，或者你不是活动的本地
+- 窗口由 `ucable-agent` 会话 agent 显示。如果它没在运行，或者你不是活动的本地
   会话，请求会以 CTAP 超时失败，而不是悄悄开始一次事务。守护进程加
   `--no-ui` 时会把二维码打印到控制终端。
 - 取消、超时和断开都会映射回 Firefox 对应的 CTAP 错误码。
 
 ### UI helper
 
-`ucable-agent` 本身不绘制任何东西：每次提示时它启动一个 helper，并通过
-argv、stdin 和退出状态与之通信。内置的 `ucable-agent-helper` 是一个原生
-GTK4 程序：普通情况下是一个带标题栏和关闭按钮的窗口；加 `--layer-shell`
-时在 Sway 等 wlroots 合成器上变成 wlr-layer-shell 覆盖层——一张无边框的
-圆角卡片，可用 Esc 或由代理关闭。它的界面字符串用 gettext 本地化（Nix 包会
-安装这些翻译目录）。用 `--features adwaita` 构建可获得 GNOME 原生窗口外观。
+`ucable-agent` 会在每次提示时启动 helper。内置的 `ucable-agent-helper` 是
+原生 GTK4 窗口；`--layer-shell` 让它在 Sway 等合成器上显示为覆盖层，
+`adwaita` feature 提供 GNOME 原生外观。它的界面通过 gettext 本地化。
 
-任何符合 contract-v3 的 helper 都能替换它：设置 `UCABLED_HELPER`（绝对路径
-或裸命令名），或在 NixOS 上设置 `services.ucabled.helper`。额外的 helper
-参数放在 `services.ucabled.helperExtraArgs`（例如 `[ "--layer-shell" ]`）。
-
-在 GNOME 下还有 `contrib/ucable-gnome-agent`：一个 Shell 扩展，它自己注册
-为会话 agent（不再有 helper 进程），把提示画成盖在桌面之上的 shell 模态
-对话框。取舍见它的 README（非 GNOME 会话没有兜底、agent 槽位唯一）。
+helper 可通过 `UCABLED_HELPER` 或 `services.ucabled.helper` 替换，额外参数
+放在 `services.ucabled.helperExtraArgs`。GNOME 上也可用
+`contrib/ucable-gnome-agent` Shell 扩展，无需 helper 进程；取舍见其 README。
 
 ### SSH 安全密钥
 
@@ -324,10 +294,10 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
   节点，该节点仍由 systemd 的 FIDO 规则授予 uaccess。守护进程以非特权身份
   运行在 systemd 沙箱中。如果该节点仍可被其他账户写入（例如残留的 udev
   `uaccess` 标签），守护进程会在启动时记录醒目警告，而不会自行修改权限。
-- **只有活动的本地会话才能显示二维码窗口。** 会话代理以 D-Bus 代理身份
+- **只有活动的本地会话才能显示二维码窗口。** 会话 agent 以 D-Bus agent 身份
   注册，守护进程通过 polkit（`allow_active=yes`）授权，并在每次提示时重新
   检查。SSH 和远程会话在结构上就会被拒绝。
-- 事务密钥（在二维码里）以 D-Bus 单播消息从守护进程送到代理，再通过管道
+- 事务密钥（在二维码里）以 D-Bus 单播消息从守护进程送到 agent，再通过管道
   交给 helper——绝不经过命令行或日志。它是一个短时、一次性的 bearer token：
   在事务结束前请把屏幕视为敏感信息。
 
@@ -356,13 +326,6 @@ ssh-keygen -Y verify -f allowed_signers -I "$USER" -n file -s ./file.sig < ./fil
   匹配到它。
 - OpenSSH 的 FIDO 密钥类型中只有 `ecdsa-sk` 可用；`ed25519-sk` 被拒绝，
   因为手机的通行密钥提供方没有实现 Ed25519 算法。
-- 没有本地 PIN/UV，也不做证明信任决策——这些全由手机完成。
-- 插着其他认证器（例如一个物理安全密钥）时，Firefox 只允许通过触碰物理
-  密钥来挑选。ucabled 因此会立刻显示二维码窗口，并在手机真正连上之后才把
-  自己标记为已选中，于是"扫码"和"触碰实体密钥"是公平竞争。二维码里的
-  request type 只能取自 Firefox 的选择探测（永远是一个 `makeCredential`），
-  所以 getAssertion 也可能在手机上显示成 `mc`。加 `--no-ui` 则无法参与选择，
-  会自动退让。
 
 ## 开发
 
@@ -374,24 +337,22 @@ nix build .#ucabled
 nix flake check
 ```
 
-发布（在 `master` 上、dev shell 内）：`admin/release.sh X.Y.Z` 会提升版本、
-写入 changelog、提交并创建签名标签 `vX.Y.Z`，随后把 `master` 合入 `next`
-并在那里开启下一个开发版本（默认下一个 minor；可用第二个参数 `X.Y.Z-pre`
-指定）。先推送 `master`、`next` 和 `website` 并等待相应检查通过，再推送标签。
-`.github/workflows/release.yml` 会检查标签/manifest/changelog 的一致性以及
-标签签名，然后以 changelog 对应小节作为发布说明发布 GitHub release。
-随后由 `admin/release-debs.sh` 在本地构建、签名并上传发布产物：
-版本取自 HEAD 上的 tag，运行 `nix run .#deb -- all`，并用
-`git archive` 从 tag 打包源码 tarball，为每个产物生成 GPG
-分离签名后上传到该 release。上传的 tarball 是稳定且带签名的源码
-下载；GitHub 自动生成的 "Source code" 归档是按需重新生成的，字节
-内容不保证稳定，因此保持不签名。这一步留在本地执行，签名密钥就
-不会离开维护者的机器。
+发布（在 `master` 上、dev shell 内）：`admin/release.sh X.Y.Z` 提交版本与
+changelog，并创建签名标签 `vX.Y.Z`。先推送 `master`、`next` 和 `website`，
+CI 通过后再推送标签；CI 会校验标签并发布 GitHub release。随后在本地运行
+`admin/release-debs.sh`，构建、签名并上传 deb 包和源码 tarball。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
-（以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。加
-`--features adwaita` 可获得 GNOME 原生窗口外观——Nix 包保持不依赖
-libadwaita，以维持桌面中立。
+（以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。Nix 包默认
+不依赖 libadwaita，以保持桌面中立；要启用 GNOME 原生窗口外观，覆盖包并设置
+`adwaita = true`：
+
+```nix
+services.ucabled.package =
+  inputs.ucabled.packages.${pkgs.stdenv.hostPlatform.system}.ucabled.override {
+    adwaita = true;
+  };
+```
 
 仓库里的辅助工具（不随包发布）：
 

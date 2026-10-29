@@ -10,6 +10,9 @@ pops up; scan it with your phone and confirm with Face ID or fingerprint.  There
 are no browser changes, no extension, and no key material on the machine — the
 passkey always lives on the phone.
 
+Chromium already supports phone passkeys natively; ucabled brings the same
+capability to Firefox and other browsers.
+
 Under the hood it registers a virtual USB HID FIDO2 device with the kernel
 (`/dev/uhid`) and relays WebAuthn registration/sign-in requests from the
 browser to the phone over **caBLE v2** (QR code + BLE proximity proof + WSS
@@ -42,65 +45,48 @@ Protocol), then sends the phone's response back to the browser.
   └─────────────────────┘
 ```
 
-The machine is only a relay: no keys at rest, no FIDO cryptography.  The only
-exceptions are a few local compatibility answers and rewrites — getInfo,
-Firefox's probe requests, and an iOS-required `rp.name`/`user.displayName`
-injection.  Parsing the rpId is read-only, just to title the QR window.
+The machine only relays: it stores no keys, and all FIDO cryptographic
+operations happen on the phone.
 
 ## Status
 
-- Verified on NixOS + Firefox + iPhone, for registration and sign-in, with
+- Verified on NixOS + Firefox + iPhone for registration and sign-in, with
   iCloud Keychain, Google Password Manager and Strongbox.
-- Android (Google Password Manager) speaks the same protocol and should work,
-  but is untested on real hardware.
-- Needs Linux (`/dev/uhid`), Bluetooth, and a browser that can see hidraw.
-  The shipped udev rule tags the device for the Firefox and Chromium snaps,
-  which was verified (snapd's `u2f-devices` allowlist is USB VID/PID based
-  and cannot match a virtual HID device).  Flatpak browsers are untested:
-  their sandbox has to expose `/dev/hidraw*` before it can see the token,
-  for example through `flatpak override --user --device=all <app-id>`.
+- Android should work but is untested on real hardware.
+- Needs Linux (`/dev/uhid`), Bluetooth and a browser that can access hidraw.
+  Firefox and Chromium snaps are verified; Flatpak is untested and may need
+  `flatpak override --user --device=all <app-id>`.
 
 ## Install (NixOS, recommended)
 
-Add this repository to your flake and enable the module:
+The NixOS module works with flakes and with stable Nix without flakes.
+
+### With flakes
+
+Add this repository as an input in `flake.nix`:
 
 ```nix
 {
   inputs.ucabled.url = "github:fuzy112/ucabled/master";
-
-  # in your NixOS module:
-  imports = [ inputs.ucabled.nixosModules.ucabled ];
-  services.ucabled.enable = true;
-
-  # optional: on GNOME, install the Shell extension that registers as the
-  # session agent itself and draws prompts as shell modal dialogs (then
-  # enable it per user: gnome-extensions enable ucable-gnome-agent@fuzy.me);
-  # see contrib/ucable-gnome-agent/README.md for the trade-offs
-  # services.ucabled.gnomeAgent.enable = true;
-
-  # optional: extra helper arguments. The bundled GTK4 helper takes
-  # --layer-shell, presenting the prompt as a wlr-layer-shell overlay on
-  # wlroots compositors such as Sway or Hyprland:
-  # services.ucabled.helperExtraArgs = [ "--layer-shell" ];
 }
 ```
 
-The module configures everything:
+Then import and enable the module in your NixOS configuration:
 
-- a dedicated `ucabled` user and group
-- a udev rule that gives the `ucabled` account rw on `/dev/uhid` via an ACL
-  (`RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`), leaving the node's group
-  alone
-- `boot.kernelModules = [ "uhid" ]`
-- `hardware.bluetooth.enable = true` (`mkDefault`, overridable; caBLE needs BLE
-  adverts)
-- the `systemd.services.ucabled` service
-- the per-user `systemd.user.services.ucable-agent` agent, enabled for every user
-- a D-Bus policy and the polkit action `org.ucabled.register-agent` (BlueZ
-  needs no polkit rule)
+```nix
+{
+  imports = [ inputs.ucabled.nixosModules.ucabled ];
+  services.ucabled.enable = true;
 
-Run `nixos-rebuild switch`, then log out and back in (or run
-`systemctl --user start ucable-agent`) so the agent registers.
+  # optional: install the GNOME Shell extension (then enable it per user:
+  # gnome-extensions enable ucable-gnome-agent@fuzy.me);
+  # see contrib/ucable-gnome-agent/README.md for the trade-offs
+  # services.ucabled.gnomeAgent.enable = true;
+
+  # optional: show prompts in an overlay on compositors such as Sway or Hyprland:
+  # services.ucabled.helperExtraArgs = [ "--layer-shell" ];
+}
+```
 
 ### Without flakes
 
@@ -121,9 +107,24 @@ The same module works with stable Nix through the repository's
 ```
 
 Because it reads the same `flake.lock`, the binary cache below applies
-to it as well.  From a checkout, the packages build with plain
-`nix-build -A ucabled` (or `-A ucable-gnome-agent`), and `nix-shell`
-enters the same development shell as `nix develop`.
+to it as well.
+
+Whichever method you use, the module configures everything:
+
+- a dedicated `ucabled` user and group
+- a udev rule that gives the `ucabled` account rw on `/dev/uhid` via an ACL
+  (`RUN+="... setfacl -m u:ucabled:rw /dev/uhid"`), leaving the node's group
+  alone
+- `boot.kernelModules = [ "uhid" ]`
+- `hardware.bluetooth.enable = true` (`mkDefault`, overridable; caBLE needs BLE
+  adverts)
+- the `systemd.services.ucabled` service
+- the per-user `systemd.user.services.ucable-agent` agent, enabled for every user
+- a D-Bus policy and the polkit action `org.ucabled.register-agent` (BlueZ
+  needs no polkit rule)
+
+Run `nixos-rebuild switch`, then log out and back in (or run
+`systemctl --user start ucable-agent`) so the agent registers.
 
 ### Binary cache
 
@@ -138,14 +139,6 @@ nix.settings = {
   ];
 };
 ```
-
-Elsewhere, `cachix use ucabled` writes the same two settings into
-`$HOME/.config/nix/nix.conf`.
-
-CI fills the cache on every push to `master`.  Only this repository's artifacts
-are cached (dependencies still come from `cache.nixos.org`), and substitution
-needs the same commit and `flake.lock`, so a locally modified tree is built as
-usual.
 
 ## Install (Debian / Ubuntu)
 
@@ -164,13 +157,6 @@ sudo apt install ../ucabled_*.deb ../ucable-agent_*.deb
 sudo apt install ../ucable-gnome-agent_*.deb
 ```
 
-A build from a Git checkout that is not a clean release tag is a development
-build: the hooks append the committer date and short hash of HEAD to the
-version, for example `0.2.0~20261022.gaf437b0`, which sorts above earlier
-development snapshots and below the `0.2.0` release.  A release tarball has no
-`.git`, so its version stays as packaged.  `nix run .#deb` applies the same
-suffix automatically.
-
 The build needs cargo 1.92 or newer, because the GTK4 bindings require it.
 Where the distribution is older (Debian trixie, Ubuntu 24.04), build with a
 rustup toolchain instead:
@@ -183,26 +169,9 @@ dpkg-buildpackage -b -us -uc -d \
     --hook-done=debian/dev-version.sh
 ```
 
-On NixOS, `nix run .#deb` builds the same three packages in rootless podman
-containers and writes them to `debian-build/<distro>/`, so the host needs
-none of the build dependencies above.  It only needs a working rootless
-podman setup.  Both supported distributions are built by default; pass a
-distribution to build just one (`nix run .#deb -- debian13` or
-`ubuntu26.04`).  Ubuntu 24.04 LTS is not a target: gtk4-layer-shell first
-appeared in Ubuntu 25.04.
-With `sudo nix run .#deb`, podman runs rootful instead, so no subordinate
-UID/GID configuration is needed; the output is chowned back to the caller.
-
-The source package yields three binaries: `ucabled` (the system daemon, its
-systemd unit, the udev rule and the D-Bus/polkit policies), `ucable-agent`
-(the default GTK4 session agent and its helper) and `ucable-gnome-agent`
-(the optional GNOME Shell extension).  `ucabled` recommends `ucable-agent`,
-so `apt install ucabled` gets the default agent as well.  The daemon's
-postinst reloads the D-Bus policy, polkit and the udev rule, then starts the
-daemon on a fresh install or restarts it on upgrade; the agent's postinst
-enables the user unit globally and reloads and restarts it in logged-in
-sessions.  The caBLE identity key lives in `/var/lib/ucabled/identity.key`,
-which `apt remove` keeps and `apt purge` deletes.
+The source package builds `ucabled` (the daemon), `ucable-agent` (the
+default GTK4 session agent), and `ucable-gnome-agent` (the optional GNOME
+Shell extension).  `apt remove` keeps the identity key; `apt purge` deletes it.
 
 ## Install (other distros)
 
@@ -277,24 +246,15 @@ and the browser finishes.  Close the window or click Cancel to abort.
 
 ### UI helpers
 
-`ucable-agent` draws nothing itself: for each prompt it spawns a helper and
-talks to it over argv, stdin and the exit status.  The bundled
-`ucable-agent-helper` is a native GTK4 program: normally a window with a header
-bar and close button; with `--layer-shell` a wlr-layer-shell overlay on wlroots
-compositors such as Sway — a bare, rounded card with no chrome, dismissed by
-Esc or the agent.  Its strings are localized with gettext (the Nix package
-installs the catalogs).  Build with `--features adwaita` for GNOME-native window
-chrome.
+`ucable-agent` spawns a helper for each prompt.  The bundled
+`ucable-agent-helper` is a native GTK4 window; `--layer-shell` makes it an
+overlay on compositors such as Sway, and the `adwaita` feature gives it
+GNOME-native chrome.  Its strings are localized with gettext.
 
-Any contract-v3 helper can replace it: set `UCABLED_HELPER` (an absolute path
-or a bare command name), or `services.ucabled.helper` on NixOS.  Extra helper
-flags go in `services.ucabled.helperExtraArgs` (for example
-`[ "--layer-shell" ]`).
-
-On GNOME there is also `contrib/ucable-gnome-agent`, a Shell extension that
-registers as the session agent itself — no helper process — and draws the
-prompts as shell modal dialogs above the desktop.  See its README for the
-trade-offs (no non-GNOME fallback, single agent slot).
+Replace the helper through `UCABLED_HELPER` or `services.ucabled.helper`, with
+extra flags in `services.ucabled.helperExtraArgs`.  On GNOME, the
+`contrib/ucable-gnome-agent` Shell extension needs no helper process; see its
+README for the trade-offs.
 
 ### SSH security keys
 
@@ -386,15 +346,6 @@ Logs contain only command bytes and lengths, never raw CBOR payloads.
   reject a hybrid credential whose hint omits hybrid still find it.
 - Of OpenSSH's FIDO key types only `ecdsa-sk` works; `ed25519-sk` is rejected
   because phone passkey providers do not implement the Ed25519 algorithm.
-- There is no local PIN/UV and no attestation trust decision — the phone does
-  all of that.
-- With another authenticator (e.g. a physical security key) plugged in, Firefox
-  only lets the user pick by touching a physical key.  ucabled therefore shows
-  its QR window immediately and only marks itself selected once the phone has
-  connected, so scanning the code and touching the key compete fairly.  The QR
-  code's request type is taken from Firefox's selection probe, which is always
-  a `makeCredential`, so a getAssertion ceremony may be announced as `mc` on
-  the phone.  With `--no-ui` ucabled cannot participate and stands down.
 
 ## Development
 
@@ -406,28 +357,23 @@ nix build .#ucabled
 nix flake check
 ```
 
-Releasing (on `master`, inside the dev shell): `admin/release.sh X.Y.Z` bumps
-the version, stamps the changelog, commits, and creates the signed tag
-`vX.Y.Z`.  It then merges `master` into `next` and opens the next development
-version there (the next minor by default; pass `X.Y.Z-pre` as a second
-argument to choose another).  Push `master`, `next` and `website` first and
-wait for their checks, then push the tag.
-`.github/workflows/release.yml` checks tag/manifest/changelog consistency and
-the tag signature, then publishes the GitHub release with the changelog
-section as notes.  The release artifacts are then built, signed and
-uploaded locally by `admin/release-debs.sh`: it takes the version from
-the tag on HEAD, runs `nix run .#deb -- all`, packs the source tarball
-with `git archive` on the tag, signs each artifact with a detached GPG
-signature and uploads everything to the release.  The uploaded tarball is
-the stable, signed source download; GitHub's automatic "Source code"
-archives are regenerated on demand, their bytes are not guaranteed
-stable, and they stay unsigned.  Keeping this step local means the
-signing key never leaves the maintainer's machine.
+Releasing (on `master`, inside the dev shell): `admin/release.sh X.Y.Z` commits
+the version and changelog and creates the signed tag `vX.Y.Z`.  Push `master`,
+`next` and `website` first; push the tag once CI passes.  CI then verifies the
+tag and publishes the GitHub release.  Finally run `admin/release-debs.sh`
+locally to build, sign and upload the deb packages and source tarball.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell
-provides them.  Add `--features adwaita` for GNOME-native window chrome — the
-Nix package stays libadwaita-free to remain desktop-neutral.
+provides them.  The Nix package stays libadwaita-free to remain desktop-neutral;
+for GNOME-native window chrome, override the package with `adwaita = true`:
+
+```nix
+services.ucabled.package =
+  inputs.ucabled.packages.${pkgs.stdenv.hostPlatform.system}.ucabled.override {
+    adwaita = true;
+  };
+```
 
 Helper tools in the repo (not shipped in the package):
 
