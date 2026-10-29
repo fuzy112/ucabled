@@ -7,6 +7,9 @@
   gtk4,
   gtk4-layer-shell,
   gettext,
+  libadwaita,
+  # Build the helper with GNOME-native window chrome.
+  adwaita ? false,
   # Set to false to keep the symbol table (e.g. for profiling builds).
   stripBinaries ? true,
 }:
@@ -34,8 +37,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   };
   cargoLock.lockFile = ../Cargo.lock;
 
-  # libadwaita is deliberately left out here to keep the helper
-  # desktop-neutral; build with the "adwaita" feature for GNOME-native chrome.
+  # libadwaita is opt-in to keep the helper desktop-neutral by default.
+  buildFeatures = lib.optional adwaita "adwaita";
 
   # Where the GTK4 helper looks for its gettext catalogs at runtime.
   UCABLED_LOCALEDIR = "${placeholder "out"}/share/locale";
@@ -49,7 +52,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
     dbus
     gtk4
     gtk4-layer-shell
-  ];
+  ]
+  ++ lib.optional adwaita libadwaita;
 
   # Rust release builds carry no DWARF debug info, so stdenv's default
   # `strip -S` removes nothing and the symbol table ships in the output.
