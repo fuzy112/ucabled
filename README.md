@@ -248,8 +248,9 @@ and the browser finishes.  Close the window or click Cancel to abort.
 
 `ucable-agent` spawns a helper for each prompt.  The bundled
 `ucable-agent-helper` is a native GTK4 window; `--layer-shell` makes it an
-overlay on compositors such as Sway, and the `adwaita` feature gives it
-GNOME-native chrome.  Its strings are localized with gettext.
+overlay on compositors such as Sway (the `layer-shell` feature, on by
+default), and the `adwaita` feature gives it GNOME-native chrome.  Its strings
+are localized with gettext.
 
 Replace the helper through `UCABLED_HELPER` or `services.ucabled.helper`, with
 extra flags in `services.ucabled.helperExtraArgs`.  On GNOME, the
@@ -365,8 +366,11 @@ locally to build, sign and upload the deb packages and source tarball.
 
 The bundled GTK4 helper is in the default build, so a plain `cargo build` needs
 GTK4 headers (plus wlr-layer-shell bindings) and gettext; the Nix dev shell
-provides them.  The Nix package stays libadwaita-free to remain desktop-neutral;
-for GNOME-native window chrome, override the package with `adwaita = true`:
+provides them.  Without wlr-layer-shell, build the crate with
+`--no-default-features --features ble`: `--layer-shell` then logs a warning and
+falls back to a normal window.  The Nix package stays libadwaita-free to remain
+desktop-neutral; for GNOME-native window chrome, override the package with
+`adwaita = true`:
 
 ```nix
 services.ucabled.package =
@@ -374,6 +378,9 @@ services.ucabled.package =
     adwaita = true;
   };
 ```
+
+`layerShell = false` drops gtk4-layer-shell and its dependency tree from the
+package instead.
 
 Helper tools in the repo (not shipped in the package):
 

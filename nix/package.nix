@@ -10,6 +10,10 @@
   libadwaita,
   # Build the helper with GNOME-native window chrome.
   adwaita ? false,
+  # Build the helper with wlr-layer-shell overlay support.  Turning it off
+  # drops gtk4-layer-shell and its dependency tree; --layer-shell then logs a
+  # warning and falls back to a normal window.
+  layerShell ? true,
   # Set to false to keep the symbol table (e.g. for profiling builds).
   stripBinaries ? true,
 }:
@@ -38,7 +42,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
   cargoLock.lockFile = ../Cargo.lock;
 
   # libadwaita is opt-in to keep the helper desktop-neutral by default.
-  buildFeatures = lib.optional adwaita "adwaita";
+  # Dropping layer-shell means abandoning the default feature set, so the
+  # remaining default (ble) has to be named again.
+  buildNoDefaultFeatures = !layerShell;
+  buildFeatures =
+    lib.optional adwaita "adwaita"
+    ++ lib.optional (!layerShell) "ble";
 
   # Where the GTK4 helper looks for its gettext catalogs at runtime.
   UCABLED_LOCALEDIR = "${placeholder "out"}/share/locale";
@@ -51,8 +60,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   buildInputs = [
     dbus
     gtk4
-    gtk4-layer-shell
   ]
+  ++ lib.optional layerShell gtk4-layer-shell
   ++ lib.optional adwaita libadwaita;
 
   # Rust release builds carry no DWARF debug info, so stdenv's default

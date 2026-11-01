@@ -471,27 +471,39 @@ fn set_window_content(
 }
 
 /// Present the window as a wlr-layer-shell overlay when requested. It is a
-/// no-op unless asked for (via `--layer-shell` or `UCABLED_HELPER_LAYER_SHELL`)
-/// and the compositor speaks the protocol; elsewhere (e.g. GNOME/Mutter) the
-/// window stays a normal toplevel. Returns whether the surface is a layer
-/// surface, which decides whether the window carries a header bar.
+/// no-op unless asked for (via `--layer-shell` or `UCABLED_HELPER_LAYER_SHELL`),
+/// the build carries the `layer-shell` feature and the compositor speaks the
+/// protocol; elsewhere (e.g. GNOME/Mutter) the window stays a normal toplevel.
+/// Returns whether the surface is a layer surface, which decides whether the
+/// window carries a header bar.
 fn maybe_layer_shell(window: &gtk::ApplicationWindow, requested: bool) -> bool {
-    use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
-
     if !requested {
         return false;
     }
-    if !gtk4_layer_shell::is_supported() {
-        eprintln!("layer-shell requested but unsupported here; using a normal window");
-        return false;
+
+    #[cfg(feature = "layer-shell")]
+    {
+        use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
+
+        if !gtk4_layer_shell::is_supported() {
+            eprintln!("layer-shell requested but unsupported here; using a normal window");
+            return false;
+        }
+        window.init_layer_shell();
+        window.set_namespace(Some("ucabled"));
+        window.set_layer(Layer::Overlay);
+        window.set_keyboard_mode(KeyboardMode::Exclusive);
+        // No anchors: the compositor centres the fixed-size surface instead of
+        // stretching it to the output.
+        true
     }
-    window.init_layer_shell();
-    window.set_namespace(Some("ucabled"));
-    window.set_layer(Layer::Overlay);
-    window.set_keyboard_mode(KeyboardMode::Exclusive);
-    // No anchors: the compositor centres the fixed-size surface instead of
-    // stretching it to the output.
-    true
+
+    #[cfg(not(feature = "layer-shell"))]
+    {
+        let _ = window;
+        eprintln!("layer-shell requested but this build has no layer-shell support");
+        false
+    }
 }
 
 // --------------------------------------------------------------------------

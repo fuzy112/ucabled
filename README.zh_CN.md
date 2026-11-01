@@ -237,8 +237,9 @@ systemctl --user enable --now ucable-agent
 ### UI helper
 
 `ucable-agent` 会在每次提示时启动 helper。内置的 `ucable-agent-helper` 是
-原生 GTK4 窗口；`--layer-shell` 让它在 Sway 等合成器上显示为覆盖层，
-`adwaita` feature 提供 GNOME 原生外观。它的界面通过 gettext 本地化。
+原生 GTK4 窗口；`--layer-shell` 让它在 Sway 等合成器上显示为覆盖层
+（`layer-shell` feature，默认开启），`adwaita` feature 提供 GNOME 原生
+外观。它的界面通过 gettext 本地化。
 
 helper 可通过 `UCABLED_HELPER` 或 `services.ucabled.helper` 替换，额外参数
 放在 `services.ucabled.helperExtraArgs`。GNOME 上也可用
@@ -343,9 +344,10 @@ CI 通过后再推送标签；CI 会校验标签并发布 GitHub release。随�
 `admin/release-debs.sh`，构建、签名并上传 deb 包和源码 tarball。
 
 内置 GTK4 helper 属于默认构建，所以直接 `cargo build` 需要 GTK4 头文件
-（以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。Nix 包默认
-不依赖 libadwaita，以保持桌面中立；要启用 GNOME 原生窗口外观，覆盖包并设置
-`adwaita = true`：
+（以及 wlr-layer-shell 绑定）和 gettext；Nix dev shell 都提供了。没有
+wlr-layer-shell 时用 `--no-default-features --features ble` 构建，
+`--layer-shell` 会打一行警告并退回普通窗口。Nix 包默认不依赖 libadwaita，
+以保持桌面中立；要启用 GNOME 原生窗口外观，覆盖包并设置 `adwaita = true`：
 
 ```nix
 services.ucabled.package =
@@ -353,6 +355,8 @@ services.ucabled.package =
     adwaita = true;
   };
 ```
+
+反过来，`layerShell = false` 会把 gtk4-layer-shell 及其依赖树从包里去掉。
 
 仓库里的辅助工具（不随包发布）：
 

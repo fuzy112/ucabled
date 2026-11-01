@@ -12,8 +12,11 @@ keywords = ["fido2", "passkey", "cable", "webauthn", "bluetooth"]
 categories = ["authentication", "os::linux-apis"]
 
 [features]
-default = ["ble"]
+default = ["ble", "layer-shell"]
 ble = ["dep:bluer"]
+# wlr-layer-shell overlay for wlroots compositors. On by default; a build
+# without it still accepts --layer-shell but falls back to a normal window.
+layer-shell = ["dep:gtk4-layer-shell"]
 # CTAP 2.3 optional BLE data channel (L2CAP CoC). Experimental: the wire
 # framing is not yet verified against real phones, so it is off by default.
 l2cap = ["ble", "bluer/l2cap"]
@@ -84,7 +87,8 @@ libc = "0.2"
 gtk = { package = "gtk4", version = "0.11" }
 # GNOME-native window chrome; enabled through the `adwaita` feature.
 adw = { package = "libadwaita", version = "0.9", optional = true }
-gtk4-layer-shell = "0.8"
+# Optional so a helper without the overlay can leave this dependency tree out.
+gtk4-layer-shell = { version = "0.8", optional = true }
 # glibc and musl ship the gettext runtime, so link against it instead of
 # letting gettext-sys compile and statically link its bundled GNU gettext
 # (which also breaks under the LTO flags Debian's build tools add).
