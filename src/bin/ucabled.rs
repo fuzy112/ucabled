@@ -944,13 +944,15 @@ fn give_up_reports(transport: &mut Transport, pending: &Pending) -> Vec<Vec<u8>>
 
 /// Make a CTAP command from the host ready to relay: iOS requires
 /// `rp.name`/`user.displayName`, OpenSSH reuses one fixed user handle for every
-/// sk key, and Firefox tags USB credentials with a transports hint some phones
-/// reject.  The patchers borrow the input when nothing changes; the session
-/// task needs the result across awaits, so it is owned.
+/// sk key, Firefox tags USB credentials with a transports hint some phones
+/// reject, and its getAssertion options are not canonical CBOR.  The patchers
+/// borrow the input when nothing changes; the session task needs the result
+/// across awaits, so it is owned.
 fn prepare_command(payload: Vec<u8>) -> Vec<u8> {
     let payload = ucabled::ctap::patch_makecredential(&payload);
     let payload = ucabled::ctap::dissociate_ssh_user(&payload);
     let payload = ucabled::ctap::strip_transport_hints(&payload);
+    let payload = ucabled::ctap::canonicalize_assertion_options(&payload);
     payload.into_owned()
 }
 

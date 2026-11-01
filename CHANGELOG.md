@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.5.0-pre]
 
+### Fixed
+
+- Firefox's getAssertion options are now relayed in canonical CBOR.  It sends
+  `{"uv": true, "up": true}`: the keys are out of canonical order, and `up`
+  repeats its CTAP default, so the redundant entry is dropped while a
+  meaningful `up: false` is kept.
+
 ### Security
 
 - The `ucabled` system service may now open no device but `/dev/uhid` and

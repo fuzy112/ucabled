@@ -468,6 +468,87 @@ pub fn patch_makecredential(command: &[u8]) -> Cow<'_, [u8]> {
     result.map_or(Cow::Borrowed(command), Cow::Owned)
 }
 
+/// Rebuild a getAssertion options map into canonical CBOR and drop the
+/// redundant `up: true`.
+///
+/// Firefox sends `{"uv": true, "up": true}`: two keys of equal length in the
+/// wrong order, plus `up` at its CTAP default.  Only the options map is
+/// rebuilt; every other key and value is copied verbatim, and nothing in it is
+/// covered by clientDataHash, so the rewrite is transparent to the RP.
+/// `up: false` is meaningful and kept.  Returns a borrow when the command is
+/// not a getAssertion, has no options, or is already canonical.
+pub fn canonicalize_assertion_options(command: &[u8]) -> Cow<'_, [u8]> {
+    let Some((&CMD_GET_ASSERTION, params)) = command.split_first() else {
+        return Cow::Borrowed(command);
+    };
+
+    let result = (|| -> Option<Vec<u8>> {
+        let mut c = cbor::Decoder::new(params);
+        let pairs = c.map_header()?;
+
+        let mut span = None;
+        for _ in 0..pairs {
+            let key = c.uint()?;
+            let start = c.pos();
+            c.skip_value()?;
+            if key == GA_KEY_OPTIONS {
+                span = Some(start..c.pos());
+            }
+        }
+        let span = span?;
+        let value = &params[span.clone()];
+
+        let mut c = cbor::Decoder::new(value);
+        let count = c.map_header()?;
+        let mut entries: Vec<(&str, std::ops::Range<usize>)> = Vec::new();
+        let mut redundant = false;
+        for _ in 0..count {
+            let k = c.text_str()?;
+            let start = c.pos();
+            c.skip_value()?;
+            let end = c.pos();
+            redundant |= k == "up" && value[start..end] == [cbor::TRUE];
+            entries.push((k, start..end));
+        }
+
+        // Canonical order: shorter keys first, then bytewise. Text keys encode
+        // their length in the header byte, so this matches comparing the
+        // encoded keys.
+        let mut sorted = entries.clone();
+        sorted.sort_by(|a, b| {
+            a.0.len()
+                .cmp(&b.0.len())
+                .then_with(|| a.0.as_bytes().cmp(b.0.as_bytes()))
+        });
+        let ordered = sorted
+            .iter()
+            .map(|(k, _)| *k)
+            .eq(entries.iter().map(|(k, _)| *k));
+        if ordered && !redundant {
+            return None;
+        }
+
+        let kept: Vec<_> = sorted
+            .into_iter()
+            .filter(|(k, span)| !(*k == "up" && value[span.clone()] == [cbor::TRUE]))
+            .collect();
+        let mut rebuilt = Vec::new();
+        cbor::map(&mut rebuilt, kept.len() as u64);
+        for (k, span) in &kept {
+            cbor::text(&mut rebuilt, k);
+            rebuilt.extend_from_slice(&value[span.clone()]);
+        }
+
+        let mut out = Vec::with_capacity(command.len());
+        out.extend_from_slice(&command[..1 + span.start]);
+        out.extend_from_slice(&rebuilt);
+        out.extend_from_slice(&command[1 + span.end..]);
+        Some(out)
+    })();
+
+    result.map_or(Cow::Borrowed(command), Cow::Owned)
+}
+
 /// OpenSSH hardcodes `rp.id = "ssh:"` and the user entity `openssh`/`openssh`
 /// for every sk key. Synced passkey stores (e.g. iCloud Keychain) keep one
 /// passkey per (rpId, userHandle), so a second `ssh-keygen` through the same
@@ -1023,6 +1104,68 @@ mod tests {
         )
         .unwrap();
         assert!(answer_silent_probe(&ssh_resident).is_none());
+    }
+
+    #[test]
+    fn assertion_options_become_canonical() {
+        // Real interactive request from Firefox: options {uv: true, up: true}.
+        let raw = "02a4016b776562617574686e2e696f025820341a4e06e8dfd6cd4244803bd2079eb48ec2f1b41f832f2e18de51bd91248e8e0381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a2627576f5627570f5";
+        let cmd = hex::decode(raw).unwrap();
+        let out = canonicalize_assertion_options(&cmd);
+        assert!(
+            matches!(&out, Cow::Owned(_)),
+            "the non-canonical options map has to be rebuilt"
+        );
+        assert_eq!(
+            hex::encode(&*out),
+            raw.replace("05a2627576f5627570f5", "05a1627576f5")
+        );
+
+        // Rewriting it again is a no-op.
+        assert!(matches!(
+            &canonicalize_assertion_options(&out),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn assertion_options_keep_up_false() {
+        // The same request with up:false, which is meaningful: reorder and
+        // keep both keys instead of dropping up.
+        let raw = "02a4016b776562617574686e2e696f025820341a4e06e8dfd6cd4244803bd2079eb48ec2f1b41f832f2e18de51bd91248e8e0381a26269645456ebb4bab2368cd5c71e173c5213c85203e2511964747970656a7075626c69632d6b657905a2627576f5627570f4";
+        let cmd = hex::decode(raw).unwrap();
+        let out = canonicalize_assertion_options(&cmd);
+        assert_eq!(
+            hex::encode(&*out),
+            raw.replace("05a2627576f5627570f4", "05a2627570f4627576f5")
+        );
+    }
+
+    #[test]
+    fn assertion_options_leave_other_requests_alone() {
+        // The resident-key request already sends {up:false, uv:true}.
+        let ssh_resident = hex::decode(
+            "02a301647373683a02582066687aadf862bd776c8fc18b8e9f8e20\
+             089714856ee233b3902a591d0d5f292505a2627570f4627576f5",
+        )
+        .unwrap();
+        assert!(matches!(
+            &canonicalize_assertion_options(&ssh_resident),
+            Cow::Borrowed(_)
+        ));
+
+        // Not a getAssertion.
+        assert!(matches!(
+            &canonicalize_assertion_options(&openssh_make_credential()),
+            Cow::Borrowed(_)
+        ));
+
+        // A getAssertion without options.
+        let plain = hex::decode("02a2016b6578616d706c652e636f6d025820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        assert!(matches!(
+            &canonicalize_assertion_options(&plain),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[test]
