@@ -161,9 +161,6 @@ in
         # keeps this watchdog fed at half the interval.
         Type = "notify";
         WatchdogSec = "30s";
-        # Persistent caBLE identity key lives in /var/lib/ucabled.  The unit
-        # directory is tightened from systemd's 0755 default; the key file
-        # itself is written 0600.
         StateDirectory = "ucabled";
         StateDirectoryMode = "0700";
         # The daemon only needs /dev/uhid plus the system bus and the network.
@@ -194,9 +191,8 @@ in
           "AF_BLUETOOTH"
           "AF_NETLINK"
         ];
-        # The udev rule grants the ucabled user rw on /dev/uhid via an ACL;
-        # a cgroup device filter would be redundant and has path-resolution
-        # failure modes, so leave it off.
+        DevicePolicy = "closed";
+        DeviceAllow = [ "/dev/uhid rw" ];
         UMask = "0077";
         LimitCORE = 0;
         MemorySwapMax = 0;

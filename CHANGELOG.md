@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.5.0-pre]
 
+### Security
+
+- The `ucabled` system service may now open no device but `/dev/uhid` and
+  the standard pseudo devices (`DevicePolicy=closed`).  The service account
+  could otherwise reach the world-writable `/dev/kvm`, `/dev/fuse`,
+  `/dev/net/tun` and GPU render nodes, none of which the daemon needs.
+
 ## [0.4.0] - 2026-10-28
 
 ### Fixed
