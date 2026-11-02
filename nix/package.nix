@@ -75,10 +75,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
     # GDK loads its backends as modules, so keep the GTK libraries reachable.
     wrapProgram $out/bin/ucable-agent-helper \
       --prefix LD_LIBRARY_PATH : "${
-        lib.makeLibraryPath [
-          gtk4
-          gtk4-layer-shell
-        ]
+        lib.makeLibraryPath (
+          [ gtk4 ] ++ lib.optional layerShell gtk4-layer-shell
+        )
       }"
 
     # Compile the gettext catalogs for the GTK4 helper.

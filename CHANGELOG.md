@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.5.0-pre]
 
+### Added
+
+- The Nix package takes two new options: `layerShell` (default true) and
+  `adwaita` (default false).  `layerShell = false` builds the helper without
+  wlr-layer-shell support and drops `gtk4-layer-shell` from the package;
+  `adwaita = true` builds it with GNOME-native window chrome.
+
 ### Fixed
 
 - Firefox's getAssertion options are now relayed in canonical CBOR.  It sends
