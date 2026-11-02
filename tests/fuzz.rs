@@ -110,9 +110,11 @@ proptest! {
         let patched = ctap::patch_makecredential(&data);
         let dissociated = ctap::dissociate_ssh_user(&data);
         let stripped = ctap::strip_transport_hints(&data);
+        let canonical = ctap::canonicalize_assertion_options(&data);
         let _ = ctap::extract_rp_id(&patched);
         let _ = ctap::extract_rp_id(&dissociated);
         let _ = ctap::extract_rp_id(&stripped);
+        let _ = ctap::extract_rp_id(&canonical);
     }
 
     #[test]

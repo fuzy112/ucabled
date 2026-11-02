@@ -4,6 +4,29 @@ All notable changes to this project are documented here.  The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0-pre]
+
+### Added
+
+- The Nix package takes two new options: `layerShell` (default true) and
+  `adwaita` (default false).  `layerShell = false` builds the helper without
+  wlr-layer-shell support and drops `gtk4-layer-shell` from the package;
+  `adwaita = true` builds it with GNOME-native window chrome.
+
+### Fixed
+
+- Firefox's getAssertion options are now relayed in canonical CBOR.  It sends
+  `{"uv": true, "up": true}`: the keys are out of canonical order, and `up`
+  repeats its CTAP default, so the redundant entry is dropped while a
+  meaningful `up: false` is kept.
+
+### Security
+
+- The `ucabled` system service may now open no device but `/dev/uhid` and
+  the standard pseudo devices (`DevicePolicy=closed`).  The service account
+  could otherwise reach the world-writable `/dev/kvm`, `/dev/fuse`,
+  `/dev/net/tun` and GPU render nodes, none of which the daemon needs.
+
 ## [0.4.0] - 2026-10-28
 
 ### Fixed
@@ -287,6 +310,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial release.
 
+[0.5.0-pre]: https://github.com/fuzy112/ucabled/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/fuzy112/ucabled/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fuzy112/ucabled/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/fuzy112/ucabled/compare/v0.2.0...v0.2.1

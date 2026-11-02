@@ -213,8 +213,12 @@ polkit.addRule(function (action, subject) {
 - **M3 强化**：守护进程在真正的 system unit sandbox 中运行，且因为没有
   GUI 可以更严：`MemoryDenyWriteExecute`、`SystemCallFilter=@system-service`、
   空 `CapabilityBoundingSet`、`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-  AF_BLUETOOTH AF_NETLINK`，加上文件系统/命名空间保护。（`DevicePolicy`/
-  `DeviceAllow` 因路径解析有失败模式且与 ACL 冗余，故未启用。）
+  AF_BLUETOOTH AF_NETLINK`、`DevicePolicy=closed` 加
+  `DeviceAllow=/dev/uhid rw`，加上文件系统/命名空间
+  保护。ACL 决定谁能打开 `/dev/uhid`，设备策略决定服务能打开哪些节点，两者
+  互补：`ucabled` 账号本来还能打开 `/dev/kvm`、`/dev/fuse`、GPU render 节点
+  这类 0666 设备，现在不行了。`uhid` 经 modules-load 在 `sysinit.target` 之前
+  加载，所以单元启动时节点已存在。
 - QR secret 仅经 system bus unicast → agent → helper stdin，不进 argv/日志。
 - agent 只能来自活动本地会话用户，且在 `Prompt` 时复核。
 

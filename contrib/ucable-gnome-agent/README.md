@@ -45,11 +45,13 @@ services.ucabled.enable = true;
 services.ucabled.gnomeAgent.enable = true;   # installs the extension system-wide
 ```
 
-then, per user, enable it and re-login (Wayland cannot reload the shell):
+Then, per user, enable it in the GNOME Extensions app or run:
 
 ```console
 $ gnome-extensions enable ucable-gnome-agent@fuzy.me
 ```
+
+Re-login afterwards (Wayland cannot reload the shell).
 
 ### Manual
 

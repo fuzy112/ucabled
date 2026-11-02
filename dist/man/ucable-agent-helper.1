@@ -38,7 +38,9 @@ Show the relying party
 above the QR code.  Display-only.
 .TP
 .B \-\-layer\-shell
-Draw as a Wayland layer\-shell surface instead of a window.
+Draw as a Wayland layer\-shell surface instead of a window.  Needs a build with
+the layer\-shell feature, which is the default; without it the flag only logs a
+warning and the window stays an ordinary toplevel.
 .TP
 .B \-\-also\-key
 Another authenticator is connected: note in the window that touching it
