@@ -158,7 +158,7 @@ export const en: Dict = {
       ],
       [
         "minimal interference",
-        "pure pass-through except a few compatibility answers (getInfo, firefox probe requests, an ios-required rp.name/displayName injection). rpid parsing is read-only, just to title the QR window.",
+        "pure pass-through except a few compatibility rewrites (getInfo, firefox probe requests, an ios-required rp.name/displayName injection, openssh's fixed user handle, firefox's transports hint and non-canonical getAssertion options). rpid parsing is read-only, just to title the QR window.",
       ],
     ],
   },
@@ -177,7 +177,7 @@ export const en: Dict = {
       label: "nix.conf — master is published to ucabled.cachix.org",
       note: "CI fills the cache on every push to master. only this repo's artifacts are cached; dependencies still come from cache.nixos.org.",
     },
-    req: "requirements: linux with /dev/uhid · bluez/bluetooth on · a browser that can see hidraw (flatpak/snap browsers need extra udev configuration; native packages work out of the box)",
+    req: "requirements: linux with /dev/uhid · bluez/bluetooth on · a browser that can see hidraw (native packages work out of the box; flatpak is untested and may need `flatpak override --user --device=all`)",
   },
   ssh: {
     title: "ssh security keys too",
@@ -334,7 +334,7 @@ export const zh: Dict = {
       ],
       [
         "最小干预",
-        "纯中继，除少量兼容性应答（getInfo、firefox 探测请求、ios 必需的 rp.name/displayName 注入）外不干预。rpid 解析是只读的，仅用于给二维码窗口取标题。",
+        "纯中继，除少量兼容性改写（getInfo、firefox 探测请求、ios 必需的 rp.name/displayName 注入、openssh 固定的 user handle、firefox 的 transports 提示、firefox 非 canonical 的 getAssertion options）外不干预。rpid 解析是只读的，仅用于给二维码窗口取标题。",
       ],
     ],
   },
@@ -353,7 +353,7 @@ export const zh: Dict = {
       label: "nix.conf — master 发布到 ucabled.cachix.org",
       note: "每次推送到 master 时 CI 填充缓存。只缓存本仓库的产物；依赖仍来自 cache.nixos.org。",
     },
-    req: "要求：带 /dev/uhid 的 linux · 开启 bluez/蓝牙 · 能看到 hidraw 的浏览器（flatpak/snap 浏览器需额外的 udev 配置；原生包开箱即用）",
+    req: "要求：带 /dev/uhid 的 linux · 开启 bluez/蓝牙 · 能看到 hidraw 的浏览器（原生包开箱即用；flatpak 未测试，可能需要 `flatpak override --user --device=all`）",
   },
   ssh: {
     title: "也支持 ssh 安全密钥",
